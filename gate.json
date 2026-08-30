@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {
+      "name": "typecheck",
+      "command": "pnpm -r typecheck",
+      "timeout_sec": 600,
+      "expect_exit": 0,
+      "must_not_match": "error TS[0-9]{4}",
+      "min_count": { "regex": "typecheck: Done", "count": 3 }
+    }
+  ]
+}
