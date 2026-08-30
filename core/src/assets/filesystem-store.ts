@@ -88,7 +88,7 @@ type ReadOutcome =
 
 type TargetOutcome =
   | { readonly kind: "missing" }
-  | { readonly kind: "asset"; readonly stored: StoredAsset }
+  | { readonly kind: "asset"; readonly stored: StoredAsset; readonly mode: number }
   | { readonly kind: "failure"; readonly failure: CoreFailure };
 
 const detail = (path: readonly string[], code: string, message: string) => ({
@@ -414,7 +414,7 @@ const targetState = async (root: RootState, rootDirectory: string, relativePath:
       ? { kind: "failure", failure: readResult.failure }
       : { kind: "failure", failure: failure("conflict", "The save target contains an invalid asset.", ["file", relativePath], "target_identity_mismatch") };
   }
-  return { kind: "asset", stored: readResult.stored };
+  return { kind: "asset", stored: readResult.stored, mode: targetStat.mode & 0o777 };
 };
 
 const cleanupTemp = async (temporaryPath: string | undefined): Promise<void> => {
@@ -434,6 +434,7 @@ const writeAtomically = async (
   targetPath: string,
   document: string,
   rename: Rename,
+  mode?: number,
 ): Promise<AssetResult<undefined>> => {
   const parent = dirname(targetPath);
   const temporaryPath = join(parent, `.aacl.${randomUUID()}.tmp`);
@@ -442,6 +443,7 @@ const writeAtomically = async (
   try {
     handle = await open(temporaryPath, "wx");
     await handle.writeFile(document, "utf8");
+    if (mode !== undefined) await handle.chmod(mode);
     await handle.close();
     handle = undefined;
     await rename(temporaryPath, targetPath);
@@ -468,14 +470,25 @@ export const createFilesystemAssetStore = (
   options?: { readonly rename?: Rename },
 ): AssetResult<AssetStore> => {
   const seenRootIds = new Set<string>();
+  const seenRootDirectories = new Set<string>();
   for (const root of roots) {
-    if (!validateRoot(root) || seenRootIds.has(root.rootId)) {
+    if (!validateRoot(root)) {
+      return {
+        ok: false,
+        failure: failure("invalid_request", "The managed asset roots are invalid.", ["root"], "invalid_root"),
+      };
+    }
+    const normalizedDirectory = resolve(root.directory);
+    // Root identity checks stop at resolve: symlink aliases and case-insensitive filesystem
+    // aliases require filesystem inspection beyond lexical normalization (#60).
+    if (seenRootIds.has(root.rootId) || seenRootDirectories.has(normalizedDirectory)) {
       return {
         ok: false,
         failure: failure("invalid_request", "The managed asset roots are invalid.", ["root"], "invalid_root"),
       };
     }
     seenRootIds.add(root.rootId);
+    seenRootDirectories.add(normalizedDirectory);
   }
 
   const states = roots.map((descriptor) => ({ descriptor }));
@@ -550,7 +563,19 @@ export const createFilesystemAssetStore = (
       // Saving the same id to a new path does not relocate the asset: the store offers no
       // delete or move, so removing the old file here would make save the only operation
       // that destroys a file the caller never named.
-      return { ok: false, failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", duplicate.source.relativePath], "duplicate_asset_id") };
+      // Device/inode comparison is not used: hard links are distinct files and must not be
+      // treated as identical because rename-based writes create a new inode, which would leave
+      // two files with the same id. realpath equates only alternate spellings/normalizations
+      // of one path and does not equate hard links.
+      try {
+        const duplicatePath = await realpath(pathFor(rootDirectory, duplicate.source.relativePath));
+        const targetRealPath = await realpath(targetPath);
+        if (duplicatePath !== targetRealPath) {
+          return { ok: false, failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", duplicate.source.relativePath], "duplicate_asset_id") };
+        }
+      } catch {
+        return { ok: false, failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", duplicate.source.relativePath], "duplicate_asset_id") };
+      }
     }
     const unavailable = current.failures.find((item) =>
       item.source.rootId === input.rootId && item.failure.code === "unavailable"
@@ -565,7 +590,7 @@ export const createFilesystemAssetStore = (
     const parentAfterMkdir = await ensureNoSymlink(rootDirectory, parentPath);
     if (!parentAfterMkdir.ok) return parentAfterMkdir;
 
-    const writeResult = await writeAtomically(targetPath, serialized.value, rename);
+    const writeResult = await writeAtomically(targetPath, serialized.value, rename, target.kind === "asset" ? target.mode : undefined);
     if (!writeResult.ok) return writeResult;
     const stored: StoredAsset = {
       asset: input.asset,
@@ -586,7 +611,11 @@ export const createFilesystemAssetStore = (
     const pathResult = validateTargetPath(input.relativePath);
     if (!pathResult.ok) return pathResult;
 
-    const key = `${input.rootId}\0${input.relativePath}`;
+    // Duplicate inspection covers the whole root (`stored.source.rootId === input.rootId`), so a
+    // finer key lets another save in the same root pass inspection before either one writes.
+    // saveSerialized calls list() on every save and scans the whole root, so a path key does not
+    // provide useful parallelism.
+    const key = input.rootId;
     const previous = saveChains.get(key) ?? Promise.resolve();
     const current = previous.then(
       () => saveSerialized(root, input),

@@ -1,5 +1,5 @@
 import { symlink } from "node:fs/promises";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -568,5 +568,75 @@ describe("filesystem asset store", () => {
 
     expect(result.ok).toBe(true);
     expect(await readFile(probePath, "utf8")).toBe(asset.document);
+  });
+
+  it("serializes concurrent saves across paths for the same root", async () => {
+    const root = await temporaryDirectory();
+    const asset = assetFromDocument(minimalDocument("concurrent-paths"));
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+
+    const results = await Promise.all([
+      store.save({ rootId: "global", relativePath: "one.md", asset: asset.asset }),
+      store.save({ rootId: "global", relativePath: "two.md", asset: asset.asset }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toHaveLength(1);
+    const failureResult = results.find((result) => !result.ok);
+    expect(failureResult?.ok).toBe(false);
+    if (failureResult !== undefined && !failureResult.ok) {
+      expect(failureResult.failure.details?.[0]?.code).toBe("duplicate_asset_id");
+    }
+
+    const listed = await store.list();
+    expect(listed.assets).toHaveLength(1);
+    expect(listed.failures).toHaveLength(0);
+  });
+
+  it("preserves existing asset mode without forcing mode on new files", async ({ skip }) => {
+    if (process.platform === "win32") {
+      skip("POSIX file modes cannot be asserted on Windows.");
+      return;
+    }
+    const root = await temporaryDirectory();
+    const existing = assetFromDocument(minimalDocument("preserved-mode", "rule", "before"));
+    const created = assetFromDocument(minimalDocument("default-mode"));
+    await writeRaw(root, "existing.md", existing.document);
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+    const existingPath = join(root, "existing.md");
+    await chmod(existingPath, 0o600);
+
+    const replaced = await store.save({ rootId: "global", relativePath: "existing.md", asset: existing.asset });
+    expect(replaced.ok).toBe(true);
+    expect((await stat(existingPath)).mode & 0o777).toBe(0o600);
+
+    const createdPath = join(root, "created.md");
+    const saved = await store.save({ rootId: "global", relativePath: "created.md", asset: created.asset });
+    expect(saved.ok).toBe(true);
+    expect((await stat(createdPath)).mode & 0o777).not.toBe(0o600);
+  });
+
+  it("rejects managed roots that resolve to the same directory", async () => {
+    const root = await temporaryDirectory();
+    const duplicate = createFilesystemAssetStore([
+      { rootId: "first", kind: "global", directory: root },
+      { rootId: "second", kind: "personal", directory: root },
+    ]);
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) expect(duplicate.failure.details?.[0]?.code).toBe("invalid_root");
+
+    const trailingSlash = createFilesystemAssetStore([
+      { rootId: "first", kind: "global", directory: root },
+      { rootId: "second", kind: "personal", directory: root + "/" },
+    ]);
+    expect(trailingSlash.ok).toBe(false);
+    if (!trailingSlash.ok) expect(trailingSlash.failure.details?.[0]?.code).toBe("invalid_root");
+
+    const otherRoot = await temporaryDirectory();
+    const distinct = createFilesystemAssetStore([
+      { rootId: "first", kind: "global", directory: root },
+      { rootId: "second", kind: "personal", directory: otherRoot },
+    ]);
+    expect(distinct.ok).toBe(true);
   });
 });
