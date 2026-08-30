@@ -46,7 +46,8 @@ export type VersionInfoInput = z.input<typeof VersionInfo>;
  * disconnected / incompatible / reconnecting — and `degraded` is the resolution
  * vocabulary in `status.ts`, where it describes an asset rather than a link.
  */
-export const CompatibilityStatus = z.enum(["compatible", "incompatible"]);
+export const COMPATIBILITY_STATUSES = ["compatible", "incompatible"] as const;
+export const CompatibilityStatus = z.enum(COMPATIBILITY_STATUSES);
 export type CompatibilityStatus = z.infer<typeof CompatibilityStatus>;
 
 /** `explanation` is a display string; the consumer shows the state rather than failing silently. */

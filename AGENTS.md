@@ -30,13 +30,20 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - 依存方向は一方向: `core` → `shared`、`vscode-extension` → `shared`。
   `shared` は workspace package に依存しない。外部依存は schema library (`zod`) 1 つに限る。
   `core` と `vscode-extension` は相互に依存しない。
-- `core` / `vscode-extension` は `zod` を直接依存に持たない。境界の検証入口と JSON Schema 出力は
-  `shared` が公開する。この「依存を持たない」こと自体が境界の強制力なので、**index に出す zod 型の値は
-  「1 つの境界型の正であり、専用の `parse*` / `tryParse*` を伴うもの」に限る**。
-  schema の集合やユーティリティ（`contractSchemas` 等）は internal に留め、公開するのは JSON 形
-  （`contractJsonSchemas()`）。`$ZodError` を引数に取る関数も同様に internal（`toCoreError`）。
-  判定基準は「consumer が zod 無しでその export を使い切れるか」。`shared` 自身のテストは
-  `../src/<module>.js` を直接 import してよい — この制約が縛るのは consumer package。
+- **`zod` は `shared` の実装詳細であり、公開契約の一部ではない。**
+  `shared/src/index.ts` は zod 値を 1 つも公開しない — schema も、その集合も、
+  `$ZodError` を引数に取る関数も internal。公開面は **TypeScript の型**（ビルドで消える）と、
+  **素の JavaScript の関数・データ**だけで構成する。
+  これにより `core` / `vscode-extension` が zod 依存を持たずに済み、その「依存が無い」ことが
+  「Extension が DTO / schema を再定義しない」を review でなく依存解決で強制する。
+  同時に validator が差し替え可能なまま残る（zod/mini の採用自体が実測による選択だった）。
+  `contract-surface.test.ts` が index の実行時 export を全数走査して機械判定する。
+- **consumer が実行時に必要とするものは、その都度 `shared` が素の JS export として足す。**
+  検証が要るなら `parse*` を、集合の列挙が要るならメンバー配列を追加する
+  （閉じた値集合は `AS_CONST` 配列を正とし、`z.enum` をそこから作る — `schema._zod` を読ませない）。
+  schema をまとめて配る形は採らない。将来必要になるかもしれない `parse*` を憶測で先に足すこともしない。
+- `shared` 自身のテストは `../src/<module>.js` を直接 import してよい — この制約が縛るのは
+  consumer package であって、パッケージ内部ではない。
 - `shared` は Core / Extension 間の契約面。DTO・schema・serialization・error / version contract のみを置く。
   domain semantics と実装ロジックは置かない。
 - `shared` は Core 実装にも VS Code API にも依存しない。

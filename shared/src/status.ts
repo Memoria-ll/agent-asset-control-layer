@@ -11,20 +11,22 @@ import { NonEmptyString } from "./primitives.js";
  * consumer cannot account for, which is the same gap an absent one would leave.
  */
 
-export const ResolutionReasonKind = z.enum([
+export const RESOLUTION_REASON_KINDS = [
   "included",
   "excluded",
   "overridden",
   "disabled",
   "unavailable",
-]);
+] as const;
+export const ResolutionReasonKind = z.enum(RESOLUTION_REASON_KINDS);
 export type ResolutionReasonKind = z.infer<typeof ResolutionReasonKind>;
 
 /**
  * "fallback" is not a value here: falling back is where a degraded resolution
  * landed, not a state an asset is in.
  */
-export const AvailabilityStatus = z.enum(["available", "degraded", "unavailable"]);
+export const AVAILABILITY_STATUSES = ["available", "degraded", "unavailable"] as const;
+export const AvailabilityStatus = z.enum(AVAILABILITY_STATUSES);
 export type AvailabilityStatus = z.infer<typeof AvailabilityStatus>;
 
 /**

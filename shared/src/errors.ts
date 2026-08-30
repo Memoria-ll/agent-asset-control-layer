@@ -2,14 +2,15 @@ import * as z from "zod/mini";
 import { NonEmptyString } from "./primitives.js";
 
 /** Coarse classification of a Core API failure. */
-export const CoreErrorCode = z.enum([
+export const CORE_ERROR_CODES = [
   "invalid_request",
   "not_found",
   "conflict",
   "unavailable",
   "incompatible_contract",
   "internal",
-]);
+] as const;
+export const CoreErrorCode = z.enum(CORE_ERROR_CODES);
 export type CoreErrorCode = z.infer<typeof CoreErrorCode>;
 
 export const CoreErrorDetail = z.strictObject({

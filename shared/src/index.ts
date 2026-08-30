@@ -5,18 +5,33 @@
  * internal wiring, and the package publishes no subpath exports, so files can
  * be rearranged without breaking a consumer.
  *
- * `zod` itself is not re-exported. Boundary validation is entered through the
- * `parse*` / `tryParse*` functions below, which is what lets `core` and
- * `vscode-extension` keep no direct dependency on a schema library — and that
- * missing dependency is what stops an ad-hoc redefinition of these DTOs from
- * compiling anywhere else.
+ * **`zod` is an implementation detail of this package, not part of the
+ * contract.** Nothing published here is a zod value: the surface is TypeScript
+ * types, which vanish at build time, plus plain-JavaScript functions and data.
+ * Two things follow, and both are the point rather than a side effect.
  *
- * For the same reason no function published here takes a zod value as a
- * parameter: an argument a caller cannot construct without zod is an export it
- * cannot use. The entry points take `unknown` and return contract types.
+ * `core` and `vscode-extension` can then declare no zod dependency, and that
+ * missing dependency is what makes "the Extension does not redefine these DTOs"
+ * hold by dependency resolution instead of by a reviewer noticing (#31/#46).
+ * And the validation library stays replaceable: it was chosen on a measurement
+ * (zod/mini at 16.7 KB against zod classic at 433 KB), and a package that had
+ * welded its validator into every consumer could not act on the next one.
+ *
+ * When a consumer needs a runtime capability that is not here, this package
+ * grows a named plain-JavaScript export for it — a `parse*` for a value it must
+ * validate, an array for a set it must enumerate. Publishing the schemas
+ * instead would answer every such need at once, at the cost of both properties
+ * above.
  */
 
-export {
+// ---------------------------------------------------------------------------
+// Types. The whole DTO vocabulary, derived from the schemas inside the package.
+// A consumer builds values with the `*Input` types and reads them as the parsed
+// types; identifier brands are output-only, so a plain string is accepted
+// wherever an input is built.
+// ---------------------------------------------------------------------------
+
+export type {
   NonEmptyString,
   Timestamp,
   TokenCount,
@@ -25,7 +40,7 @@ export {
   SemanticVersion,
 } from "./primitives.js";
 
-export {
+export type {
   AssetId,
   AssetRevision,
   ProjectId,
@@ -41,7 +56,7 @@ export {
   SnapshotId,
 } from "./identifiers.js";
 
-export {
+export type {
   ResolutionReasonKind,
   AvailabilityStatus,
   DegradedInfo,
@@ -49,10 +64,94 @@ export {
   ConflictDto,
 } from "./status.js";
 
-export {
+export type {
   ProviderDto,
   RuntimeDto,
   ModelDto,
+  ProviderDtoInput,
+  RuntimeDtoInput,
+  ModelDtoInput,
+} from "./execution-targets.js";
+
+export type {
+  RoleDto,
+  TaskTypeDto,
+  RoleDtoInput,
+  TaskTypeDtoInput,
+} from "./roles.js";
+
+export type {
+  SessionDto,
+  AgentExecutionDto,
+  SessionDtoInput,
+  AgentExecutionDtoInput,
+} from "./sessions.js";
+
+export type {
+  WorkflowStateDto,
+  TransitionCandidateDto,
+  WorkflowStateDtoInput,
+  TransitionCandidateDtoInput,
+} from "./workflow.js";
+
+export type {
+  AssetType,
+  LoadingTier,
+  ResolutionScopeInput,
+  ResolvedAssetDto,
+  ContextCostDto,
+  ResolvedContextDto,
+  ResolvedAssetDtoInput,
+  ContextCostDtoInput,
+  ResolvedContextDtoInput,
+} from "./resolved-context.js";
+
+export type {
+  IdeContextInput,
+  ResolveRequest,
+  ResolveResponse,
+  ResolveRequestInput,
+  ResolveResponseInput,
+} from "./resolution.js";
+
+export type {
+  CoreErrorCode,
+  CoreErrorDetail,
+  CoreErrorDto,
+  ParseOutcome,
+  CoreErrorDetailInput,
+  CoreErrorDtoInput,
+} from "./errors.js";
+
+export type {
+  ContractVersion,
+  VersionInfo,
+  CompatibilityStatus,
+  CompatibilityResult,
+  VersionInfoInput,
+} from "./contract-version.js";
+
+// ---------------------------------------------------------------------------
+// Closed value sets, as plain arrays.
+//
+// A consumer rendering one control or label per member needs the list at run
+// time, and reading it off a schema would mean both taking the zod dependency
+// and reaching into `_zod` internals. Each array is the source of truth its
+// schema is built from, so the two cannot drift.
+// ---------------------------------------------------------------------------
+
+export { ASSET_TYPES, LOADING_TIERS } from "./resolved-context.js";
+export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.js";
+export { CORE_ERROR_CODES } from "./errors.js";
+export { COMPATIBILITY_STATUSES } from "./contract-version.js";
+
+// ---------------------------------------------------------------------------
+// Boundary validation. One named entry point per DTO: `parse*` throws,
+// `tryParse*` reports a `CoreErrorDto`. There is no generic parse — naming one
+// function per DTO is what stops a consumer bringing its own schema.
+// ---------------------------------------------------------------------------
+
+export {
   parseProviderDto,
   tryParseProviderDto,
   parseRuntimeDto,
@@ -60,108 +159,51 @@ export {
   parseModelDto,
   tryParseModelDto,
 } from "./execution-targets.js";
-export type {
-  ProviderDtoInput,
-  RuntimeDtoInput,
-  ModelDtoInput,
-} from "./execution-targets.js";
 
 export {
-  RoleDto,
-  TaskTypeDto,
   parseRoleDto,
   tryParseRoleDto,
   parseTaskTypeDto,
   tryParseTaskTypeDto,
 } from "./roles.js";
-export type { RoleDtoInput, TaskTypeDtoInput } from "./roles.js";
 
 export {
-  SessionDto,
-  AgentExecutionDto,
   parseSessionDto,
   tryParseSessionDto,
   parseAgentExecutionDto,
   tryParseAgentExecutionDto,
 } from "./sessions.js";
-export type { SessionDtoInput, AgentExecutionDtoInput } from "./sessions.js";
 
 export {
-  WorkflowStateDto,
-  TransitionCandidateDto,
   parseWorkflowStateDto,
   tryParseWorkflowStateDto,
   parseTransitionCandidateDto,
   tryParseTransitionCandidateDto,
 } from "./workflow.js";
-export type {
-  WorkflowStateDtoInput,
-  TransitionCandidateDtoInput,
-} from "./workflow.js";
 
 export {
-  AssetType,
-  LoadingTier,
-  ResolutionScopeInput,
-  ResolvedAssetDto,
-  ContextCostDto,
-  ResolvedContextDto,
   parseResolvedContextDto,
   tryParseResolvedContextDto,
 } from "./resolved-context.js";
-export type {
-  ResolvedAssetDtoInput,
-  ContextCostDtoInput,
-  ResolvedContextDtoInput,
-} from "./resolved-context.js";
 
 export {
-  IdeContextInput,
-  ResolveRequest,
-  ResolveResponse,
   parseResolveRequest,
   tryParseResolveRequest,
   parseResolveResponse,
   tryParseResolveResponse,
 } from "./resolution.js";
-export type { ResolveRequestInput, ResolveResponseInput } from "./resolution.js";
 
-export {
-  CoreErrorCode,
-  CoreErrorDetail,
-  CoreErrorDto,
-  parseCoreErrorDto,
-  tryParseCoreErrorDto,
-} from "./errors.js";
-export type {
-  ParseOutcome,
-  CoreErrorDetailInput,
-  CoreErrorDtoInput,
-} from "./errors.js";
+export { parseCoreErrorDto, tryParseCoreErrorDto } from "./errors.js";
+
+export { parseVersionInfo, tryParseVersionInfo } from "./contract-version.js";
+
+// ---------------------------------------------------------------------------
+// Contract version, and the serialized form of every boundary type.
+// ---------------------------------------------------------------------------
 
 export {
   CONTRACT_VERSION,
-  ContractVersion,
-  VersionInfo,
-  CompatibilityStatus,
-  CompatibilityResult,
   checkContractCompatibility,
-  parseVersionInfo,
-  tryParseVersionInfo,
 } from "./contract-version.js";
-export type { VersionInfoInput } from "./contract-version.js";
 
-/**
- * The registry itself stays internal. Its values are zod schemas, so walking it
- * to parse, render or compose is work only a package holding zod can do, and
- * `core` / `vscode-extension` hold none — publishing it would put the dependency
- * boundary back under review instead of under dependency resolution.
- *
- * A named DTO schema above is published on the opposite footing: it is the
- * declared source of truth for one boundary type and ships with its own
- * `parse*` / `tryParse*` entry point, which performs the zod work on the
- * consumer's behalf. `contractJsonSchemas()` is this registry's published
- * equivalent, and its keys enumerate the boundary types for anyone needing the
- * list.
- */
 export { contractJsonSchemas } from "./json-schema.js";

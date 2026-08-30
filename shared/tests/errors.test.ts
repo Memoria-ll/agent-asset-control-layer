@@ -2,11 +2,12 @@ import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
 import * as shared from "../src/index.js";
 import {
-  ResolveRequest,
   parseCoreErrorDto,
   tryParseResolveRequest,
   tryParseResolveResponse,
 } from "../src/index.js";
+// The schema value is internal; this test needs it to produce a real $ZodError.
+import { ResolveRequest } from "../src/resolution.js";
 // toCoreError takes a $ZodError, so it is deliberately absent from the
 // package index; this test reaches it through the module that owns it.
 import { toCoreError, type ParseOutcome } from "../src/errors.js";

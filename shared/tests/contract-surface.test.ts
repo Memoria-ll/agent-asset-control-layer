@@ -14,19 +14,35 @@ describe("published contract surface", () => {
 
   /**
    * `core` and `vscode-extension` declare no zod dependency, and that missing
-   * dependency is what enforces the boundary instead of a reviewer noticing.
-   * Publishing either of these hands the enforcement back to the reviewer: one
-   * takes a `$ZodError` a consumer cannot construct, the other is a registry of
-   * zod schemas whose every use is a zod operation.
+   * dependency is what enforces the boundary instead of a reviewer noticing. So
+   * no zod value may reach the index — not a schema, not a registry, not a
+   * helper taking one.
+   *
+   * This is checked over the whole surface rather than against a list of names,
+   * because a list only catches what a previous round happened to notice. Every
+   * zod schema carries a `_zod` property, so the question "is this a zod value"
+   * is answerable without importing zod here.
    */
-  it.each(["toCoreError", "contractSchemas"])(
-    "keeps %s off the published surface",
-    (name) => {
-      expect(Object.keys(shared)).not.toContain(name);
-    },
-  );
+  it("publishes no zod value", () => {
+    const zodValued = Object.entries(shared).filter(
+      ([, value]) =>
+        typeof value === "object" && value !== null && "_zod" in value,
+    );
 
-  it("publishes the JSON form of the registry instead", () => {
+    expect(zodValued.map(([name]) => name)).toEqual([]);
+  });
+
+  it("publishes only types, functions and plain data", () => {
+    const unexpected = Object.entries(shared).filter(([, value]) => {
+      if (typeof value === "function" || typeof value === "string") return false;
+      // The closed value sets are plain arrays of strings.
+      return !(Array.isArray(value) && value.every((v) => typeof v === "string"));
+    });
+
+    expect(unexpected.map(([name]) => name)).toEqual([]);
+  });
+
+  it("publishes the JSON form of the schemas", () => {
     expect(Object.keys(contractJsonSchemas()).length).toBeGreaterThan(0);
   });
 });

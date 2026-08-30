@@ -22,7 +22,7 @@ import { tryParseWith, type ParseOutcome } from "./errors.js";
  * canonical asset uses the same words is the asset model's decision (#2); this
  * contract claims no agreement with the file shape.
  */
-export const AssetType = z.enum([
+export const ASSET_TYPES = [
   "skill",
   "rule",
   "role",
@@ -31,11 +31,13 @@ export const AssetType = z.enum([
   "policy",
   "guardrail",
   "knowledge",
-]);
+] as const;
+export const AssetType = z.enum(ASSET_TYPES);
 export type AssetType = z.infer<typeof AssetType>;
 
 /** How eagerly an asset is loaded. */
-export const LoadingTier = z.enum(["core", "discoverable", "on-demand"]);
+export const LOADING_TIERS = ["core", "discoverable", "on-demand"] as const;
+export const LoadingTier = z.enum(LOADING_TIERS);
 export type LoadingTier = z.infer<typeof LoadingTier>;
 
 /**

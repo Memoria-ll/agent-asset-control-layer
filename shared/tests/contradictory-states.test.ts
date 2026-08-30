@@ -1,12 +1,13 @@
 import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
 import {
-  DegradedInfo,
-  TransitionCandidateDto,
   contractJsonSchemas,
   parseResolvedContextDto,
   parseTransitionCandidateDto,
 } from "../src/index.js";
+// Schema values are internal; these two are asserted on directly.
+import { DegradedInfo } from "../src/status.js";
+import { TransitionCandidateDto } from "../src/workflow.js";
 
 const resolvedContext = (overrides: {
   cost?: Record<string, unknown>;
