@@ -639,4 +639,34 @@ describe("filesystem asset store", () => {
     ]);
     expect(distinct.ok).toBe(true);
   });
+
+  it("rejects overlapping managed roots and accepts sibling directories", async () => {
+    const base = await temporaryDirectory();
+    const project = join(base, "project");
+    await mkdir(project);
+
+    const ancestorFirst = createFilesystemAssetStore([
+      { rootId: "base", kind: "global", directory: base },
+      { rootId: "project", kind: "project", projectId: "project-one", directory: project },
+    ]);
+    expect(ancestorFirst.ok).toBe(false);
+    if (!ancestorFirst.ok) expect(ancestorFirst.failure.details?.[0]?.code).toBe("invalid_root");
+
+    const descendantFirst = createFilesystemAssetStore([
+      { rootId: "project", kind: "project", projectId: "project-one", directory: project },
+      { rootId: "base", kind: "global", directory: base },
+    ]);
+    expect(descendantFirst.ok).toBe(false);
+    if (!descendantFirst.ok) expect(descendantFirst.failure.details?.[0]?.code).toBe("invalid_root");
+
+    const firstSibling = join(base, "a");
+    const secondSibling = join(base, "b");
+    await mkdir(firstSibling);
+    await mkdir(secondSibling);
+    const siblings = createFilesystemAssetStore([
+      { rootId: "first", kind: "global", directory: firstSibling },
+      { rootId: "second", kind: "personal", directory: secondSibling },
+    ]);
+    expect(siblings.ok).toBe(true);
+  });
 });

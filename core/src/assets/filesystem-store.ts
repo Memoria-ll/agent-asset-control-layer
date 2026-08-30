@@ -137,6 +137,9 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
   return remainder !== "" && !isAbsolute(remainder) && remainder !== ".." && !remainder.startsWith(`..${"/"}`) && !remainder.startsWith(`..${"\\"}`);
 };
 
+const rootsOverlap = (left: string, right: string): boolean =>
+  left === right || isContainedPath(left, right) || isContainedPath(right, left);
+
 const validRelativePath = (value: string): boolean => {
   // Windows forbids ":" in a file name, where it denotes an alternate data stream, and a
   // managed root is seen as one store from both Windows and WSL, so a name that only POSIX
@@ -476,7 +479,7 @@ export const createFilesystemAssetStore = (
   options?: { readonly rename?: Rename },
 ): AssetResult<AssetStore> => {
   const seenRootIds = new Set<string>();
-  const seenRootDirectories = new Set<string>();
+  const seenRootDirectories: string[] = [];
   for (const root of roots) {
     if (!validateRoot(root)) {
       return {
@@ -487,14 +490,14 @@ export const createFilesystemAssetStore = (
     const normalizedDirectory = resolve(root.directory);
     // Root identity checks stop at resolve: symlink aliases and case-insensitive filesystem
     // aliases require filesystem inspection beyond lexical normalization (#60).
-    if (seenRootIds.has(root.rootId) || seenRootDirectories.has(normalizedDirectory)) {
+    if (seenRootIds.has(root.rootId) || seenRootDirectories.some((seen) => rootsOverlap(seen, normalizedDirectory))) {
       return {
         ok: false,
         failure: failure("invalid_request", "The managed asset roots are invalid.", ["root"], "invalid_root"),
       };
     }
     seenRootIds.add(root.rootId);
-    seenRootDirectories.add(normalizedDirectory);
+    seenRootDirectories.push(normalizedDirectory);
   }
 
   const states = roots.map((descriptor) => ({ descriptor }));
