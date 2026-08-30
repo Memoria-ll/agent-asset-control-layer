@@ -1,4 +1,5 @@
 packages:
   - shared
+  - core-domain
   - core
   - vscode-extension

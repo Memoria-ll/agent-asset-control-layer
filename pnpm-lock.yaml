@@ -17,6 +17,15 @@ importers:
 
   core:
     dependencies:
+      '@aacl/core-domain':
+        specifier: workspace:*
+        version: link:../core-domain
+      '@aacl/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  core-domain:
+    dependencies:
       '@aacl/shared':
         specifier: workspace:*
         version: link:../shared
