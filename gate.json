@@ -7,6 +7,14 @@
       "expect_exit": 0,
       "must_not_match": "error TS[0-9]{4}",
       "min_count": { "regex": "typecheck: Done", "count": 3 }
+    },
+    {
+      "name": "test",
+      "command": "pnpm -r test",
+      "timeout_sec": 600,
+      "expect_exit": 0,
+      "must_not_match": "No test files found|Tests  no tests",
+      "min_count": { "regex": "Tests  [0-9]+ passed", "count": 3 }
     }
   ]
 }
