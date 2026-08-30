@@ -1,11 +1,11 @@
 import * as z from "zod/mini";
-import { DirectoryPath } from "./primitives.js";
+import { DirectoryPath } from "./primitives.ts";
 import {
   LoadingTier,
   ResolutionScopeInput,
   ResolvedContextDto,
-} from "./resolved-context.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+} from "./resolved-context.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
  * What the IDE knows about the current editing situation, collected explicitly
@@ -21,7 +21,8 @@ export const IdeContextInput = z.strictObject({
   activeFilePath: z.optional(DirectoryPath),
   selectedFilePaths: z.optional(z.array(DirectoryPath).check(z.minLength(1))),
 });
-export type IdeContextInput = z.infer<typeof IdeContextInput>;
+// `z.input` for the same reason as `ResolutionScopeInput`.
+export type IdeContextInput = z.input<typeof IdeContextInput>;
 
 /**
  * A request to resolve the asset context for a scope.

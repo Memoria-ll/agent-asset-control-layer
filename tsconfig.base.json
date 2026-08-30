@@ -10,6 +10,8 @@
     "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": false,
     "isolatedModules": true,
     "erasableSyntaxOnly": true,
     "declaration": true,

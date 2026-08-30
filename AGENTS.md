@@ -42,7 +42,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
   検証が要るなら `parse*` を、集合の列挙が要るならメンバー配列を追加する
   （閉じた値集合は `AS_CONST` 配列を正とし、`z.enum` をそこから作る — `schema._zod` を読ませない）。
   schema をまとめて配る形は採らない。将来必要になるかもしれない `parse*` を憶測で先に足すこともしない。
-- `shared` 自身のテストは `../src/<module>.js` を直接 import してよい — この制約が縛るのは
+- `shared` 自身のテストは `../src/<module>.ts` を直接 import してよい — この制約が縛るのは
   consumer package であって、パッケージ内部ではない。
 - `shared` は Core / Extension 間の契約面。DTO・schema・serialization・error / version contract のみを置く。
   domain semantics と実装ロジックは置かない。
@@ -90,9 +90,10 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - docker compose 既定からの逸脱: Core は利用者のファイルシステム・git 履歴・keychain に直接触れ、
   かつ Windows と WSL の双方から同一 localhost Core として見える必要がある。
   bind mount とパス変換を Core の契約面へ載せないため host 直実行とする。
-- `gate.json` の `min_count` は typecheck / test の 2 step とも package 数 3 を固定値で持つ。
+- `gate.json` は 3 step。`min_count` は typecheck / test が package 数 3 を固定値で持つ。
   package を増減させるときは同じ変更で両方を更新する。test step は package 数だけを固定し、
-  テスト本数は固定しない。
+  テスト本数は固定しない。node-resolution step は素の Node による `@aacl/shared` の解決を
+  1 回検査する（下記 Traps 参照）。
 - 未定: Core UI（Tauri 2 shell、#19）の package 位置。
 - 未定: `vscode-extension` の bundling（esbuild）と extension manifest
   （`engines.vscode` / activation / contributes）。#31 で決める。
@@ -101,9 +102,19 @@ local-first Core、およびその Workbench となる VS Code Extension。
 
 ### Traps
 
-- `shared/package.json` の `exports` は `types` / `default` とも `./src/index.ts` を指す。
-  `dist` を指すと `pnpm -r typecheck` は exit 0 のまま、`pnpm -r test` だけが `core` と
-  `vscode-extension` で `Failed to resolve entry for package "@aacl/shared"` を出して落ちる (#46)
+- `shared` は build を持たず `exports` が `./src/index.ts` を指すため、**相対 import 指定子は
+  `.ts` で書く**。`.js` で書くと `pnpm -r typecheck` も `pnpm -r test` も緑のまま、素の Node が
+  `ERR_MODULE_NOT_FOUND` で落ちる — vitest は自前のリゾルバを使うのでこの壊れ方を検知できない。
+  Core は host 直実行なので実害がある。gate の node-resolution step がこの経路を実測する。
+  型除去に依存するので `engines.node` の下限は 22.18（既定で有効になった版）(#47)
+- `exports` を `dist` に向けると `pnpm -r typecheck` は exit 0 のまま、`pnpm -r test` だけが
+  `core` と `vscode-extension` で `Failed to resolve entry for package "@aacl/shared"` を出して
+  落ちる (#46)
+- 境界の値集合（`ASSET_TYPES` 等）の正は #2 の Canonical Asset model。#2 Scope が初期 type として
+  Skill / Rule / Role / Workflow / Task Type / Policy / Guardrail / Knowledge の 8 個を挙げており、
+  `ASSET_TYPES` はこれと一致している。README の製品説明はこれより広い語（templates / checklists /
+  capability bindings）を含むが型の正ではない。**#2 が type を増やしたら同じ変更で `ASSET_TYPES` を
+  更新する** — enum への値追加は破壊的変更 (#47)
 - 境界 DTO は `z.strictObject`。`z.object` でも既定の `z.toJSONSchema` は
   `additionalProperties: false` を書くため、公開 schema を読んでも差が出ない。差を捕まえるのは
   `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema

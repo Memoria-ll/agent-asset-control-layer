@@ -1,5 +1,5 @@
 import * as z from "zod/mini";
-import { brandedId } from "./internal/branded-id.js";
+import { brandedId } from "./internal/branded-id.ts";
 
 /**
  * Every identifier is a distinct branded string, because a DTO such as

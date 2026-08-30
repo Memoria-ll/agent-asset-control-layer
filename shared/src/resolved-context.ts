@@ -10,10 +10,10 @@ import {
   StageId,
   TaskTypeId,
   WorkflowId,
-} from "./identifiers.js";
-import { AssetCount, DirectoryPath, Timestamp, TokenCount } from "./primitives.js";
-import { ConflictDto, ResolutionReason } from "./status.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+} from "./identifiers.ts";
+import { AssetCount, DirectoryPath, Timestamp, TokenCount } from "./primitives.ts";
+import { ConflictDto, ResolutionReason } from "./status.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
  * The vocabulary of asset types crossing the boundary.
@@ -60,7 +60,11 @@ export const ResolutionScopeInput = z.strictObject({
   modelId: z.optional(ModelId),
   directory: z.optional(DirectoryPath),
 });
-export type ResolutionScopeInput = z.infer<typeof ResolutionScopeInput>;
+// `z.input`, matching the name and every other `*Input` alias: a caller
+// composes a scope from plain strings, and identifier brands exist only on
+// the parsed side. A parsed scope is still assignable here, because a branded
+// string is a string.
+export type ResolutionScopeInput = z.input<typeof ResolutionScopeInput>;
 
 /** One asset the resolution decided on, carrying the reason for that decision. */
 export const ResolvedAssetDto = z.strictObject({

@@ -38,7 +38,7 @@ export type {
   AssetCount,
   DirectoryPath,
   SemanticVersion,
-} from "./primitives.js";
+} from "./primitives.ts";
 
 export type {
   AssetId,
@@ -54,7 +54,7 @@ export type {
   WorkflowId,
   StageId,
   SnapshotId,
-} from "./identifiers.js";
+} from "./identifiers.ts";
 
 export type {
   ResolutionReasonKind,
@@ -62,7 +62,7 @@ export type {
   DegradedInfo,
   ResolutionReason,
   ConflictDto,
-} from "./status.js";
+} from "./status.ts";
 
 export type {
   ProviderDto,
@@ -71,28 +71,28 @@ export type {
   ProviderDtoInput,
   RuntimeDtoInput,
   ModelDtoInput,
-} from "./execution-targets.js";
+} from "./execution-targets.ts";
 
 export type {
   RoleDto,
   TaskTypeDto,
   RoleDtoInput,
   TaskTypeDtoInput,
-} from "./roles.js";
+} from "./roles.ts";
 
 export type {
   SessionDto,
   AgentExecutionDto,
   SessionDtoInput,
   AgentExecutionDtoInput,
-} from "./sessions.js";
+} from "./sessions.ts";
 
 export type {
   WorkflowStateDto,
   TransitionCandidateDto,
   WorkflowStateDtoInput,
   TransitionCandidateDtoInput,
-} from "./workflow.js";
+} from "./workflow.ts";
 
 export type {
   AssetType,
@@ -104,7 +104,7 @@ export type {
   ResolvedAssetDtoInput,
   ContextCostDtoInput,
   ResolvedContextDtoInput,
-} from "./resolved-context.js";
+} from "./resolved-context.ts";
 
 export type {
   IdeContextInput,
@@ -112,7 +112,7 @@ export type {
   ResolveResponse,
   ResolveRequestInput,
   ResolveResponseInput,
-} from "./resolution.js";
+} from "./resolution.ts";
 
 export type {
   CoreErrorCode,
@@ -121,7 +121,7 @@ export type {
   ParseOutcome,
   CoreErrorDetailInput,
   CoreErrorDtoInput,
-} from "./errors.js";
+} from "./errors.ts";
 
 export type {
   ContractVersion,
@@ -129,7 +129,7 @@ export type {
   CompatibilityStatus,
   CompatibilityResult,
   VersionInfoInput,
-} from "./contract-version.js";
+} from "./contract-version.ts";
 
 // ---------------------------------------------------------------------------
 // Closed value sets, as plain arrays.
@@ -140,10 +140,10 @@ export type {
 // schema is built from, so the two cannot drift.
 // ---------------------------------------------------------------------------
 
-export { ASSET_TYPES, LOADING_TIERS } from "./resolved-context.js";
-export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.js";
-export { CORE_ERROR_CODES } from "./errors.js";
-export { COMPATIBILITY_STATUSES } from "./contract-version.js";
+export { ASSET_TYPES, LOADING_TIERS } from "./resolved-context.ts";
+export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
+export { CORE_ERROR_CODES } from "./errors.ts";
+export { COMPATIBILITY_STATUSES } from "./contract-version.ts";
 
 // ---------------------------------------------------------------------------
 // Boundary validation. One named entry point per DTO: `parse*` throws,
@@ -158,44 +158,44 @@ export {
   tryParseRuntimeDto,
   parseModelDto,
   tryParseModelDto,
-} from "./execution-targets.js";
+} from "./execution-targets.ts";
 
 export {
   parseRoleDto,
   tryParseRoleDto,
   parseTaskTypeDto,
   tryParseTaskTypeDto,
-} from "./roles.js";
+} from "./roles.ts";
 
 export {
   parseSessionDto,
   tryParseSessionDto,
   parseAgentExecutionDto,
   tryParseAgentExecutionDto,
-} from "./sessions.js";
+} from "./sessions.ts";
 
 export {
   parseWorkflowStateDto,
   tryParseWorkflowStateDto,
   parseTransitionCandidateDto,
   tryParseTransitionCandidateDto,
-} from "./workflow.js";
+} from "./workflow.ts";
 
 export {
   parseResolvedContextDto,
   tryParseResolvedContextDto,
-} from "./resolved-context.js";
+} from "./resolved-context.ts";
 
 export {
   parseResolveRequest,
   tryParseResolveRequest,
   parseResolveResponse,
   tryParseResolveResponse,
-} from "./resolution.js";
+} from "./resolution.ts";
 
-export { parseCoreErrorDto, tryParseCoreErrorDto } from "./errors.js";
+export { parseCoreErrorDto, tryParseCoreErrorDto } from "./errors.ts";
 
-export { parseVersionInfo, tryParseVersionInfo } from "./contract-version.js";
+export { parseVersionInfo, tryParseVersionInfo } from "./contract-version.ts";
 
 // ---------------------------------------------------------------------------
 // Contract version, and the serialized form of every boundary type.
@@ -204,6 +204,6 @@ export { parseVersionInfo, tryParseVersionInfo } from "./contract-version.js";
 export {
   CONTRACT_VERSION,
   checkContractCompatibility,
-} from "./contract-version.js";
+} from "./contract-version.ts";
 
-export { contractJsonSchemas } from "./json-schema.js";
+export { contractJsonSchemas } from "./json-schema.ts";

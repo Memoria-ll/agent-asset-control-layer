@@ -4,10 +4,10 @@ import {
   contractJsonSchemas,
   parseResolvedContextDto,
   parseTransitionCandidateDto,
-} from "../src/index.js";
+} from "../src/index.ts";
 // Schema values are internal; these two are asserted on directly.
-import { DegradedInfo } from "../src/status.js";
-import { TransitionCandidateDto } from "../src/workflow.js";
+import { DegradedInfo } from "../src/status.ts";
+import { TransitionCandidateDto } from "../src/workflow.ts";
 
 const resolvedContext = (overrides: {
   cost?: Record<string, unknown>;

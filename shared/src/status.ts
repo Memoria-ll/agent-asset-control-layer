@@ -1,6 +1,6 @@
 import * as z from "zod/mini";
-import { AssetId } from "./identifiers.js";
-import { NonEmptyString } from "./primitives.js";
+import { AssetId } from "./identifiers.ts";
+import { NonEmptyString } from "./primitives.ts";
 
 /**
  * Every `explanation` in this file is a display string composed by Core. The

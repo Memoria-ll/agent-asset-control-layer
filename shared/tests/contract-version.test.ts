@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTRACT_VERSION,
   checkContractCompatibility,
-} from "../src/index.js";
+} from "../src/index.ts";
 
 describe("contract compatibility", () => {
   it.each([

@@ -1,7 +1,7 @@
 import * as z from "zod/mini";
-import { RoleId, TaskTypeId } from "./identifiers.js";
-import { NonEmptyString } from "./primitives.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+import { RoleId, TaskTypeId } from "./identifiers.ts";
+import { NonEmptyString } from "./primitives.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
  * Role and task type catalogue entries.

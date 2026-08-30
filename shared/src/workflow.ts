@@ -6,12 +6,17 @@ import {
   StageId,
   TaskTypeId,
   WorkflowId,
-} from "./identifiers.js";
-import { NonEmptyString, Timestamp } from "./primitives.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+} from "./identifiers.ts";
+import { NonEmptyString, Timestamp } from "./primitives.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
- * The current state of one workflow instance.
+ * The current state of a workflow, addressed by the id of its definition.
+ *
+ * There is no execution-instance identifier, so two runs of the same definition
+ * are not distinguishable here. Whether such an identifier exists at all is
+ * #7's to settle — how many runs a definition may have in flight, and who mints
+ * the identifier, are workflow semantics — and #50 tracks the decision.
  *
  * Completion is expressed by `currentStageId` pointing at a terminal stage; a
  * separate completion field would fix a vocabulary the workflow model (#7) has

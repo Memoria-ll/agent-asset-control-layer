@@ -1,16 +1,16 @@
 import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
-import * as shared from "../src/index.js";
+import * as shared from "../src/index.ts";
 import {
   parseCoreErrorDto,
   tryParseResolveRequest,
   tryParseResolveResponse,
-} from "../src/index.js";
+} from "../src/index.ts";
 // The schema value is internal; this test needs it to produce a real $ZodError.
-import { ResolveRequest } from "../src/resolution.js";
+import { ResolveRequest } from "../src/resolution.ts";
 // toCoreError takes a $ZodError, so it is deliberately absent from the
 // package index; this test reaches it through the module that owns it.
-import { toCoreError, type ParseOutcome } from "../src/errors.js";
+import { toCoreError, type ParseOutcome } from "../src/errors.ts";
 
 const validationErrorFor = (value: unknown): z.core.$ZodError => {
   const result = z.safeParse(ResolveRequest, value);

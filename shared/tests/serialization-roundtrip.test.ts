@@ -1,8 +1,8 @@
 import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
-import { parseResolveRequest } from "../src/index.js";
+import { parseResolveRequest } from "../src/index.ts";
 // The registry is internal to the package; only its JSON form is published.
-import { contractSchemas } from "../src/json-schema.js";
+import { contractSchemas } from "../src/json-schema.ts";
 
 const representativeInputs: Record<string, unknown> = {
   ResolveRequest: {

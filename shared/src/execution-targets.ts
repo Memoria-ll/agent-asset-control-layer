@@ -1,7 +1,7 @@
 import * as z from "zod/mini";
-import { ProviderId, RuntimeId, ModelId } from "./identifiers.js";
-import { NonEmptyString } from "./primitives.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+import { ProviderId, RuntimeId, ModelId } from "./identifiers.ts";
+import { NonEmptyString } from "./primitives.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
  * Metadata for the execution targets a request can be resolved against.

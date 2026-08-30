@@ -9,6 +9,13 @@
       "min_count": { "regex": "typecheck: Done", "count": 3 }
     },
     {
+      "name": "node-resolution",
+      "command": "node core/scripts/verify-shared-resolution.mjs",
+      "timeout_sec": 120,
+      "expect_exit": 0,
+      "min_count": { "regex": "shared resolution: OK", "count": 1 }
+    },
+    {
       "name": "test",
       "command": "pnpm -r test",
       "timeout_sec": 600,

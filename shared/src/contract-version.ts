@@ -1,6 +1,6 @@
 import * as z from "zod/mini";
-import { NonEmptyString, SemanticVersion } from "./primitives.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+import { NonEmptyString, SemanticVersion } from "./primitives.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
  * The version of this contract package as a whole. There is no per-category or
@@ -124,7 +124,7 @@ export const checkContractCompatibility = (
 
   return {
     status: "compatible",
-    explanation: `Contract versions match (local ${local}, remote ${remote}).`,
+    explanation: `Contract major and minor versions agree (local ${local}, remote ${remote}); a patch difference does not affect compatibility.`,
   };
 };
 

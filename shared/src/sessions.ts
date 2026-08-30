@@ -11,9 +11,9 @@ import {
   StageId,
   TaskTypeId,
   WorkflowId,
-} from "./identifiers.js";
-import { Timestamp } from "./primitives.js";
-import { tryParseWith, type ParseOutcome } from "./errors.js";
+} from "./identifiers.ts";
+import { Timestamp } from "./primitives.ts";
+import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
  * A user session and the agent executions linked to it.

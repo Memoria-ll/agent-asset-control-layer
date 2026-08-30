@@ -1,12 +1,12 @@
 import * as z from "zod/mini";
-import { VersionInfo } from "./contract-version.js";
-import { CoreErrorDto } from "./errors.js";
-import { ModelDto, ProviderDto, RuntimeDto } from "./execution-targets.js";
-import { ResolveRequest, ResolveResponse } from "./resolution.js";
-import { ResolvedContextDto } from "./resolved-context.js";
-import { RoleDto, TaskTypeDto } from "./roles.js";
-import { AgentExecutionDto, SessionDto } from "./sessions.js";
-import { TransitionCandidateDto, WorkflowStateDto } from "./workflow.js";
+import { VersionInfo } from "./contract-version.ts";
+import { CoreErrorDto } from "./errors.ts";
+import { ModelDto, ProviderDto, RuntimeDto } from "./execution-targets.ts";
+import { ResolveRequest, ResolveResponse } from "./resolution.ts";
+import { ResolvedContextDto } from "./resolved-context.ts";
+import { RoleDto, TaskTypeDto } from "./roles.ts";
+import { AgentExecutionDto, SessionDto } from "./sessions.ts";
+import { TransitionCandidateDto, WorkflowStateDto } from "./workflow.ts";
 
 /**
  * Every type that crosses the network / IPC boundary, in one place.

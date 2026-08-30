@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import * as shared from "../src/index.js";
-import { contractJsonSchemas } from "../src/index.js";
+import * as shared from "../src/index.ts";
+import { contractJsonSchemas } from "../src/index.ts";
 
 describe("published contract surface", () => {
   it("registers every exported parser schema", () => {

@@ -7,13 +7,13 @@ import {
   CORE_ERROR_CODES,
   LOADING_TIERS,
   RESOLUTION_REASON_KINDS,
-} from "../src/index.js";
+} from "../src/index.ts";
 // The schemas these arrays build are internal; the test reaches them through the
 // modules that own them, the way no consumer needs to.
-import { CoreErrorCode } from "../src/errors.js";
-import { CompatibilityStatus } from "../src/contract-version.js";
-import { AssetType, LoadingTier } from "../src/resolved-context.js";
-import { AvailabilityStatus, ResolutionReasonKind } from "../src/status.js";
+import { CoreErrorCode } from "../src/errors.ts";
+import { CompatibilityStatus } from "../src/contract-version.ts";
+import { AssetType, LoadingTier } from "../src/resolved-context.ts";
+import { AvailabilityStatus, ResolutionReasonKind } from "../src/status.ts";
 
 describe("frozen contract enum values", () => {
   it.each([

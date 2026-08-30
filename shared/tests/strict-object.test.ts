@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseResolveRequest,
   tryParseResolveRequest,
-} from "../src/index.js";
+} from "../src/index.ts";
 
 describe("strict boundary objects", () => {
   it("rejects unknown fields at runtime", () => {

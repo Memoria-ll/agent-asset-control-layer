@@ -1,8 +1,8 @@
 import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
-import { contractJsonSchemas } from "../src/index.js";
+import { contractJsonSchemas } from "../src/index.ts";
 // The registry is internal to the package; only its JSON form is published.
-import { contractSchemas } from "../src/json-schema.js";
+import { contractSchemas } from "../src/json-schema.ts";
 
 const JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema";
 

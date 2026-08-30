@@ -1,5 +1,5 @@
 import * as z from "zod/mini";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString } from "./primitives.ts";
 
 /** Coarse classification of a Core API failure. */
 export const CORE_ERROR_CODES = [
