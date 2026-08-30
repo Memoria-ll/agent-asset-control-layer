@@ -151,6 +151,14 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `ASSET_TYPES` はこれと一致している。README の製品説明はこれより広い語（templates / checklists /
   capability bindings）を含むが型の正ではない。**#2 が type を増やしたら同じ変更で `ASSET_TYPES` を
   更新する** — enum への値追加は破壊的変更 (#47)
+- asset file の `type:` と `tier:` は `ASSET_TYPES` / `LOADING_TIERS` を**そのまま**正としている。
+  `shared/tests/enum-values.test.ts` が両者を逐語で pin し、その assertion message が
+  "Changing enum values requires bumping CONTRACT_VERSION." である。**on-disk の type / tier を
+  増やすと、wire DTO が何も変わらなくても `CONTRACT_VERSION` の bump を伴う破壊的変更になる** (#2)
+- asset frontmatter の未知 top-level key は validation error になる。`mandatory` / `priority` /
+  `disable` / `override` も v1 では拒否される。**#4 がこれらの directive を導入するときは
+  asset schema version（`schema-version:`）の bump が要る** — v1 parser は未知 version を
+  `incompatible_contract` で拒否し、暗黙の migration を行わない (#2)
 - `core` は `@types/node` を devDependency に持ち、かつ `core/tsconfig.json` に
   `"types": ["node"]` を書く。`typeRoots` を指定しても自動発見は効かず、`node:*` の import が
   `error TS2591` になって gate の typecheck step（`must_not_match: "error TS[0-9]{4}"`）を落とす。

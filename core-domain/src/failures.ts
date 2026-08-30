@@ -6,6 +6,10 @@ export type CoreFailure = {
   readonly details?: readonly CoreErrorDetail[];
 };
 
+export type AssetResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly failure: CoreFailure };
+
 export const coreFailure = (
   code: CoreErrorCode,
   message: string,
