@@ -44,7 +44,13 @@ local-first Core、およびその Workbench となる VS Code Extension。
   境界 DTO はすべて `z.strictObject`（未知キーを拒否する）。
   serialization schema は `contractJsonSchemas()` が返す JSON Schema draft 2020-12。
 - 境界 DTO は成立し得ない状態を parse させない。負の件数・自己矛盾する enum の組合せ・
-  否定状態を説明する空配列は、型が通っても契約違反として reject する。
+  否定状態を説明する空配列/空文字列は、型が通っても契約違反として reject する。
+  表示文字列と理由・説明の欄は `NonEmptyString`。optional な配列は「省略＝無し」で表現するため、
+  存在するなら `minLength(1)` を持つ。空が実状態である欄（`ResolvedAssetDto.body` の空ファイル、
+  `CoreErrorDetail.path` の空キー・全体指定）は制約せず、その理由を欄のコメントに書く。
+- **このルールが及ぶのは JSON Schema に出力できる制約まで。** 2 欄を比較する順序制約
+  （`endedAt >= startedAt` 等）は draft 2020-12 に対応キーワードが無く、構造を変えないと
+  表現できない。契約形の変更を伴うため、その場で `z.refine` を足さず issue に切り出す（#48）。
 - 相互排他な組合せは `z.discriminatedUnion` のアームに分ける。cross-field の `z.refine` は
   使わない — parser では効くが `z.toJSONSchema()` の出力に一切現れず、schema 駆動の consumer が
   同じ値を通してしまう（実測）。union の JSON Schema は `additionalProperties` を root でなく

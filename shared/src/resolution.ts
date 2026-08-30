@@ -19,7 +19,7 @@ import { tryParseWith, type ParseOutcome } from "./errors.js";
 export const IdeContextInput = z.strictObject({
   workspaceFolder: z.optional(DirectoryPath),
   activeFilePath: z.optional(DirectoryPath),
-  selectedFilePaths: z.optional(z.array(DirectoryPath)),
+  selectedFilePaths: z.optional(z.array(DirectoryPath).check(z.minLength(1))),
 });
 export type IdeContextInput = z.infer<typeof IdeContextInput>;
 
@@ -33,7 +33,7 @@ export type IdeContextInput = z.infer<typeof IdeContextInput>;
 export const ResolveRequest = z.strictObject({
   scope: ResolutionScopeInput,
   ide: z.optional(IdeContextInput),
-  loadingTiers: z.optional(z.array(LoadingTier)),
+  loadingTiers: z.optional(z.array(LoadingTier).check(z.minLength(1))),
 });
 export type ResolveRequest = z.infer<typeof ResolveRequest>;
 export type ResolveRequestInput = z.input<typeof ResolveRequest>;

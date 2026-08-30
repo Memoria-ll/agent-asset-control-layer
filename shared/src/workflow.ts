@@ -7,7 +7,7 @@ import {
   TaskTypeId,
   WorkflowId,
 } from "./identifiers.js";
-import { Timestamp } from "./primitives.js";
+import { NonEmptyString, Timestamp } from "./primitives.js";
 import { tryParseWith, type ParseOutcome } from "./errors.js";
 
 /**
@@ -68,7 +68,7 @@ export const TransitionCandidateDto = z.discriminatedUnion("blocked", [
   z.strictObject({
     ...transitionCandidateFields,
     blocked: z.literal(true),
-    blockedReasons: z.array(z.string()).check(z.minLength(1)),
+    blockedReasons: z.array(NonEmptyString).check(z.minLength(1)),
   }),
 ]);
 export type TransitionCandidateDto = z.infer<typeof TransitionCandidateDto>;

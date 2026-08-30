@@ -1,10 +1,14 @@
 import * as z from "zod/mini";
 import { AssetId } from "./identifiers.js";
+import { NonEmptyString } from "./primitives.js";
 
 /**
  * Every `explanation` in this file is a display string composed by Core. The
  * consumer renders it as-is and owns any escaping its display context needs;
  * re-deciding the outcome from it is the extension re-implementing resolution.
+ *
+ * Each one is a `NonEmptyString`: a blank explanation renders as a state the
+ * consumer cannot account for, which is the same gap an absent one would leave.
  */
 
 export const ResolutionReasonKind = z.enum([
@@ -46,7 +50,7 @@ const UnavailableAvailability = z.enum(["degraded", "unavailable"]);
  * healthy one.
  */
 export const DegradedInfo = z.strictObject({
-  reasons: z.array(z.string()).check(z.minLength(1)),
+  reasons: z.array(NonEmptyString).check(z.minLength(1)),
 });
 export type DegradedInfo = z.infer<typeof DegradedInfo>;
 
@@ -64,25 +68,25 @@ export type DegradedInfo = z.infer<typeof DegradedInfo>;
 export const ResolutionReason = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("included"),
-    explanation: z.string(),
+    explanation: NonEmptyString,
   }),
   z.strictObject({
     kind: z.literal("excluded"),
-    explanation: z.string(),
+    explanation: NonEmptyString,
   }),
   z.strictObject({
     kind: z.literal("overridden"),
-    explanation: z.string(),
+    explanation: NonEmptyString,
     overriddenBy: AssetId,
   }),
   z.strictObject({
     kind: z.literal("disabled"),
-    explanation: z.string(),
+    explanation: NonEmptyString,
     disabledBy: AssetId,
   }),
   z.strictObject({
     kind: z.literal("unavailable"),
-    explanation: z.string(),
+    explanation: NonEmptyString,
     availability: UnavailableAvailability,
   }),
 ]);
@@ -90,7 +94,7 @@ export type ResolutionReason = z.infer<typeof ResolutionReason>;
 
 /** A resolution conflict, reported instead of being silently won by one side. */
 export const ConflictDto = z.strictObject({
-  explanation: z.string(),
-  involvedAssetIds: z.array(AssetId),
+  explanation: NonEmptyString,
+  involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
 });
 export type ConflictDto = z.infer<typeof ConflictDto>;

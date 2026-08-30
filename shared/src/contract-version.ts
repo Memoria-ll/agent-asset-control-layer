@@ -1,5 +1,5 @@
 import * as z from "zod/mini";
-import { SemanticVersion } from "./primitives.js";
+import { NonEmptyString, SemanticVersion } from "./primitives.js";
 import { tryParseWith, type ParseOutcome } from "./errors.js";
 
 /**
@@ -52,7 +52,7 @@ export type CompatibilityStatus = z.infer<typeof CompatibilityStatus>;
 /** `explanation` is a display string; the consumer shows the state rather than failing silently. */
 export const CompatibilityResult = z.strictObject({
   status: CompatibilityStatus,
-  explanation: z.string(),
+  explanation: NonEmptyString,
 });
 export type CompatibilityResult = z.infer<typeof CompatibilityResult>;
 

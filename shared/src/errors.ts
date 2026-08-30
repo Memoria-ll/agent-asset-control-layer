@@ -1,4 +1,5 @@
 import * as z from "zod/mini";
+import { NonEmptyString } from "./primitives.js";
 
 /** Coarse classification of a Core API failure. */
 export const CoreErrorCode = z.enum([
@@ -12,11 +13,15 @@ export const CoreErrorCode = z.enum([
 export type CoreErrorCode = z.infer<typeof CoreErrorCode>;
 
 export const CoreErrorDetail = z.strictObject({
-  /** Path segments to the offending value. An empty array points at the whole input. */
+  /**
+   * Path segments to the offending value. An empty array points at the whole
+   * input, and a segment stays an unconstrained string: a JSON object key may
+   * legitimately be `""`, and a strict object reports that key like any other.
+   */
   path: z.array(z.string()),
   /** Fine-grained code from the origin of the failure (e.g. a zod issue code). */
-  code: z.string(),
-  message: z.string(),
+  code: NonEmptyString,
+  message: NonEmptyString,
 });
 export type CoreErrorDetail = z.infer<typeof CoreErrorDetail>;
 export type CoreErrorDetailInput = z.input<typeof CoreErrorDetail>;
@@ -28,8 +33,9 @@ export type CoreErrorDetailInput = z.input<typeof CoreErrorDetail>;
  */
 export const CoreErrorDto = z.strictObject({
   code: CoreErrorCode,
-  message: z.string(),
-  details: z.optional(z.array(CoreErrorDetail)),
+  message: NonEmptyString,
+  /** Omitted when there is nothing to itemise; a present list carries at least one entry. */
+  details: z.optional(z.array(CoreErrorDetail).check(z.minLength(1))),
 });
 export type CoreErrorDto = z.infer<typeof CoreErrorDto>;
 export type CoreErrorDtoInput = z.input<typeof CoreErrorDto>;

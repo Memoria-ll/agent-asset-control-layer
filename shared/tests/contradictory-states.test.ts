@@ -11,6 +11,8 @@ import {
 const resolvedContext = (overrides: {
   cost?: Record<string, unknown>;
   reason?: Record<string, unknown>;
+  conflicts?: unknown[];
+  body?: string;
 }): unknown => ({
   scope: { projectId: "project-1" },
   assets: [
@@ -20,9 +22,10 @@ const resolvedContext = (overrides: {
       assetType: "skill",
       loadingTier: "core",
       reason: overrides.reason ?? { kind: "included", explanation: "Matched scope" },
+      ...(overrides.body === undefined ? {} : { body: overrides.body }),
     },
   ],
-  conflicts: [],
+  conflicts: overrides.conflicts ?? [],
   cost: overrides.cost ?? {
     totalTokenEstimate: 0,
     includedAssetCount: 1,
@@ -69,6 +72,49 @@ describe("boundary states that cannot exist", () => {
   it("rejects a degraded state carrying no reason", () => {
     expect(z.safeParse(DegradedInfo, { reasons: [] }).success).toBe(false);
     expect(z.safeParse(DegradedInfo, { reasons: ["Runtime is down"] }).success).toBe(true);
+  });
+
+  // A length bound on the list still admits a list of blanks, which leaves the
+  // consumer exactly as unable to explain the state as an empty list did.
+  it("rejects a blank reason inside an otherwise well-formed list", () => {
+    expect(z.safeParse(DegradedInfo, { reasons: [""] }).success).toBe(false);
+    expect(() =>
+      parseTransitionCandidateDto({
+        toStageId: "stage-2",
+        blocked: true,
+        blockedReasons: [""],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a blank explanation on a resolution reason", () => {
+    expect(() =>
+      parseResolvedContextDto(resolvedContext({ reason: { kind: "included", explanation: "" } })),
+    ).toThrow();
+  });
+
+  it("rejects a conflict that involves no asset", () => {
+    expect(() =>
+      parseResolvedContextDto(
+        resolvedContext({ conflicts: [{ explanation: "Overlapping assets", involvedAssetIds: [] }] }),
+      ),
+    ).toThrow();
+  });
+
+  it("accepts a conflict that names the assets it involves", () => {
+    expect(() =>
+      parseResolvedContextDto(
+        resolvedContext({
+          conflicts: [{ explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] }],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("keeps an empty asset body representable", () => {
+    const parsed = parseResolvedContextDto(resolvedContext({ body: "" }));
+
+    expect(parsed.assets[0]?.body).toBe("");
   });
 
   it("rejects a blocked transition with no reason", () => {

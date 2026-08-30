@@ -67,7 +67,13 @@ export const ResolvedAssetDto = z.strictObject({
   assetType: AssetType,
   loadingTier: LoadingTier,
   reason: ResolutionReason,
-  /** Absent for tiers that expose metadata without loading the body (#10). */
+  /**
+   * Absent for tiers that expose metadata without loading the body (#10).
+   *
+   * Unconstrained rather than a `NonEmptyString`: an asset file with no content
+   * is a real asset, and `""` reports its body faithfully. Absence carries the
+   * separate meaning that the body was not loaded.
+   */
   body: z.optional(z.string()),
   /** Consumed by #10 and by the context cost display (#37). */
   tokenEstimate: z.optional(TokenCount),
