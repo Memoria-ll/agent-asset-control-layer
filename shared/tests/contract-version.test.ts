@@ -5,6 +5,18 @@ import {
 } from "../src/index.ts";
 
 describe("contract compatibility", () => {
+  it("does not call two different versions a match", () => {
+    const patchOnly = checkContractCompatibility("1.2.0", "1.2.9");
+    const identical = checkContractCompatibility("1.2.0", "1.2.0");
+
+    expect(patchOnly.status).toBe("compatible");
+    // The explanation reaches the connection-state UI (#32), where calling two
+    // visibly different versions a match reads as a defect in the check itself.
+    expect(patchOnly.explanation).not.toMatch(/match/i);
+    expect(patchOnly.explanation).toContain("1.2.9");
+    expect(identical.status).toBe("compatible");
+  });
+
   it.each([
     [CONTRACT_VERSION, CONTRACT_VERSION, "compatible"],
     ["0.1.0", "0.2.0", "incompatible"],
