@@ -17,6 +17,19 @@ importers:
 
   core:
     dependencies:
+      '@aacl/core-domain':
+        specifier: workspace:*
+        version: link:../core-domain
+      '@aacl/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^24.13.3
+        version: 24.13.3
+
+  core-domain:
+    dependencies:
       '@aacl/shared':
         specifier: workspace:*
         version: link:../shared
@@ -633,7 +646,6 @@ snapshots:
   '@types/node@24.13.3':
     dependencies:
       undici-types: 7.18.2
-    optional: true
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -891,8 +903,7 @@ snapshots:
       '@typescript/typescript-win32-arm64': 7.0.2
       '@typescript/typescript-win32-x64': 7.0.2
 
-  undici-types@7.18.2:
-    optional: true
+  undici-types@7.18.2: {}
 
   vite@8.2.2(@types/node@24.13.3):
     dependencies:

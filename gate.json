@@ -1,19 +1,26 @@
 {
   "steps": [
     {
+      "name": "workspace-packages",
+      "command": "node scripts/verify-workspace-packages.mjs",
+      "timeout_sec": 60,
+      "expect_exit": 0,
+      "min_count": { "regex": "workspace packages: OK", "count": 1 }
+    },
+    {
       "name": "typecheck",
       "command": "pnpm -r typecheck",
       "timeout_sec": 600,
       "expect_exit": 0,
       "must_not_match": "error TS[0-9]{4}",
-      "min_count": { "regex": "typecheck: Done", "count": 3 }
+      "min_count": { "regex": "typecheck: Done", "count": 4 }
     },
     {
       "name": "node-resolution",
-      "command": "node core/scripts/verify-shared-resolution.mjs",
+      "command": "node core/scripts/verify-node-resolution.mjs",
       "timeout_sec": 120,
       "expect_exit": 0,
-      "min_count": { "regex": "shared resolution: OK", "count": 1 }
+      "min_count": { "regex": "resolution: OK", "count": 3 }
     },
     {
       "name": "test",
@@ -21,7 +28,7 @@
       "timeout_sec": 600,
       "expect_exit": 0,
       "must_not_match": "No test files found|Tests  no tests",
-      "min_count": { "regex": "Tests  [0-9]+ passed", "count": 3 }
+      "min_count": { "regex": "Tests  [0-9]+ passed", "count": 4 }
     }
   ]
 }
