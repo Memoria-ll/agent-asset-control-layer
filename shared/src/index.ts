@@ -151,4 +151,17 @@ export {
 } from "./contract-version.js";
 export type { VersionInfoInput } from "./contract-version.js";
 
-export { contractSchemas, contractJsonSchemas } from "./json-schema.js";
+/**
+ * The registry itself stays internal. Its values are zod schemas, so walking it
+ * to parse, render or compose is work only a package holding zod can do, and
+ * `core` / `vscode-extension` hold none — publishing it would put the dependency
+ * boundary back under review instead of under dependency resolution.
+ *
+ * A named DTO schema above is published on the opposite footing: it is the
+ * declared source of truth for one boundary type and ships with its own
+ * `parse*` / `tryParse*` entry point, which performs the zod work on the
+ * consumer's behalf. `contractJsonSchemas()` is this registry's published
+ * equivalent, and its keys enumerate the boundary types for anyone needing the
+ * list.
+ */
+export { contractJsonSchemas } from "./json-schema.js";

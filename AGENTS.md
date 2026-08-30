@@ -31,7 +31,12 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `shared` は workspace package に依存しない。外部依存は schema library (`zod`) 1 つに限る。
   `core` と `vscode-extension` は相互に依存しない。
 - `core` / `vscode-extension` は `zod` を直接依存に持たない。境界の検証入口と JSON Schema 出力は
-  `shared` が公開する。
+  `shared` が公開する。この「依存を持たない」こと自体が境界の強制力なので、**index に出す zod 型の値は
+  「1 つの境界型の正であり、専用の `parse*` / `tryParse*` を伴うもの」に限る**。
+  schema の集合やユーティリティ（`contractSchemas` 等）は internal に留め、公開するのは JSON 形
+  （`contractJsonSchemas()`）。`$ZodError` を引数に取る関数も同様に internal（`toCoreError`）。
+  判定基準は「consumer が zod 無しでその export を使い切れるか」。`shared` 自身のテストは
+  `../src/<module>.js` を直接 import してよい — この制約が縛るのは consumer package。
 - `shared` は Core / Extension 間の契約面。DTO・schema・serialization・error / version contract のみを置く。
   domain semantics と実装ロジックは置かない。
 - `shared` は Core 実装にも VS Code API にも依存しない。
