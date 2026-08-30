@@ -69,3 +69,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - 未定: Core UI（Tauri 2 shell、#19）の package 位置。
 - 未定: `vscode-extension` の bundling（esbuild）と extension manifest
   （`engines.vscode` / activation / contributes）。#31 で決める。
+
+## Ledger
+
+### Traps
+
+- `shared/package.json` の `exports` は `types` / `default` とも `./src/index.ts` を指す。
+  `dist` を指すと `pnpm -r typecheck` は exit 0 のまま、`pnpm -r test` だけが `core` と
+  `vscode-extension` で `Failed to resolve entry for package "@aacl/shared"` を出して落ちる (#46)
+- 境界 DTO は `z.strictObject`。`z.object` でも既定の `z.toJSONSchema` は
+  `additionalProperties: false` を書くため、公開 schema を読んでも差が出ない。差を捕まえるのは
+  `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema
+  （`CompatibilityResult` / `DegradedInfo`）はこの網の外にある (#46)
