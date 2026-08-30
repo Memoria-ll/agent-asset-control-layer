@@ -53,11 +53,11 @@ export const parseResolveRequest = (value: unknown): ResolveRequest =>
 
 export const tryParseResolveRequest = (
   value: unknown,
-): ParseOutcome<ResolveRequest> => tryParseWith(ResolveRequest, value);
+): ParseOutcome<ResolveRequest> => tryParseWith(ResolveRequest, value, "request");
 
 export const parseResolveResponse = (value: unknown): ResolveResponse =>
   z.parse(ResolveResponse, value);
 
 export const tryParseResolveResponse = (
   value: unknown,
-): ParseOutcome<ResolveResponse> => tryParseWith(ResolveResponse, value);
+): ParseOutcome<ResolveResponse> => tryParseWith(ResolveResponse, value, "response");

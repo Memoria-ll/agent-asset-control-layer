@@ -28,10 +28,10 @@ export type TaskTypeDtoInput = z.input<typeof TaskTypeDto>;
 export const parseRoleDto = (value: unknown): RoleDto => z.parse(RoleDto, value);
 
 export const tryParseRoleDto = (value: unknown): ParseOutcome<RoleDto> =>
-  tryParseWith(RoleDto, value);
+  tryParseWith(RoleDto, value, "response");
 
 export const parseTaskTypeDto = (value: unknown): TaskTypeDto =>
   z.parse(TaskTypeDto, value);
 
 export const tryParseTaskTypeDto = (value: unknown): ParseOutcome<TaskTypeDto> =>
-  tryParseWith(TaskTypeDto, value);
+  tryParseWith(TaskTypeDto, value, "response");

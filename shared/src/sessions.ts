@@ -65,11 +65,11 @@ export const parseSessionDto = (value: unknown): SessionDto =>
   z.parse(SessionDto, value);
 
 export const tryParseSessionDto = (value: unknown): ParseOutcome<SessionDto> =>
-  tryParseWith(SessionDto, value);
+  tryParseWith(SessionDto, value, "response");
 
 export const parseAgentExecutionDto = (value: unknown): AgentExecutionDto =>
   z.parse(AgentExecutionDto, value);
 
 export const tryParseAgentExecutionDto = (
   value: unknown,
-): ParseOutcome<AgentExecutionDto> => tryParseWith(AgentExecutionDto, value);
+): ParseOutcome<AgentExecutionDto> => tryParseWith(AgentExecutionDto, value, "response");

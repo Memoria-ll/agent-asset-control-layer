@@ -9,17 +9,18 @@ import { tryParseWith, type ParseOutcome } from "./errors.js";
  *
  * It moves independently of the repository version in the root `package.json`.
  *
- * Operations that require a MAJOR bump (a MINOR bump while MAJOR is 0, which is
- * treated as breaking here). None of this is readable from the code:
+ * Every change to a boundary DTO is breaking, so each one bumps at least MINOR
+ * and `checkContractCompatibility` refuses any MAJOR or MINOR mismatch. None of
+ * this is readable from the code:
  *   - adding a value to a `z.enum` — an old consumer rejects the new value
  *   - adding a required field to a strict object — an old producer's payload is
  *     rejected
  *   - removing a field, changing a field's type, or making an optional field
  *     required
  *   - adding an arm to a discriminated union
- * Adding an optional field is non-breaking for an old producer, but every
- * boundary DTO is a strict object, so an old consumer still rejects it: a new
- * producer reaching an old consumer is breaking even then.
+ *   - adding an optional field — an old producer's payload still parses, but
+ *     every boundary DTO is a strict object, so an old consumer rejects the new
+ *     key
  */
 export const CONTRACT_VERSION = "0.1.0";
 
@@ -37,11 +38,15 @@ export const VersionInfo = z.strictObject({
 export type VersionInfo = z.infer<typeof VersionInfo>;
 export type VersionInfoInput = z.input<typeof VersionInfo>;
 
-export const CompatibilityStatus = z.enum([
-  "compatible",
-  "degraded",
-  "incompatible",
-]);
+/**
+ * The outcome of a version check, as the connection state (#32) renders it.
+ *
+ * Two values, because the check answers one question: can these two sides talk.
+ * A "connect anyway with a warning" state has no receptacle — #32 renders
+ * disconnected / incompatible / reconnecting — and `degraded` is the resolution
+ * vocabulary in `status.ts`, where it describes an asset rather than a link.
+ */
+export const CompatibilityStatus = z.enum(["compatible", "incompatible"]);
 export type CompatibilityStatus = z.infer<typeof CompatibilityStatus>;
 
 /** `explanation` is a display string; the consumer shows the state rather than failing silently. */
@@ -66,9 +71,15 @@ const toVersionParts = (version: string): VersionParts | undefined => {
  * Decides whether two sides holding these contract versions can talk. Both sides
  * run this same function, which is why it lives in the contract package.
  *
- * A patch difference never affects the outcome. While MAJOR is 0 a MINOR
- * difference is incompatible, following the 0.x reading that anything may
- * change: connecting anyway would let a mismatch pass unannounced.
+ * The two sides talk when MAJOR and MINOR both match; a PATCH difference never
+ * affects the outcome.
+ *
+ * A MINOR difference is breaking whichever side holds the newer number, so the
+ * comparison is symmetric rather than directional. Each side both produces and
+ * consumes, and every boundary DTO is a strict object: the newer side sends a
+ * field added since the older side's version, and the older side rejects the
+ * unknown key. Reporting such a pair as usable would let that failure surface
+ * later as a parse error on a live exchange instead of at the health check.
  */
 export const checkContractCompatibility = (
   local: string,
@@ -91,28 +102,16 @@ export const checkContractCompatibility = (
     };
   }
 
-  if (localParts.major === 0) {
-    return localParts.minor === remoteParts.minor
-      ? {
-          status: "compatible",
-          explanation: `Contract versions match (local ${local}, remote ${remote}).`,
-        }
-      : {
-          status: "incompatible",
-          explanation: `Contract minor versions differ below 1.0.0, where a minor change is breaking (local ${local}, remote ${remote}).`,
-        };
-  }
-
-  if (remoteParts.minor < localParts.minor) {
+  if (localParts.minor !== remoteParts.minor) {
     return {
-      status: "degraded",
-      explanation: `The remote contract is older (local ${local}, remote ${remote}); fields added since the remote minor version are absent.`,
+      status: "incompatible",
+      explanation: `Contract minor versions differ (local ${local}, remote ${remote}); the side holding the newer version sends fields the other rejects.`,
     };
   }
 
   return {
     status: "compatible",
-    explanation: `Contract versions are compatible (local ${local}, remote ${remote}).`,
+    explanation: `Contract versions match (local ${local}, remote ${remote}).`,
   };
 };
 
@@ -120,4 +119,4 @@ export const parseVersionInfo = (value: unknown): VersionInfo =>
   z.parse(VersionInfo, value);
 
 export const tryParseVersionInfo = (value: unknown): ParseOutcome<VersionInfo> =>
-  tryParseWith(VersionInfo, value);
+  tryParseWith(VersionInfo, value, "response");

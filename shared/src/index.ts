@@ -10,6 +10,10 @@
  * `vscode-extension` keep no direct dependency on a schema library — and that
  * missing dependency is what stops an ad-hoc redefinition of these DTOs from
  * compiling anywhere else.
+ *
+ * For the same reason no function published here takes a zod value as a
+ * parameter: an argument a caller cannot construct without zod is an export it
+ * cannot use. The entry points take `unknown` and return contract types.
  */
 
 export {
@@ -126,7 +130,6 @@ export {
   CoreErrorCode,
   CoreErrorDetail,
   CoreErrorDto,
-  toCoreError,
   parseCoreErrorDto,
   tryParseCoreErrorDto,
 } from "./errors.js";

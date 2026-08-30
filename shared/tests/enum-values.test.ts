@@ -20,7 +20,7 @@ describe("frozen contract enum values", () => {
     ["AvailabilityStatus", AvailabilityStatus, ["available", "degraded", "unavailable"]],
     ["LoadingTier", LoadingTier, ["core", "discoverable", "on-demand"]],
     ["CoreErrorCode", CoreErrorCode, ["invalid_request", "not_found", "conflict", "unavailable", "incompatible_contract", "internal"]],
-    ["CompatibilityStatus", CompatibilityStatus, ["compatible", "degraded", "incompatible"]],
+    ["CompatibilityStatus", CompatibilityStatus, ["compatible", "incompatible"]],
   ])("keeps %s stable", (name, schema, expected) => {
     expect(
       enumValues(schema),

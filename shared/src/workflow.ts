@@ -79,7 +79,7 @@ export const parseWorkflowStateDto = (value: unknown): WorkflowStateDto =>
 
 export const tryParseWorkflowStateDto = (
   value: unknown,
-): ParseOutcome<WorkflowStateDto> => tryParseWith(WorkflowStateDto, value);
+): ParseOutcome<WorkflowStateDto> => tryParseWith(WorkflowStateDto, value, "response");
 
 export const parseTransitionCandidateDto = (
   value: unknown,
@@ -88,4 +88,4 @@ export const parseTransitionCandidateDto = (
 export const tryParseTransitionCandidateDto = (
   value: unknown,
 ): ParseOutcome<TransitionCandidateDto> =>
-  tryParseWith(TransitionCandidateDto, value);
+  tryParseWith(TransitionCandidateDto, value, "response");

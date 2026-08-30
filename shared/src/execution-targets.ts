@@ -42,15 +42,15 @@ export const parseProviderDto = (value: unknown): ProviderDto =>
   z.parse(ProviderDto, value);
 
 export const tryParseProviderDto = (value: unknown): ParseOutcome<ProviderDto> =>
-  tryParseWith(ProviderDto, value);
+  tryParseWith(ProviderDto, value, "response");
 
 export const parseRuntimeDto = (value: unknown): RuntimeDto =>
   z.parse(RuntimeDto, value);
 
 export const tryParseRuntimeDto = (value: unknown): ParseOutcome<RuntimeDto> =>
-  tryParseWith(RuntimeDto, value);
+  tryParseWith(RuntimeDto, value, "response");
 
 export const parseModelDto = (value: unknown): ModelDto => z.parse(ModelDto, value);
 
 export const tryParseModelDto = (value: unknown): ParseOutcome<ModelDto> =>
-  tryParseWith(ModelDto, value);
+  tryParseWith(ModelDto, value, "response");

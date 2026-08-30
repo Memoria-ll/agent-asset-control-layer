@@ -39,7 +39,32 @@ export type ParseOutcome<T> =
   | { ok: true; value: T }
   | { ok: false; error: CoreErrorDto };
 
-const VALIDATION_FAILURE_MESSAGE = "Input does not satisfy the contract schema.";
+/**
+ * Which side of an exchange produced the value being validated.
+ *
+ * Every `tryParse*` entry point declares one. A caller's request and a
+ * producer's response fail for different reasons and call for different consumer
+ * behaviour — retry the call with corrected input, versus report that the other
+ * side broke its own contract — and a single classification cannot express both.
+ *
+ * It is not exported from the package index: the direction is a property of each
+ * named DTO, decided here, not something a consumer supplies.
+ */
+type BoundaryDirection = "request" | "response";
+
+const VALIDATION_FAILURE: Record<
+  BoundaryDirection,
+  { code: CoreErrorCode; message: string }
+> = {
+  request: {
+    code: "invalid_request",
+    message: "Input does not satisfy the contract schema.",
+  },
+  response: {
+    code: "internal",
+    message: "The response does not satisfy the contract schema.",
+  },
+};
 
 const toDetails = (issue: z.core.$ZodIssue): CoreErrorDetail[] => {
   // Array indices arrive as numbers, and CoreErrorDetail.path is a string array
@@ -64,13 +89,18 @@ const toDetails = (issue: z.core.$ZodIssue): CoreErrorDetail[] => {
 /**
  * Maps a zod validation error onto the boundary error contract.
  *
- * The `$ZodError` itself is never handed to a consumer: `core` and
- * `vscode-extension` do not depend on zod, so a leaked zod type would force
- * that dependency back on them.
+ * Kept out of the package index alongside `tryParseWith`: its parameter is a
+ * `$ZodError`, which `core` and `vscode-extension` cannot construct or narrow
+ * without taking the direct zod dependency the boundary forbids them. They reach
+ * this mapping through the named `tryParse*` entry points, which take `unknown`
+ * and return `CoreErrorDto`.
  */
-export const toCoreError = (error: z.core.$ZodError): CoreErrorDto => ({
-  code: "invalid_request",
-  message: VALIDATION_FAILURE_MESSAGE,
+export const toCoreError = (
+  error: z.core.$ZodError,
+  direction: BoundaryDirection,
+): CoreErrorDto => ({
+  code: VALIDATION_FAILURE[direction].code,
+  message: VALIDATION_FAILURE[direction].message,
   details: error.issues.flatMap(toDetails),
 });
 
@@ -83,15 +113,16 @@ export const toCoreError = (error: z.core.$ZodError): CoreErrorDto => ({
 export const tryParseWith = <Schema extends z.core.$ZodType>(
   schema: Schema,
   value: unknown,
+  direction: BoundaryDirection,
 ): ParseOutcome<z.infer<Schema>> => {
   const result = z.safeParse(schema, value);
   return result.success
     ? { ok: true, value: result.data }
-    : { ok: false, error: toCoreError(result.error) };
+    : { ok: false, error: toCoreError(result.error, direction) };
 };
 
 export const parseCoreErrorDto = (value: unknown): CoreErrorDto =>
   z.parse(CoreErrorDto, value);
 
 export const tryParseCoreErrorDto = (value: unknown): ParseOutcome<CoreErrorDto> =>
-  tryParseWith(CoreErrorDto, value);
+  tryParseWith(CoreErrorDto, value, "response");

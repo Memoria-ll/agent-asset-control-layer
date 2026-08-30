@@ -109,4 +109,4 @@ export const parseResolvedContextDto = (value: unknown): ResolvedContextDto =>
 
 export const tryParseResolvedContextDto = (
   value: unknown,
-): ParseOutcome<ResolvedContextDto> => tryParseWith(ResolvedContextDto, value);
+): ParseOutcome<ResolvedContextDto> => tryParseWith(ResolvedContextDto, value, "response");

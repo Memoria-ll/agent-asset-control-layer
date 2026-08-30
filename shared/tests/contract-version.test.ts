@@ -9,13 +9,32 @@ describe("contract compatibility", () => {
     [CONTRACT_VERSION, CONTRACT_VERSION, "compatible"],
     ["0.1.0", "0.2.0", "incompatible"],
     ["1.2.0", "2.0.0", "incompatible"],
-    ["1.2.0", "1.3.0", "compatible"],
-    ["1.3.0", "1.2.0", "degraded"],
+    // A minor difference is breaking in both readings: whichever side holds the
+    // newer number sends a field the other side's strict objects reject.
+    ["1.2.0", "1.3.0", "incompatible"],
+    ["1.3.0", "1.2.0", "incompatible"],
     ["1.2.0", "1.2.9", "compatible"],
+    ["1.2.0", "not-a-version", "incompatible"],
   ])("classifies local %s and remote %s", (local, remote, status) => {
     const result = checkContractCompatibility(local, remote);
 
     expect(Object.keys(result).sort()).toEqual(["explanation", "status"]);
     expect(result.status).toBe(status);
+  });
+
+  it("gives the same verdict whichever side is called local", () => {
+    const pairs: [string, string][] = [
+      ["1.2.0", "1.3.0"],
+      ["1.2.0", "2.0.0"],
+      ["1.2.0", "1.2.9"],
+      ["0.1.0", "0.2.0"],
+    ];
+
+    for (const [a, b] of pairs) {
+      expect(
+        checkContractCompatibility(a, b).status,
+        `${a} vs ${b}`,
+      ).toBe(checkContractCompatibility(b, a).status);
+    }
   });
 });
