@@ -15,6 +15,11 @@ describe("contract compatibility", () => {
     ["1.3.0", "1.2.0", "incompatible"],
     ["1.2.0", "1.2.9", "compatible"],
     ["1.2.0", "not-a-version", "incompatible"],
+    // Adjacent either side of 2^53, where converting to a float would collapse
+    // the two onto one value and report them as the same contract.
+    ["9007199254740992.1.0", "9007199254740993.1.0", "incompatible"],
+    ["1.9007199254740992.0", "1.9007199254740993.0", "incompatible"],
+    ["9007199254740993.1.0", "9007199254740993.1.0", "compatible"],
   ])("classifies local %s and remote %s", (local, remote, status) => {
     const result = checkContractCompatibility(local, remote);
 

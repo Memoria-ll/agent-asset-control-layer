@@ -56,15 +56,27 @@ export const CompatibilityResult = z.strictObject({
 });
 export type CompatibilityResult = z.infer<typeof CompatibilityResult>;
 
-type VersionParts = { major: number; minor: number };
+type VersionParts = { major: string; minor: string };
 
+/**
+ * MAJOR and MINOR as the digit strings `SemanticVersion` validated.
+ *
+ * They stay strings because the only comparison made on them is equality, and
+ * `SemanticVersion` rejects a leading zero — so the digit string is already the
+ * canonical form of the number and string equality answers exactly the same
+ * question. Converting could only lose: `Number` is a float, so two versions
+ * differing above 2^53 collapse onto one value and compare equal (measured:
+ * `Number("9007199254740992") === Number("9007199254740993")`).
+ */
 const toVersionParts = (version: string): VersionParts | undefined => {
   const result = z.safeParse(SemanticVersion, version);
   if (!result.success) {
     return undefined;
   }
-  const segments = result.data.split(".");
-  return { major: Number(segments[0]), minor: Number(segments[1]) };
+  const [major, minor] = result.data.split(".");
+  return major === undefined || minor === undefined
+    ? undefined
+    : { major, minor };
 };
 
 /**
