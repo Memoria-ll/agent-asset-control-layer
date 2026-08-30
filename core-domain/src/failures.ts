@@ -21,6 +21,8 @@ export const coreFailure = (
 
 export const toCoreErrorDto = (failure: CoreFailure): CoreErrorDto => {
   const base = { code: failure.code, message: failure.message };
+  // An empty list is dropped rather than serialized: CoreErrorDto.details carries minLength(1),
+  // so `details: []` fails parseCoreErrorDto while an absent key is valid.
   return failure.details === undefined || failure.details.length === 0
     ? base
     : { ...base, details: [...failure.details] };

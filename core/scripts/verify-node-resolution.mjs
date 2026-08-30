@@ -48,3 +48,13 @@ if (dto.code !== "not_found" || dto.message !== "x" || "details" in dto) {
 }
 
 console.log("core-domain resolution: OK");
+
+// Importing the composition root resolves every relative specifier Core reaches through it,
+// and must not start listening: that separation from main.ts is what lets this run inside the
+// gate. A server left running here would hold the port for every later step.
+const core = await import("../src/index.ts");
+if (typeof core.startCore !== "function") {
+  fail("core", "startCore did not survive as a plain export");
+}
+
+console.log("core resolution: OK");

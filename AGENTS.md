@@ -6,6 +6,8 @@ local-first Core、およびその Workbench となる VS Code Extension。
 ## コマンド
 
 - 依存導入: `pnpm install`
+- Core 起動: `pnpm start:core`（= `pnpm --filter @aacl/core start`）。既定の待受は
+  `http://127.0.0.1:7420`、稼働確認は `GET /health`
 - テスト: `pnpm -r test`（gate の test step と同一コマンド）
 - 品質ゲート: `bash ~/.claude/scripts/run-gate.sh`（canonical。判定条件は `gate.json` が唯一の正）
 
@@ -15,6 +17,11 @@ local-first Core、およびその Workbench となる VS Code Extension。
 
 - Core service は host 直実行の Node プロセス（localhost）。docker compose 既定からの逸脱 —
   理由は「逸脱・未定」に記載。
+- Core はビルド段を持たず `node src/main.ts` で起動する（Node の type stripping に依存する）。
+  待受は `AACL_CORE_HOST` / `AACL_CORE_PORT` で変えられ、既定は `127.0.0.1:7420`。
+  `AACL_CORE_HOST` が受け付けるのは `127.0.0.1` / `localhost` / `::1` の 3 値で、
+  Core が認証を持つまで待受はループバックに閉じる。LAN 公開は #21 / #25 で認証と同時に決める。
+  設定値が範囲外なら既定へ落とさず起動失敗し exit code 1 を返す。
 - Phase 1 = single-user localhost、Phase 2 = single-user remote / multi-PC、Phase 3 = multi-user team。
   remote / team 運用を local 利用の前提条件にしない。
 - 現時点は自分用ツール。`rules/distributed-app.md` の品質バーは未発効。
@@ -23,13 +30,24 @@ local-first Core、およびその Workbench となる VS Code Extension。
 
 ### package 構成と依存方向
 
-- pnpm workspaces の monorepo。package は `shared` / `core` / `vscode-extension` の 3 つ。
+- pnpm workspaces の monorepo。package は `shared` / `core-domain` / `core` / `vscode-extension`
+  の 4 つ。
 - root `package.json` の `engines.node` は、lockfile 上の全依存の `engines` の積集合を宣言する。
   依存を追加・更新したら `pnpm-lock.yaml` の `engines:` を見て範囲を更新する
   （宣言だけが広いと、範囲内の Node で gate が動かない）。
-- 依存方向は一方向: `core` → `shared`、`vscode-extension` → `shared`。
+- 依存方向は一方向: `core-domain` → `shared`、`core` → `shared` + `core-domain`、
+  `vscode-extension` → `shared`。
   `shared` は workspace package に依存しない。外部依存は schema library (`zod`) 1 つに限る。
   `core` と `vscode-extension` は相互に依存しない。
+- **`core-domain` は host 能力に触れない。** `node:*` を import せず、`@types/node` も持たない
+  （`core-domain/tsconfig.json` に `types` を書かない）。外部 SDK・VS Code・Tauri は
+  `dependencies` にも import にも現れない。`@types/node` は `core` の devDependency に置き、
+  `core/tsconfig.json` の `types: ["node"]` で有効にする。この非対称は意図的で、
+  「domain は host 能力に触れない」を型解決と依存解決の両方で強制する。
+  pnpm の package 境界は権限境界ではなく root の依存は全 package から解決するため、
+  `core-domain/tests/dependency-boundary.test.ts` が manifest の直接依存と
+  `core-domain/src/**` の import 指定子（static / side-effect / re-export / 動的）を
+  全数走査して機械判定する。
 - **`zod` は `shared` の実装詳細であり、公開契約の一部ではない。**
   `shared/src/index.ts` は zod 値を 1 つも公開しない — schema も、その集合も、
   `$ZodError` を引数に取る関数も internal。公開面は **TypeScript の型**（ビルドで消える）と、
@@ -70,6 +88,13 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - 契約全体のバージョンは `shared` の `CONTRACT_VERSION` 1 つ。互換判定は
   `checkContractCompatibility()`。enum への値追加と required 欄の追加は破壊的変更。
 - Core API の request / response・error・version contract は公開契約。
+- Core の稼働確認は `GET /health`（`HEAD` も 200）。返すのは `shared` の `VersionInfo`
+  （`{ contractVersion }` の 1 欄）で、Core の実装バージョンは載せない — consumer が契約でなく
+  実装で分岐できてしまうため。URL にバージョン prefix を持たない。バージョン軸は
+  `CONTRACT_VERSION` 1 本。
+- Core のエラー応答は `CoreErrorDto` 準拠で、`code` は `CORE_ERROR_CODES` の値。
+  例外の内容は応答に載せず、ログの `core.request_failed` に出す。
+- `AACL_CORE_HOST` / `AACL_CORE_PORT` は利用者可視の設定名。改名は公開契約の変更。
 - Asset の source of truth は人間可読なファイルシステムファイル。その形状は公開契約 —
   変更は `save-schema-check` を通す。
 - `core/` 内部の domain model、`vscode-extension/` の view model / UI state は内部配線。
@@ -77,12 +102,18 @@ local-first Core、およびその Workbench となる VS Code Extension。
 
 ### レイヤ / seam mapping
 
-- logic unit（テスト対象）: `core/src/`（domain / resolver / workflow / policy / adapter）、
-  `shared/src/`、`vscode-extension/src/` のうち VS Code API に依存しない client / view model。
-- view-glue（テスト対象外）: `vscode-extension/src/` のうち VS Code API へ直接触れる面
+- logic unit（テスト対象）: `core-domain/src/`（domain semantics と失敗語彙）、
+  `core/src/` のうち `config/` `logging/` `http/router.ts` `http/responses.ts` と
+  composition root の `index.ts`、`shared/src/`、`vscode-extension/src/` のうち
+  VS Code API に依存しない client / view model。
+- view-glue（テスト対象外）: `core/src/main.ts`（`process.env` / stdout / signal だけを持つ
+  host glue）、`vscode-extension/src/` のうち VS Code API へ直接触れる面
   （activation / lifecycle、command 登録、webview 配線）。
+- `core/src/index.ts` は composition root で副作用を持たない。import しても listen しない。
+  起動の副作用は `main.ts` だけが持つ。gate の node-resolution step が `index.ts` を
+  素の Node から import してこの性質ごと検査する。
 - テストは各 package の `tests/` に置き、vitest で走らせる（`pnpm -r test`）。
-  3 package すべてが `test` script を持つ。
+  4 package すべてが `test` script を持つ。
 - gate: `bash ~/.claude/scripts/run-gate.sh`
 
 ### 逸脱・未定
@@ -90,10 +121,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - docker compose 既定からの逸脱: Core は利用者のファイルシステム・git 履歴・keychain に直接触れ、
   かつ Windows と WSL の双方から同一 localhost Core として見える必要がある。
   bind mount とパス変換を Core の契約面へ載せないため host 直実行とする。
-- `gate.json` は 3 step。`min_count` は typecheck / test が package 数 3 を固定値で持つ。
-  package を増減させるときは同じ変更で両方を更新する。test step は package 数だけを固定し、
-  テスト本数は固定しない。node-resolution step は素の Node による `@aacl/shared` の解決を
-  1 回検査する（下記 Traps 参照）。
+- `gate.json` は 4 step。`min_count` は typecheck / test が package 数 4 を固定値で持ち、
+  node-resolution が `resolution: OK` の行数 3 を持つ。package を増減させるときは
+  同じ変更で 3 箇所すべてを更新する。test step は package 数だけを固定し、テスト本数は固定しない。
+- workspace-packages step が期待 package 名の集合と各 package の `typecheck` / `test` script の
+  存在を検査する。`min_count` は下限比較で package 名を見ず、`pnpm -r` は script を持たない
+  package を黙って skip する（出力は `Scope: N of M workspace projects` で root を除外）ため、
+  数を数えるだけでは「package が実行対象から丸ごと外れた」状態を緑にしてしまう。
+- node-resolution step は素の Node による `@aacl/shared` / `@aacl/core-domain` /
+  `core/src/index.ts` の解決を検査する（下記 Traps 参照）。
 - 未定: Core UI（Tauri 2 shell、#19）の package 位置。
 - 未定: `vscode-extension` の bundling（esbuild）と extension manifest
   （`engines.vscode` / activation / contributes）。#31 で決める。
@@ -115,6 +151,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `ASSET_TYPES` はこれと一致している。README の製品説明はこれより広い語（templates / checklists /
   capability bindings）を含むが型の正ではない。**#2 が type を増やしたら同じ変更で `ASSET_TYPES` を
   更新する** — enum への値追加は破壊的変更 (#47)
+- `core` は `@types/node` を devDependency に持ち、かつ `core/tsconfig.json` に
+  `"types": ["node"]` を書く。`typeRoots` を指定しても自動発見は効かず、`node:*` の import が
+  `error TS2591` になって gate の typecheck step（`must_not_match: "error TS[0-9]{4}"`）を落とす。
+  `core-domain` にはどちらも置かない — それが「domain は host 能力に触れない」の型側の強制手段 (#1)
+- `node:http` のリクエストハンドラ内で throw すると `uncaughtException` になり、**その接続には
+  応答が返らずクライアントがハングする**（500 にはならない）。transport は必ず例外境界で捕まえて
+  `internal` の `CoreErrorDto` を返す。`server.on("error")` は **`listen()` と同じ同期ターン内**で
+  登録する — `setImmediate` / `setTimeout` を挟むと `EADDRINUSE` がハンドラに届かず
+  `uncaughtException` でプロセスが落ちる（`listen()` の前後は無関係で、ターンが同じかだけが効く） (#1)
 - 境界 DTO は `z.strictObject`。`z.object` でも既定の `z.toJSONSchema` は
   `additionalProperties: false` を書くため、公開 schema を読んでも差が出ない。差を捕まえるのは
   `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema

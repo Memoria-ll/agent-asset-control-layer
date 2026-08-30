@@ -20,7 +20,7 @@
       "command": "node core/scripts/verify-node-resolution.mjs",
       "timeout_sec": 120,
       "expect_exit": 0,
-      "min_count": { "regex": "resolution: OK", "count": 2 }
+      "min_count": { "regex": "resolution: OK", "count": 3 }
     },
     {
       "name": "test",
