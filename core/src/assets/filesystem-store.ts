@@ -138,7 +138,10 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
 };
 
 const validRelativePath = (value: string): boolean => {
-  if (value.length === 0 || value.includes("\\") || value.includes("\0") || value.startsWith("/")) return false;
+  // Windows forbids ":" in a file name, where it denotes an alternate data stream, and a
+  // managed root is seen as one store from both Windows and WSL, so a name that only POSIX
+  // accepts cannot be admitted.
+  if (value.length === 0 || value.includes("\\") || value.includes(":") || value.includes("\0") || value.startsWith("/")) return false;
   const segments = value.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return false;
   const name = segments[segments.length - 1];
@@ -441,7 +444,10 @@ const writeAtomically = async (
   let activeTemporaryPath: string | undefined = temporaryPath;
   let handle: FileHandle | undefined;
   try {
-    handle = await open(temporaryPath, "wx");
+    // umask can only narrow the mode open is given, so a restriction has to be in place at
+    // creation or the content is briefly readable. Widening is reachable only by chmod after
+    // the write, and that merely restores the mode the target already had.
+    handle = await open(temporaryPath, "wx", mode ?? 0o666);
     await handle.writeFile(document, "utf8");
     if (mode !== undefined) await handle.chmod(mode);
     await handle.close();

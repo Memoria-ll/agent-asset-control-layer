@@ -179,11 +179,13 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - `save` の `expectedRevision` が守るのは **同一 Core プロセス内の並行 save だけ**。revision 比較と
   rename の間に外部プロセスが書くと、更新は黙って捨てられ `ok: true` が返る。プロセス間の
   compare-and-swap は #59 で追跡している (#58)
-- **一時ファイル + rename の atomic write は対象の inode ごと差し替えるので、mode は
-  一時ファイル側（既定 `0666` & umask、通常 `0644`）になる。** 実測: `0600` の asset を save
-  すると `0644` に緩む＝同一ホストの他ユーザに読めるようになる。rename 方式で既存ファイルを
-  更新する箇所は、対象の mode を取って一時ファイルへ適用してから rename すること。
-  Runtime Store など別の永続化を足すときも同じ (#58)
+- **一時ファイル + rename の atomic write は対象の inode ごと差し替えるので、保存後の mode は
+  一時ファイル側のものになる。** 対象の mode を引き継ぐことと、**それを `open` の第 3 引数で
+  与えること**の両方が要る。umask は与えた mode を削るだけなので、狭い mode は生成時に
+  確定するが、書き込み後の `chmod` では**内容が緩い mode で存在する窓**が開く（実測: 既定
+  `open` は umask 22 で `0644` を作り、`0600` への `chmod` はその後）。広げる側は書き込み後の
+  `chmod` でしか実現できず、そちらは元の mode へ戻すだけなので窓にならない。rename 方式で
+  既存ファイルを更新する箇所（Runtime Store など別の永続化を足すときも）すべてに効く (#58)
 - **managed root の同一性判定は `resolve()` による字句正規化までしか見ていない。** symlink 別名と
   大小非区別 FS の綴り違いは別 root として受理され、同じ物理ファイルが 2 つの論理 source として
   list される。duplicate 検査は `rootId` で絞っているので診断も出ない。#4 の override / disable は

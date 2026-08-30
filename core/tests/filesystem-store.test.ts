@@ -301,7 +301,7 @@ describe("filesystem asset store", () => {
     await expect(readFile(join(root, "new.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["../escape.md", "/absolute.md", "nested\\escape.md", "nul\0name.md", "not-markdown.txt"])(
+  it.each(["../escape.md", "/absolute.md", "nested\\escape.md", "nul\0name.md", "not-markdown.txt", "C:/outside.md", "nested/C:/escape.md"])(
     "rejects unsafe save path %s without writing",
     async (relativePath) => {
       const root = await temporaryDirectory();
