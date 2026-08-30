@@ -392,6 +392,95 @@ describe("filesystem asset store", () => {
     }
   });
 
+  it("keeps scanning sibling directories after multiple nested read failures", async ({ skip }) => {
+    if (process.platform === "win32") {
+      skip("POSIX permission bits cannot reproduce this read failure on Windows.");
+      return;
+    }
+    const root = await temporaryDirectory();
+    const firstRestricted = join(root, "restricted-one");
+    const secondRestricted = join(root, "restricted-two");
+    await mkdir(firstRestricted);
+    await mkdir(secondRestricted);
+    await writeAsset(root, "visible.md", minimalDocument("visible"));
+    await chmod(firstRestricted, 0o000);
+    await chmod(secondRestricted, 0o000);
+
+    let permissionDenied = false;
+    try {
+      await readdir(firstRestricted);
+    } catch (error) {
+      permissionDenied = error !== null && typeof error === "object" && "code" in error && (error.code === "EACCES" || error.code === "EPERM");
+    }
+    if (!permissionDenied) {
+      await chmod(firstRestricted, 0o755);
+      await chmod(secondRestricted, 0o755);
+      // Skip only when the environment's effective user can read mode-000 directories.
+      skip("The environment cannot reproduce a POSIX permission-denied directory read.");
+      return;
+    }
+
+    try {
+      const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+      const result = await store.list();
+
+      expect(result.assets).toHaveLength(1);
+      expect(result.assets[0]?.asset.id).toBe("visible");
+      expect(result.failures).toHaveLength(2);
+      expect(result.failures.every((item) => item.failure.code === "unavailable")).toBe(true);
+      expect(result.failures.map((item) => item.failure.details?.[0]?.path.join("/")).sort()).toEqual([
+        "root/global/file/restricted-one",
+        "root/global/file/restricted-two",
+      ]);
+    } finally {
+      await chmod(firstRestricted, 0o755);
+      await chmod(secondRestricted, 0o755);
+    }
+  });
+
+  it("saves to a healthy root despite an unavailable unrelated root", async ({ skip }) => {
+    if (process.platform === "win32") {
+      skip("POSIX permission bits cannot reproduce this read failure on Windows.");
+      return;
+    }
+    const globalRoot = await temporaryDirectory();
+    const personalRoot = await temporaryDirectory();
+    const restrictedPath = join(personalRoot, "restricted.md");
+    await writeAsset(personalRoot, "restricted.md", minimalDocument("restricted"));
+    const globalAsset = assetFromDocument(minimalDocument("global-saved")).asset;
+    const personalAsset = assetFromDocument(minimalDocument("personal-saved")).asset;
+    await chmod(restrictedPath, 0o000);
+
+    let permissionDenied = false;
+    try {
+      await readFile(restrictedPath);
+    } catch (error) {
+      permissionDenied = error !== null && typeof error === "object" && "code" in error && (error.code === "EACCES" || error.code === "EPERM");
+    }
+    if (!permissionDenied) {
+      await chmod(restrictedPath, 0o644);
+      // Skip only when the environment's effective user can read mode-000 files.
+      skip("The environment cannot reproduce a POSIX permission-denied read.");
+      return;
+    }
+
+    try {
+      const store = storeFor([
+        { rootId: "global", kind: "global", directory: globalRoot },
+        { rootId: "personal", kind: "personal", directory: personalRoot },
+      ]);
+
+      const globalResult = await store.save({ rootId: "global", relativePath: "global.md", asset: globalAsset });
+      expect(globalResult.ok).toBe(true);
+
+      const personalResult = await store.save({ rootId: "personal", relativePath: "personal.md", asset: personalAsset });
+      expect(personalResult.ok).toBe(false);
+      if (!personalResult.ok) expect(personalResult.failure.code).toBe("unavailable");
+    } finally {
+      await chmod(restrictedPath, 0o644);
+    }
+  });
+
   it("does not follow symlink directories and diagnoses markdown symlinks", async ({ skip }) => {
     const root = await temporaryDirectory();
     const outside = await temporaryDirectory();
@@ -431,5 +520,53 @@ describe("filesystem asset store", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.code).toBe("unavailable");
     expect(await readdir(root)).toEqual([]);
+  });
+
+  it("serializes concurrent saves with the same expected revision", async () => {
+    const root = await temporaryDirectory();
+    const initial = assetFromDocument(minimalDocument("concurrent", "rule", "initial"));
+    const first = assetFromDocument(minimalDocument("concurrent", "rule", "first"));
+    const second = assetFromDocument(minimalDocument("concurrent", "rule", "second"));
+    await writeRaw(root, "concurrent.md", initial.document);
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+    const listed = await store.list();
+    const expectedRevision = listed.assets[0]?.revision;
+    if (expectedRevision === undefined) throw new Error("The initial asset was not listed.");
+
+    const results = await Promise.all([
+      store.save({ rootId: "global", relativePath: "concurrent.md", asset: first.asset, expectedRevision }),
+      store.save({ rootId: "global", relativePath: "concurrent.md", asset: second.asset, expectedRevision }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toHaveLength(1);
+    const winnerIndex = results.findIndex((result) => result.ok);
+    const loser = results.find((result) => !result.ok);
+    expect(winnerIndex).toBeGreaterThanOrEqual(0);
+    expect(loser?.ok).toBe(false);
+    if (loser !== undefined && !loser.ok) expect(loser.failure.code).toBe("conflict");
+    expect(await readFile(join(root, "concurrent.md"), "utf8")).toBe(winnerIndex === 0 ? first.document : second.document);
+  });
+
+  it("saves an asset with a filesystem-limit basename", async ({ skip }) => {
+    const root = await temporaryDirectory();
+    const relativePath = "a".repeat(251) + ".md";
+    const probePath = join(root, relativePath);
+    try {
+      await writeFile(probePath, "", { flag: "wx" });
+      await rm(probePath);
+    } catch {
+      await rm(probePath, { force: true });
+      // Skip when the filesystem cannot create a component of the requested length.
+      skip("The environment cannot create a filesystem component of the requested length.");
+      return;
+    }
+    const asset = assetFromDocument(minimalDocument("long-basename"));
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+
+    const result = await store.save({ rootId: "global", relativePath, asset: asset.asset });
+
+    expect(result.ok).toBe(true);
+    expect(await readFile(probePath, "utf8")).toBe(asset.document);
   });
 });

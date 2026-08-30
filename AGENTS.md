@@ -172,3 +172,10 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `additionalProperties: false` を書くため、公開 schema を読んでも差が出ない。差を捕まえるのは
   `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema
   （`CompatibilityResult` / `DegradedInfo`）はこの網の外にある (#46)
+- `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
+  でしか出どころを区別できない。1 つの root について判断する消費側（save の可用性判定、
+  resolver、HTTP ハンドラ）は必ず `source.rootId` で絞る。絞らないと、繋がっていない personal /
+  project root 1 つで健全な root まで使えなくなる (#58)
+- `save` の `expectedRevision` が守るのは **同一 Core プロセス内の並行 save だけ**。revision 比較と
+  rename の間に外部プロセスが書くと、更新は黙って捨てられ `ok: true` が返る。プロセス間の
+  compare-and-swap は #59 で追跡している (#58)

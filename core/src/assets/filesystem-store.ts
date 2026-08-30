@@ -214,7 +214,7 @@ const collectEntries = async (
   root: RootState,
   directory: string,
   prefix: string,
-): Promise<{ readonly entries: readonly FileEntry[]; readonly failure?: CoreFailure }> => {
+): Promise<{ readonly entries: readonly FileEntry[]; readonly failures: readonly CoreFailure[] }> => {
   let directoryEntries: Dirent[];
   try {
     directoryEntries = await listDirectoryEntries(directory);
@@ -223,13 +223,24 @@ const collectEntries = async (
     const unavailable = code !== "ENOENT" && code !== "ENOTDIR";
     return {
       entries: [],
-      failure: unavailable
-        ? failure("unavailable", "The asset root could not be read.", ["root", root.descriptor.rootId], "unavailable")
-        : failure("invalid_request", "The asset root could not be read as a directory.", ["root", root.descriptor.rootId], "invalid_root"),
+      failures: [unavailable
+        ? failure(
+          "unavailable",
+          "The asset root could not be read.",
+          prefix === "" ? ["root", root.descriptor.rootId] : ["root", root.descriptor.rootId, "file", prefix],
+          "unavailable",
+        )
+        : failure(
+          "invalid_request",
+          "The asset root could not be read as a directory.",
+          prefix === "" ? ["root", root.descriptor.rootId] : ["root", root.descriptor.rootId, "file", prefix],
+          "invalid_root",
+        )],
     };
   }
 
   const entries: FileEntry[] = [];
+  const failures: CoreFailure[] = [];
   for (const entry of directoryEntries) {
     const relativePath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
     const fullPath = join(directory, entry.name);
@@ -240,12 +251,12 @@ const collectEntries = async (
     if (entry.isDirectory()) {
       const nested = await collectEntries(root, fullPath, relativePath);
       entries.push(...nested.entries);
-      if (nested.failure !== undefined) return { entries, failure: nested.failure };
+      failures.push(...nested.failures);
       continue;
     }
     if (entry.isFile() && entry.name.endsWith(".md")) entries.push({ root, relativePath, symlink: false });
   }
-  return { entries };
+  return { entries, failures };
 };
 
 const readAndValidate = async (root: RootState, entry: FileEntry, rootDirectory: string): Promise<ReadOutcome> => {
@@ -322,7 +333,9 @@ const scanRoot = async (root: RootState): Promise<{ readonly assets: readonly St
     if (result.kind === "asset") assets.push(result.stored);
     if (result.kind === "failure") failures.push(diagnostic(root.descriptor, entry.relativePath, result.failure));
   }
-  if (collected.failure !== undefined) failures.push(diagnostic(root.descriptor, undefined, collected.failure));
+  for (const collectedFailure of collected.failures) {
+    failures.push(diagnostic(root.descriptor, undefined, collectedFailure));
+  }
   return { assets, failures };
 };
 
@@ -423,7 +436,7 @@ const writeAtomically = async (
   rename: Rename,
 ): Promise<AssetResult<undefined>> => {
   const parent = dirname(targetPath);
-  const temporaryPath = join(parent, `.${basename(targetPath)}.${randomUUID()}.tmp`);
+  const temporaryPath = join(parent, `.aacl.${randomUUID()}.tmp`);
   let activeTemporaryPath: string | undefined = temporaryPath;
   let handle: FileHandle | undefined;
   try {
@@ -467,6 +480,7 @@ export const createFilesystemAssetStore = (
 
   const states = roots.map((descriptor) => ({ descriptor }));
   const rename = options?.rename ?? renameFile;
+  const saveChains = new Map<string, Promise<unknown>>();
 
   const list = async (): Promise<AssetListResult> => {
     const assets: StoredAsset[] = [];
@@ -488,14 +502,7 @@ export const createFilesystemAssetStore = (
     };
   };
 
-  const save = async (input: SaveAssetInput): Promise<AssetResult<StoredAsset>> => {
-    const root = states.find((state) => state.descriptor.rootId === input.rootId);
-    if (root === undefined) {
-      return { ok: false, failure: failure("invalid_request", "The managed asset root is unknown.", ["root", input.rootId], "invalid_root") };
-    }
-    const pathResult = validateTargetPath(input.relativePath);
-    if (!pathResult.ok) return pathResult;
-
+  const saveSerialized = async (root: RootState, input: SaveAssetInput): Promise<AssetResult<StoredAsset>> => {
     let rootDirectory: string;
     try {
       rootDirectory = await realpath(root.descriptor.directory);
@@ -545,7 +552,9 @@ export const createFilesystemAssetStore = (
       // that destroys a file the caller never named.
       return { ok: false, failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", duplicate.source.relativePath], "duplicate_asset_id") };
     }
-    const unavailable = current.failures.find((item) => item.failure.code === "unavailable");
+    const unavailable = current.failures.find((item) =>
+      item.source.rootId === input.rootId && item.failure.code === "unavailable"
+    );
     if (unavailable !== undefined) return { ok: false, failure: unavailable.failure };
 
     try {
@@ -564,6 +573,31 @@ export const createFilesystemAssetStore = (
       source: storedSource(root.descriptor, input.relativePath),
     };
     return { ok: true, value: stored };
+  };
+
+  // Serialization is per Core process. A writer outside this process can still slip between
+  // the revision check and the rename, so expectedRevision is not a cross-process
+  // compare-and-swap (#59).
+  const save = async (input: SaveAssetInput): Promise<AssetResult<StoredAsset>> => {
+    const root = states.find((state) => state.descriptor.rootId === input.rootId);
+    if (root === undefined) {
+      return { ok: false, failure: failure("invalid_request", "The managed asset root is unknown.", ["root", input.rootId], "invalid_root") };
+    }
+    const pathResult = validateTargetPath(input.relativePath);
+    if (!pathResult.ok) return pathResult;
+
+    const key = `${input.rootId}\0${input.relativePath}`;
+    const previous = saveChains.get(key) ?? Promise.resolve();
+    const current = previous.then(
+      () => saveSerialized(root, input),
+      () => saveSerialized(root, input),
+    );
+    saveChains.set(key, current);
+    try {
+      return await current;
+    } finally {
+      if (saveChains.get(key) === current) saveChains.delete(key);
+    }
   };
 
   return { ok: true, value: { list, get, save } };
