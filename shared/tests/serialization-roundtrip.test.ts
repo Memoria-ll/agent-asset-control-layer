@@ -77,7 +77,6 @@ const representativeInputs: Record<string, unknown> = {
     requiredRoleId: "role-1",
     requiredTaskTypeId: "task-type-1",
     blocked: false,
-    blockedReasons: [],
   },
   VersionInfo: { contractVersion: "0.1.0" },
   CoreErrorDto: {

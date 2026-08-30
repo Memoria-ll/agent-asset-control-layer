@@ -4,15 +4,33 @@ import { contractJsonSchemas, contractSchemas } from "../src/index.js";
 
 const JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema";
 
+/**
+ * The object nodes a rendered schema forbids unknown keys on.
+ *
+ * A union renders as `oneOf` and carries `additionalProperties` on each arm
+ * rather than at the root, so reading only the root would silently stop checking
+ * the constraint the moment a DTO becomes a union.
+ */
+const strictObjectNodes = (
+  rendered: Record<string, unknown>,
+): Record<string, unknown>[] =>
+  Array.isArray(rendered.oneOf)
+    ? (rendered.oneOf as Record<string, unknown>[])
+    : [rendered];
+
 describe("contract JSON Schemas", () => {
   it("renders every registered schema without unsupported types", () => {
     const renderedSchemas = contractJsonSchemas();
 
     for (const [name, schema] of Object.entries(contractSchemas)) {
       const rendered = renderedSchemas[name] as Record<string, unknown>;
+      const nodes = strictObjectNodes(rendered);
 
       expect(rendered.$schema, name).toBe(JSON_SCHEMA_DRAFT);
-      expect(rendered.additionalProperties, name).toBe(false);
+      expect(nodes.length, name).toBeGreaterThan(0);
+      for (const [index, node] of nodes.entries()) {
+        expect(node.additionalProperties, `${name}[${index}]`).toBe(false);
+      }
       expect(() => z.toJSONSchema(schema)).not.toThrow();
     }
   });

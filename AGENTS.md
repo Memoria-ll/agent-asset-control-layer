@@ -24,6 +24,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
 ### package 構成と依存方向
 
 - pnpm workspaces の monorepo。package は `shared` / `core` / `vscode-extension` の 3 つ。
+- root `package.json` の `engines.node` は、lockfile 上の全依存の `engines` の積集合を宣言する。
+  依存を追加・更新したら `pnpm-lock.yaml` の `engines:` を見て範囲を更新する
+  （宣言だけが広いと、範囲内の Node で gate が動かない）。
 - 依存方向は一方向: `core` → `shared`、`vscode-extension` → `shared`。
   `shared` は workspace package に依存しない。外部依存は schema library (`zod`) 1 つに限る。
   `core` と `vscode-extension` は相互に依存しない。
@@ -40,6 +43,12 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - `shared/src/` の公開契約は `zod/mini` の schema が単一の正で、TypeScript の型は `z.infer` で導出する。
   境界 DTO はすべて `z.strictObject`（未知キーを拒否する）。
   serialization schema は `contractJsonSchemas()` が返す JSON Schema draft 2020-12。
+- 境界 DTO は成立し得ない状態を parse させない。負の件数・自己矛盾する enum の組合せ・
+  否定状態を説明する空配列は、型が通っても契約違反として reject する。
+- 相互排他な組合せは `z.discriminatedUnion` のアームに分ける。cross-field の `z.refine` は
+  使わない — parser では効くが `z.toJSONSchema()` の出力に一切現れず、schema 駆動の consumer が
+  同じ値を通してしまう（実測）。union の JSON Schema は `additionalProperties` を root でなく
+  `oneOf` の各アームに持つため、schema を検査するテストは root だけを見ない。
 - 契約全体のバージョンは `shared` の `CONTRACT_VERSION` 1 つ。互換判定は
   `checkContractCompatibility()`。enum への値追加と required 欄の追加は破壊的変更。
 - Core API の request / response・error・version contract は公開契約。

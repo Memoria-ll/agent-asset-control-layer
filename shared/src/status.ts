@@ -24,14 +24,29 @@ export const AvailabilityStatus = z.enum(["available", "degraded", "unavailable"
 export type AvailabilityStatus = z.infer<typeof AvailabilityStatus>;
 
 /**
+ * The availability values that can accompany an `unavailable` resolution reason.
+ *
+ * `available` is excluded because the pair states two opposite things about one
+ * asset, and the consumer has no rule for deciding which half to render. It is a
+ * separate enum rather than a check on `AvailabilityStatus` because a check is
+ * absent from `z.toJSONSchema` output, which would leave the published schema
+ * accepting the very pair the parser rejects.
+ */
+const UnavailableAvailability = z.enum(["degraded", "unavailable"]);
+
+/**
  * `reasons` stays a string array until the reason vocabulary is settled (#3/#9):
  * turning it into an enum later is a breaking change, and an enum invented now
  * would freeze values that no issue defines.
  *
  * Consumed by #9 (availability / degraded / fallback decisions).
+ *
+ * At least one reason is required: a degraded state whose reason list is empty
+ * gives the consumer nothing to display and nothing to distinguish it from a
+ * healthy one.
  */
 export const DegradedInfo = z.strictObject({
-  reasons: z.array(z.string()),
+  reasons: z.array(z.string()).check(z.minLength(1)),
 });
 export type DegradedInfo = z.infer<typeof DegradedInfo>;
 
@@ -68,7 +83,7 @@ export const ResolutionReason = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("unavailable"),
     explanation: z.string(),
-    availability: AvailabilityStatus,
+    availability: UnavailableAvailability,
   }),
 ]);
 export type ResolutionReason = z.infer<typeof ResolutionReason>;

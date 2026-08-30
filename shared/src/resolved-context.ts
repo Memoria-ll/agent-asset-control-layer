@@ -11,7 +11,7 @@ import {
   TaskTypeId,
   WorkflowId,
 } from "./identifiers.js";
-import { DirectoryPath, Timestamp, TokenCount } from "./primitives.js";
+import { AssetCount, DirectoryPath, Timestamp, TokenCount } from "./primitives.js";
 import { ConflictDto, ResolutionReason } from "./status.js";
 import { tryParseWith, type ParseOutcome } from "./errors.js";
 
@@ -82,8 +82,8 @@ export type ResolvedAssetDtoInput = z.input<typeof ResolvedAssetDto>;
  */
 export const ContextCostDto = z.strictObject({
   totalTokenEstimate: TokenCount,
-  includedAssetCount: z.int(),
-  excludedAssetCount: z.int(),
+  includedAssetCount: AssetCount,
+  excludedAssetCount: AssetCount,
 });
 export type ContextCostDto = z.infer<typeof ContextCostDto>;
 export type ContextCostDtoInput = z.input<typeof ContextCostDto>;

@@ -41,14 +41,36 @@ export type WorkflowStateDtoInput = z.input<typeof WorkflowStateDto>;
  * "fallback" are the same thing; an enum settled here would freeze a vocabulary
  * that matches neither, and both adding and removing an enum member is a
  * breaking change.
+ *
+ * Blocked and unblocked are separate arms rather than one object holding a
+ * `blocked` flag beside a free-standing reason list. A single object admits both
+ * `blocked: true` with no reasons and `blocked: false` with reasons, leaving the
+ * consumer to render an unexplained block or to discard reasons Core supplied.
+ * The split is what carries the constraint into `contractJsonSchemas()` as well:
+ * a cross-field `z.refine` enforces it in the parser only and emits nothing into
+ * the JSON Schema, so a schema-driven consumer would still accept both.
+ *
+ * `blockedReasons` is absent from the unblocked arm rather than pinned to an
+ * empty array, because `z.strictObject` then rejects the key outright and the
+ * TypeScript type only exposes it once `blocked` has been narrowed to `true`.
  */
-export const TransitionCandidateDto = z.strictObject({
+const transitionCandidateFields = {
   toStageId: StageId,
   requiredRoleId: z.optional(RoleId),
   requiredTaskTypeId: z.optional(TaskTypeId),
-  blocked: z.boolean(),
-  blockedReasons: z.array(z.string()),
-});
+};
+
+export const TransitionCandidateDto = z.discriminatedUnion("blocked", [
+  z.strictObject({
+    ...transitionCandidateFields,
+    blocked: z.literal(false),
+  }),
+  z.strictObject({
+    ...transitionCandidateFields,
+    blocked: z.literal(true),
+    blockedReasons: z.array(z.string()).check(z.minLength(1)),
+  }),
+]);
 export type TransitionCandidateDto = z.infer<typeof TransitionCandidateDto>;
 export type TransitionCandidateDtoInput = z.input<typeof TransitionCandidateDto>;
 

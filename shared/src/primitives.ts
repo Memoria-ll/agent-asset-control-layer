@@ -19,6 +19,16 @@ export const TokenCount = z.int().check(z.gte(0));
 export type TokenCount = z.infer<typeof TokenCount>;
 
 /**
+ * A cardinality reported across the boundary.
+ *
+ * The `gte(0)` is load-bearing rather than decorative: `z.int()` alone accepts
+ * negative integers, so a miscomputed aggregate crosses as a valid count and the
+ * published JSON Schema states it is valid too.
+ */
+export const AssetCount = z.int().check(z.gte(0));
+export type AssetCount = z.infer<typeof AssetCount>;
+
+/**
  * A filesystem path crossing the boundary.
  *
  * Separator style, absolute vs relative, and the Windows/WSL representation

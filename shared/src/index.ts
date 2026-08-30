@@ -16,6 +16,7 @@ export {
   NonEmptyString,
   Timestamp,
   TokenCount,
+  AssetCount,
   DirectoryPath,
   SemanticVersion,
 } from "./primitives.js";
