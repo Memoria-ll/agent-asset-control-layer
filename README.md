@@ -1,82 +1,120 @@
 # Agent Asset Control Layer
 
-A local-first control layer for managing, resolving, and evolving AI development assets.
+A local-first control layer for the knowledge, rules, workflows, and safeguards used by AI development tools.
 
 > **Status:** early-stage. There is nothing to install yet — the MVP is being built in the open.
-> See [Installation](#installation) for what will land and when.
 
-## The problem
+## Why this exists
 
-As AI-assisted development becomes part of everyday engineering, teams and individuals accumulate
-reusable assets: skills, rules, roles, workflows, routing policies, guardrails, templates,
-checklists, project knowledge, and tool bindings. Over time, three problems tend to appear.
+AI coding tools become much more useful once you start teaching them how you work.
 
-**They fragment.** Assets become scattered across projects, machines, runtimes, and
-provider-specific configuration formats. Equivalent instructions are duplicated, then gradually
-drift apart.
+You add instructions for your projects. You create reusable skills. You define review rules,
+workflows, model preferences, safety checks, templates, and project-specific knowledge.
 
-**They load without enough context.** Assets are often applied as static configuration rather than
-resolved for the current project, task, role, runtime, or model. This increases context cost and
-makes it difficult to understand what actually influenced an execution.
+At first, this is manageable. Then the same ideas begin to appear in several places.
 
-**They rarely evolve systematically.** Useful observations from real executions are easy to lose,
-and there is usually no structured path from execution evidence to reviewed, versioned asset
-improvements.
+A rule is copied into another project. A skill is rewritten for another runtime. A useful workflow
+lives in one tool but not another. Some instructions are always loaded even when they are irrelevant.
+And when something goes wrong during an AI-assisted task, the lesson often stays in that one session
+instead of improving the setup for next time.
 
-## The idea
+The problem is no longer just “how do I write a good prompt?”
 
-Keep AI development assets in a canonical source of truth, and make their application a
-**resolution decision** rather than a configuration dump.
+It becomes:
 
-Agent Asset Control Layer resolves **what a given runtime, role, model, project, and task should
-know and be allowed to do**, and explains why each asset was included, excluded, overridden, or
-unavailable. Runtimes and development tools consume the resolved result through stable interfaces
-instead of each owning a separate copy of the same knowledge and policy.
+**How do I manage the growing body of knowledge and policy that my AI development tools depend on?**
 
-It does not replace an AI coding runtime, model provider, IDE, MCP implementation, or agent
-framework. It provides the control layer that manages and resolves the assets those systems use.
+Agent Asset Control Layer is an attempt to solve that problem.
 
-### Principles
+## The basic idea
 
-- **One source of truth.** Assets live in human-readable files that can be inspected, diffed, and edited directly.
-- **Resolve, don't dump.** Apply the context and policy required by the current execution conditions.
-- **Explainable.** Every inclusion, exclusion, override, and conflict should have an inspectable reason.
-- **Local-first, private-first.** Local single-user operation is a first-class deployment model, not a degraded hosted mode.
-- **Runtime-neutral.** The canonical representation is independent of any single provider or runtime format.
-- **Human-approved evolution.** Diagnostics and reviews can propose changes, but important assets are not silently rewritten.
+Instead of letting each tool, project, or runtime maintain its own independent copy of your AI
+development setup, keep those reusable pieces as shared **assets**.
 
-## What it does
+An asset can be a skill, rule, role, workflow, guardrail, template, checklist, piece of project
+knowledge, routing policy, or capability definition.
 
-### Manage assets
+The Core keeps those assets in a canonical form and decides which ones apply to the current
+situation.
 
-One canonical model covering skills, rules, roles, workflows, task types, routing and model
-policies, guardrail definitions, templates and checklists, project knowledge, and capability /
-MCP-tool bindings. A **Skill** is the common callable form exposed to runtimes; internally a skill
-can be a workflow launcher, a standalone task, a procedure, advisory material, or system/meta.
+For example, the answer may depend on:
 
-### Resolve context
+- which project is open
+- what task is being performed
+- which workflow stage is active
+- which role is running
+- which provider, runtime, or model is being used
+- which directory or part of the project is being worked on
 
-Assets are evaluated against the dimensions that vary between executions — project, workflow,
-task type, role, provider, runtime, model, and directory — through scope matching, mandatory
-policy evaluation, disable/override handling, priority and specificity, dependency validation,
-and conflict handling. The result is materialized for the target runtime with resolution reasons
-attached.
+The result is not simply “load everything.” The Core resolves the relevant assets, explains why
+they were selected, and materializes them for the target runtime.
 
-### Run workflows without a monolithic orchestrator
+```text
+Development assets
+       |
+       v
+  Context Resolution
+       |
+       v
+Resolved context + policy
+       |
+       v
+AI runtime / development tool
+```
 
-A workflow defines its stages, roles, transition constraints, and completion states. The
-orchestrator is a **role**, not a required mega-skill: it owns assignment, transition, retry,
-reject, fallback, and return decisions, while the Core owns the workflow definition and state and
-returns the information those decisions need. Actual model and tool execution remains the
-responsibility of the agent runtime.
+Agent Asset Control Layer does **not** replace an AI coding runtime, model provider, IDE, MCP
+implementation, or agent framework. It sits between your reusable development assets and those
+systems, providing a consistent way to manage and apply them.
 
-### Record what happened
+## What this should make easier
 
-Execution context snapshots record which assets, revisions, scopes, runtime metadata, and
-resolution decisions were active for an execution. This makes past context inspectable and
-reconstructable without treating full model execution as reproducible.
+### Keep reusable AI development knowledge in one place
 
-### Close the loop
+Skills, rules, workflows, roles, guardrails, templates, project knowledge, and related assets can
+be managed through one canonical model instead of being independently maintained for every runtime.
+
+The source of truth remains human-readable and versionable, so assets can still be inspected,
+diffed, reviewed, and edited directly.
+
+### Give each execution the context it actually needs
+
+Not every rule or skill belongs in every session.
+
+The resolver evaluates the current project, task, workflow, role, runtime, model, directory, and
+other relevant conditions before deciding what applies. Mandatory policies, overrides,
+dependencies, conflicts, and disabled assets are handled explicitly rather than through implicit
+“last one wins” behavior.
+
+The result also includes reasons, so it is possible to answer questions such as:
+
+- Why was this rule included?
+- Why was this skill unavailable?
+- Which project setting overrode the default?
+- What changed when the model changed?
+
+### Use workflows without turning one prompt into the whole system
+
+A workflow describes the stages that exist, the roles involved, and the transitions that are
+allowed.
+
+The orchestrator remains responsible for runtime decisions such as delegation, retry, fallback,
+acceptance, or rejection. The Core provides the workflow definition, current state, resolved
+context, available choices, and policy constraints needed to make those decisions.
+
+This keeps workflow structure, orchestration decisions, and actual model execution as separate
+responsibilities.
+
+### Understand what an AI execution was actually given
+
+Execution snapshots record the context around a run: the assets and revisions that were selected,
+the active project, role, runtime and model, and the reasons behind the resolution result.
+
+The goal is not to pretend that a model execution can be reproduced perfectly. The goal is to make
+its **development context** inspectable later.
+
+### Improve the system from real usage
+
+The project also treats AI development assets as something that can improve over time.
 
 ```text
 Assets
@@ -91,38 +129,60 @@ Assets
   -> Versioned Asset Update
 ```
 
-Diagnostics detect, measure, correlate, and flag candidates. They do not autonomously rewrite
-important assets.
+A journal captures useful observations from real work. Diagnostics can identify patterns such as
+conflicts, duplication, missing dependencies, unused assets, or unnecessarily expensive context.
+A review can then turn those signals into an improvement proposal.
 
-### Reach it from where you work
+Changes are proposed and reviewed rather than silently rewriting important rules behind the user's
+back.
+
+## How it fits together
 
 ```text
-                Agent Asset Control Layer
-                       Core Service
-                           |
-          +----------------+----------------+
-          |                |                |
-     Core UI          MCP interface      Core API
-                                           |
-                                  Runtime / IDE clients
+                 Agent Asset Control Layer
+
+                  +-------------------+
+                  |    Core Service   |
+                  +-------------------+
+                    /       |       \
+                   /        |        \
+             Core UI   MCP interface  Core API
+                                      |
+                               IDE / runtime clients
 ```
 
-The Core is designed to provide a consistent asset and resolution layer across development
-environments. Local clients can share the same source of truth without maintaining independent
-copies of runtime-specific configuration. A VS Code extension acts as a workbench, while an
-MCP-facing interface exposes resolution capabilities to compatible agent runtimes.
+The **Core** owns the source-of-truth semantics: assets, scope resolution, workflow state, policy,
+history, snapshots, diagnostics, and related domain behavior.
+
+Clients such as the VS Code extension provide the working interface. They can supply editor and
+workspace context, display resolved context and workflow state, and connect the Core to supported
+AI runtimes without duplicating the Core's domain rules.
+
+The initial runtime adapters target Claude Code and Codex, but the canonical model is intended to
+remain independent of any one provider or runtime.
+
+## Design principles
+
+- **One source of truth.** Reusable assets should not have to drift across tool-specific copies.
+- **Resolve, don't dump.** Give each execution what it needs instead of loading everything by default.
+- **Explain decisions.** Inclusion, exclusion, override, conflict, and unavailability should be inspectable.
+- **Local-first and private-first.** Single-user local operation is a first-class deployment model.
+- **Runtime-neutral.** Core assets should not be defined by one provider's configuration format.
+- **Human-approved evolution.** The system may detect and propose improvements, but important changes remain reviewable.
 
 ## Installation
 
-Not available yet. This section will carry the real steps once the MVP lands.
+Not available yet. Installation instructions will be added once the MVP is usable.
 
-Planned shape:
+The planned local setup consists of:
 
-- The **VS Code extension** as an everyday development entry point.
-- The **Core service** running locally, with a desktop shell for asset management, preview, and history.
-- Building from source in the meantime, once there is something to build.
+- a **Core service** that manages and resolves assets
+- a **Core UI** for asset management, preview, history, and diagnostics
+- a **VS Code extension** that acts as the everyday development workbench
+- runtime-facing interfaces for supported AI development tools
 
-Remote and team deployment are later phases and will not be required for local use:
+The first version targets local, single-user use. Remote and team deployments come later and are
+not required for local operation.
 
 ```text
 Phase 1: single-user local Core
@@ -130,30 +190,34 @@ Phase 2: single-user remote Core / multi-device use
 Phase 3: multi-user team Core
 ```
 
-## Built with
+## Technology direction
+
+The current plan is:
 
 - Core domain and service: TypeScript / Node.js
 - Desktop Core UI shell: Tauri 2 with a TypeScript frontend
 - Asset source of truth: human-readable filesystem files
-- Revision backend: a Git-compatible history abstraction
-- Optional index / runtime storage: SQLite where it helps
-- Interfaces: local service API and an MCP-facing interface
+- Revision history: Git-compatible history backend
+- Optional index / runtime storage: SQLite where useful
+- Interfaces: local service API and MCP-facing interface
 
-Rust may be introduced later for stable system-boundary components — high-reliability guardrail
-execution, process supervision, file watching, credential/keychain integration, and
-performance-sensitive paths.
+Rust may be introduced later for system-boundary components where stronger isolation,
+reliability, or performance is useful, such as process supervision, guardrail execution, file
+watching, credential integration, or performance-sensitive paths.
 
 ## Roadmap
 
-The MVP is intended to be a usable single-user local development system rather than a resolver
-demo. It is being built in three passes:
+The MVP is intended to be useful for day-to-day single-user AI development, not just demonstrate a
+resolver.
 
-1. Canonical assets, resolver, preview, and initial runtime materialization
-2. Workflow state, orchestration bridge contracts, runtime integration, and snapshots
+Development is currently grouped into three broad stages:
+
+1. Canonical assets, shared contracts, context resolution, preview, and initial runtime materialization
+2. Workflow state, orchestration bridge contracts, runtime integration, and execution snapshots
 3. History, journal, diagnostics, context-cost metrics, and the learning loop
 
-Initial runtime adapters target Claude Code and Codex. Team sharing, multi-user access control,
-remote hosting, and additional providers/runtimes are post-MVP.
+Team sharing, multi-user access control, remote hosting, and broader provider/runtime support are
+post-MVP work.
 
 ## License
 
