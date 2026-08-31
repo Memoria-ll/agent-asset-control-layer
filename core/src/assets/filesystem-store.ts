@@ -142,8 +142,8 @@ const rootsOverlap = (left: string, right: string): boolean =>
 
 const WINDOWS_RESERVED_NAMES = new Set([
   "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
-  "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
-  "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
+  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ]);
 
 const portableSegment = (segment: string): boolean => {

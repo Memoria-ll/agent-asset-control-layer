@@ -301,7 +301,7 @@ describe("filesystem asset store", () => {
     await expect(readFile(join(root, "new.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["../escape.md", "/absolute.md", "nested\\escape.md", "nul\0name.md", "not-markdown.txt", "C:/outside.md", "nested/C:/escape.md", "foo?.md", "bad|name.md", "CON.md", "com9.md", "nested/AUX/file.md", "nested/dir./file.md", "NUL .md", "CONIN$.md", "CONOUT$.md", "COM¹.md", "LPT².md", "COM0.md"])(
+  it.each(["../escape.md", "/absolute.md", "nested\\escape.md", "nul\0name.md", "not-markdown.txt", "C:/outside.md", "nested/C:/escape.md", "foo?.md", "bad|name.md", "CON.md", "com9.md", "nested/AUX/file.md", "nested/dir./file.md", "NUL .md", "CONIN$.md", "CONOUT$.md", "COM¹.md", "LPT².md"])(
     "rejects unsafe save path %s without writing",
     async (relativePath) => {
       const root = await temporaryDirectory();
@@ -684,5 +684,21 @@ describe("filesystem asset store", () => {
       { rootId: "second", kind: "personal", directory: secondSibling },
     ]);
     expect(siblings.ok).toBe(true);
+  });
+
+  it("accepts COM0 and LPT0 because the reserved device range starts at one", async () => {
+    const root = await temporaryDirectory();
+    const com0Asset = assetFromDocument(minimalDocument("com0-asset"));
+    const lpt0Asset = assetFromDocument(minimalDocument("lpt0-asset"));
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+
+    const com0Result = await store.save({ rootId: "global", relativePath: "COM0.md", asset: com0Asset.asset });
+    const lpt0Result = await store.save({ rootId: "global", relativePath: "LPT0.md", asset: lpt0Asset.asset });
+
+    expect(com0Result.ok).toBe(true);
+    expect(lpt0Result.ok).toBe(true);
+    const listed = await store.list();
+    expect(listed.assets).toHaveLength(2);
+    expect(listed.assets.map(({ asset }) => asset.id).sort()).toEqual(["com0-asset", "lpt0-asset"]);
   });
 });

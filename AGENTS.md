@@ -192,8 +192,10 @@ local-first Core、およびその Workbench となる VS Code Extension。
   「同じ id を別 root で宣言する」で成立させるので、**この重複は実在しない override 候補として
   #4 の判定に直接混入する**。完全な identity 判定は #60 (#58)
 - **`save` が受理する `relativePath` は Windows でも成立する名前に限る**（禁止文字 `< > " | ? *`、
-  制御文字、末尾のピリオド/空白、予約デバイス名 `CON` / `PRN` / `AUX` / `NUL` / `COM1-9` /
-  `LPT1-9` を stem 完全一致で拒否）。**`list` にはこの制限が効かない** — 正本は
+  制御文字、末尾のピリオド/空白、予約デバイス名 `CON` / `PRN` / `AUX` / `NUL` / `CONIN$` /
+  `CONOUT$` / `COM1-9` / `COM¹²³` / `LPT1-9` / `LPT¹²³` を、末尾空白を落とした stem の
+  完全一致で拒否）。**数字は 1 始まりで、`COM0` / `LPT0` は予約ではないので受理する。**
+  **`list` にはこの制限が効かない** — 正本は
   human-readable filesystem なので、手で置かれた名前はそのまま読む。したがって
   「list に出た asset の `relativePath` を、そのまま save に渡し直せるとは限らない」。
   read-modify-write する消費側はこの非対称を前提にすること (#58)
