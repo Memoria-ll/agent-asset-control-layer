@@ -141,16 +141,16 @@ const rootsOverlap = (left: string, right: string): boolean =>
   left === right || isContainedPath(left, right) || isContainedPath(right, left);
 
 const WINDOWS_RESERVED_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+  "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+  "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ]);
 
 const portableSegment = (segment: string): boolean => {
   if (/[<>"|?*]/.test(segment)) return false;
   if ([...segment].some((character) => (character.codePointAt(0) ?? 0) < 0x20)) return false;
   if (/[. ]$/.test(segment)) return false;
-  const stem = segment.split(".")[0];
+  const stem = segment.split(".")[0]?.replace(/ +$/, "");
   return stem !== undefined && !WINDOWS_RESERVED_NAMES.has(stem.toUpperCase());
 };
 
@@ -580,12 +580,12 @@ export const createFilesystemAssetStore = (
     }
 
     const current = await list();
-    const duplicate = current.assets.find((stored) =>
+    const duplicates = current.assets.filter((stored) =>
       stored.asset.id === input.asset.id &&
       stored.source.rootId === input.rootId &&
       stored.source.relativePath !== input.relativePath,
     );
-    if (duplicate !== undefined) {
+    if (duplicates.length > 0) {
       // Saving the same id to a new path does not relocate the asset: the store offers no
       // delete or move, so removing the old file here would make save the only operation
       // that destroys a file the caller never named.
@@ -593,14 +593,20 @@ export const createFilesystemAssetStore = (
       // treated as identical because rename-based writes create a new inode, which would leave
       // two files with the same id. realpath equates only alternate spellings/normalizations
       // of one path and does not equate hard links.
-      try {
-        const duplicatePath = await realpath(pathFor(rootDirectory, duplicate.source.relativePath));
-        const targetRealPath = await realpath(targetPath);
-        if (duplicatePath !== targetRealPath) {
-          return { ok: false, failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", duplicate.source.relativePath], "duplicate_asset_id") };
+      const duplicateConflict = (relativePath: string): AssetResult<StoredAsset> => ({
+        ok: false,
+        failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", relativePath], "duplicate_asset_id"),
+      });
+      const targetRealPath = await realpath(targetPath).catch(() => undefined);
+      for (const duplicate of duplicates) {
+        // A candidate is skipped only once it is positively established to be the target
+        // itself; an unresolvable path on either side leaves identity unknown and stays a
+        // conflict.
+        if (targetRealPath !== undefined) {
+          const duplicatePath = await realpath(pathFor(rootDirectory, duplicate.source.relativePath)).catch(() => undefined);
+          if (duplicatePath === targetRealPath) continue;
         }
-      } catch {
-        return { ok: false, failure: failure("conflict", `Asset id "${input.asset.id}" already exists at another path in this root.`, ["root", input.rootId, "file", duplicate.source.relativePath], "duplicate_asset_id") };
+        return duplicateConflict(duplicate.source.relativePath);
       }
     }
     const unavailable = current.failures.find((item) =>
