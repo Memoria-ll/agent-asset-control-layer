@@ -173,9 +173,10 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema
   （`CompatibilityResult` / `DegradedInfo`）はこの網の外にある (#46)
 - `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
-  でしか出どころを区別できない。1 つの root について判断する消費側（save の可用性判定、
-  resolver、HTTP ハンドラ）は必ず `source.rootId` で絞る。絞らないと、繋がっていない personal /
-  project root 1 つで健全な root まで使えなくなる (#58)
+  でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
+  `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと
+  なので、応答しないマウント上の root が 1 つあると健全な root の処理がその完了を待たされる
+  — `list()` を呼んで `rootId` で filter する形では防げない (#58)
 - `save` の直列化キーは **`resolve()` した root ディレクトリ**で、chain は module スコープに
   置く。`rootId` はインスタンスごとのラベルにすぎず、同じディレクトリに別の `rootId` を付けた
   store を 2 つ作れるので、キーには使えない。これにより `expectedRevision` は

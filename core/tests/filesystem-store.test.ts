@@ -444,6 +444,10 @@ describe("filesystem asset store", () => {
       expect(result.assets[0]?.asset.id).toBe("visible");
       expect(result.failures).toHaveLength(2);
       expect(result.failures.every((item) => item.failure.code === "unavailable")).toBe(true);
+      expect(result.failures.map((item) => item.source.relativePath).sort()).toEqual([
+        "restricted-one",
+        "restricted-two",
+      ]);
       expect(result.failures.map((item) => item.failure.details?.[0]?.path.join("/")).sort()).toEqual([
         "root/global/file/restricted-one",
         "root/global/file/restricted-two",
@@ -536,6 +540,23 @@ describe("filesystem asset store", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.code).toBe("unavailable");
     expect(await readdir(root)).toEqual([]);
+  });
+
+  it("reports the full relative path when an atomic save fails", async () => {
+    const root = await temporaryDirectory();
+    const asset = assetFromDocument(minimalDocument("nested-rename-failure"));
+    const store = storeFor(
+      [{ rootId: "global", kind: "global", directory: root }],
+      { rename: async () => { throw new Error("injected rename failure"); } },
+    );
+
+    const result = await store.save({ rootId: "global", relativePath: "rules/review.md", asset: asset.asset });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("unavailable");
+      expect(result.failure.details?.[0]?.path).toEqual(["file", "rules/review.md"]);
+    }
   });
 
   it("serializes concurrent saves with the same expected revision", async () => {

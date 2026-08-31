@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   parseAssetDocument,
   serializeCanonicalAsset,
@@ -239,7 +239,10 @@ const collectEntries = async (
   root: RootState,
   directory: string,
   prefix: string,
-): Promise<{ readonly entries: readonly FileEntry[]; readonly failures: readonly CoreFailure[] }> => {
+): Promise<{
+  readonly entries: readonly FileEntry[];
+  readonly failures: readonly { readonly relativePath: string | undefined; readonly failure: CoreFailure }[];
+}> => {
   let directoryEntries: Dirent[];
   try {
     directoryEntries = await listDirectoryEntries(directory);
@@ -248,24 +251,27 @@ const collectEntries = async (
     const unavailable = code !== "ENOENT" && code !== "ENOTDIR";
     return {
       entries: [],
-      failures: [unavailable
-        ? failure(
-          "unavailable",
-          "The asset root could not be read.",
-          prefix === "" ? ["root", root.descriptor.rootId] : ["root", root.descriptor.rootId, "file", prefix],
-          "unavailable",
-        )
-        : failure(
-          "invalid_request",
-          "The asset root could not be read as a directory.",
-          prefix === "" ? ["root", root.descriptor.rootId] : ["root", root.descriptor.rootId, "file", prefix],
-          "invalid_root",
-        )],
+      failures: [{
+        relativePath: prefix === "" ? undefined : prefix,
+        failure: unavailable
+          ? failure(
+            "unavailable",
+            "The asset root could not be read.",
+            prefix === "" ? ["root", root.descriptor.rootId] : ["root", root.descriptor.rootId, "file", prefix],
+            "unavailable",
+          )
+          : failure(
+            "invalid_request",
+            "The asset root could not be read as a directory.",
+            prefix === "" ? ["root", root.descriptor.rootId] : ["root", root.descriptor.rootId, "file", prefix],
+            "invalid_root",
+          ),
+      }],
     };
   }
 
   const entries: FileEntry[] = [];
-  const failures: CoreFailure[] = [];
+  const failures: { readonly relativePath: string | undefined; readonly failure: CoreFailure }[] = [];
   for (const entry of directoryEntries) {
     const relativePath = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
     const fullPath = join(directory, entry.name);
@@ -359,7 +365,7 @@ const scanRoot = async (root: RootState): Promise<{ readonly assets: readonly St
     if (result.kind === "failure") failures.push(diagnostic(root.descriptor, entry.relativePath, result.failure));
   }
   for (const collectedFailure of collected.failures) {
-    failures.push(diagnostic(root.descriptor, undefined, collectedFailure));
+    failures.push(diagnostic(root.descriptor, collectedFailure.relativePath, collectedFailure.failure));
   }
   return { assets, failures };
 };
@@ -457,6 +463,7 @@ const cleanupTemp = async (temporaryPath: string | undefined): Promise<void> => 
 // below would no longer be the code any test observes.
 const writeAtomically = async (
   targetPath: string,
+  relativePath: string,
   document: string,
   rename: Rename,
   mode?: number,
@@ -488,7 +495,7 @@ const writeAtomically = async (
     await cleanupTemp(activeTemporaryPath);
     return {
       ok: false,
-      failure: failure("unavailable", "The asset could not be saved atomically.", ["file", basename(targetPath)], "unavailable"),
+      failure: failure("unavailable", "The asset could not be saved atomically.", ["file", relativePath], "unavailable"),
     };
   }
 };
@@ -580,10 +587,11 @@ export const createFilesystemAssetStore = (
       return { ok: false, failure: failure("conflict", "The save target contains a different asset id.", ["file", input.relativePath], "target_identity_mismatch") };
     }
 
-    const current = await list();
+    // Save inspects only its own root. Scanning every root makes a save into a healthy root
+    // wait on one root whose mount does not answer.
+    const current = await scanRoot(root);
     const duplicates = current.assets.filter((stored) =>
       stored.asset.id === input.asset.id &&
-      stored.source.rootId === input.rootId &&
       stored.source.relativePath !== input.relativePath,
     );
     if (duplicates.length > 0) {
@@ -610,9 +618,7 @@ export const createFilesystemAssetStore = (
         return duplicateConflict(duplicate.source.relativePath);
       }
     }
-    const unavailable = current.failures.find((item) =>
-      item.source.rootId === input.rootId && item.failure.code === "unavailable"
-    );
+    const unavailable = current.failures.find((item) => item.failure.code === "unavailable");
     if (unavailable !== undefined) return { ok: false, failure: unavailable.failure };
 
     try {
@@ -623,7 +629,7 @@ export const createFilesystemAssetStore = (
     const parentAfterMkdir = await ensureNoSymlink(rootDirectory, parentPath);
     if (!parentAfterMkdir.ok) return parentAfterMkdir;
 
-    const writeResult = await writeAtomically(targetPath, serialized.value, rename, target.kind === "asset" ? target.mode : undefined);
+    const writeResult = await writeAtomically(targetPath, input.relativePath, serialized.value, rename, target.kind === "asset" ? target.mode : undefined);
     if (!writeResult.ok) return writeResult;
     const stored: StoredAsset = {
       asset: input.asset,
