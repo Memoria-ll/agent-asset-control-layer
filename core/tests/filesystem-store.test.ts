@@ -564,6 +564,31 @@ describe("filesystem asset store", () => {
     expect(await readFile(join(root, "concurrent.md"), "utf8")).toBe(winnerIndex === 0 ? first.document : second.document);
   });
 
+  it("serializes concurrent saves across separate store instances for one root", async () => {
+    const root = await temporaryDirectory();
+    const initial = assetFromDocument(minimalDocument("concurrent-instances", "rule", "initial"));
+    const first = assetFromDocument(minimalDocument("concurrent-instances", "rule", "first"));
+    const second = assetFromDocument(minimalDocument("concurrent-instances", "rule", "second"));
+    await writeRaw(root, "concurrent-instances.md", initial.document);
+    const descriptor = [{ rootId: "global", kind: "global" as const, directory: root }];
+    const firstStore = storeFor(descriptor);
+    const secondStore = storeFor(descriptor);
+    const listed = await firstStore.list();
+    const expectedRevision = listed.assets[0]?.revision;
+    if (expectedRevision === undefined) throw new Error("The initial asset was not listed.");
+
+    const results = await Promise.all([
+      firstStore.save({ rootId: "global", relativePath: "concurrent-instances.md", asset: first.asset, expectedRevision }),
+      secondStore.save({ rootId: "global", relativePath: "concurrent-instances.md", asset: second.asset, expectedRevision }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toHaveLength(1);
+    const failureResult = results.find((result) => !result.ok);
+    expect(failureResult?.ok).toBe(false);
+    if (failureResult !== undefined && !failureResult.ok) expect(failureResult.failure.code).toBe("conflict");
+  });
+
   it("saves an asset with a filesystem-limit basename", async ({ skip }) => {
     const root = await temporaryDirectory();
     const relativePath = "a".repeat(251) + ".md";

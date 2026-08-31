@@ -146,6 +146,8 @@ const WINDOWS_RESERVED_NAMES = new Set([
   "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
 ]);
 
+const saveChains = new Map<string, Promise<unknown>>();
+
 const portableSegment = (segment: string): boolean => {
   if (/[<>"|?*]/.test(segment)) return false;
   if ([...segment].some((character) => (character.codePointAt(0) ?? 0) < 0x20)) return false;
@@ -519,7 +521,6 @@ export const createFilesystemAssetStore = (
 
   const states = roots.map((descriptor) => ({ descriptor }));
   const rename = options?.rename ?? renameFile;
-  const saveChains = new Map<string, Promise<unknown>>();
 
   const list = async (): Promise<AssetListResult> => {
     const assets: StoredAsset[] = [];
@@ -632,9 +633,10 @@ export const createFilesystemAssetStore = (
     return { ok: true, value: stored };
   };
 
-  // Serialization is per Core process. A writer outside this process can still slip between
-  // the revision check and the rename, so expectedRevision is not a cross-process
-  // compare-and-swap (#59).
+  // Save serialization is per normalized root directory and spans all store instances in this
+  // Core process. Lexical resolve normalization gives symlink aliases and case variants on
+  // case-insensitive filesystems different keys (#60); a writer outside this process can still
+  // slip between the revision check and the rename (#59).
   const save = async (input: SaveAssetInput): Promise<AssetResult<StoredAsset>> => {
     const root = states.find((state) => state.descriptor.rootId === input.rootId);
     if (root === undefined) {
@@ -647,7 +649,7 @@ export const createFilesystemAssetStore = (
     // finer key lets another save in the same root pass inspection before either one writes.
     // saveSerialized calls list() on every save and scans the whole root, so a path key does not
     // provide useful parallelism.
-    const key = input.rootId;
+    const key = resolve(root.descriptor.directory);
     const previous = saveChains.get(key) ?? Promise.resolve();
     const current = previous.then(
       () => saveSerialized(root, input),

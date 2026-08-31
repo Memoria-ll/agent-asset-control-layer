@@ -176,9 +176,12 @@ local-first Core、およびその Workbench となる VS Code Extension。
   でしか出どころを区別できない。1 つの root について判断する消費側（save の可用性判定、
   resolver、HTTP ハンドラ）は必ず `source.rootId` で絞る。絞らないと、繋がっていない personal /
   project root 1 つで健全な root まで使えなくなる (#58)
-- `save` の `expectedRevision` が守るのは **同一 Core プロセス内の並行 save だけ**。revision 比較と
-  rename の間に外部プロセスが書くと、更新は黙って捨てられ `ok: true` が返る。プロセス間の
-  compare-and-swap は #59 で追跡している (#58)
+- `save` の直列化キーは **`resolve()` した root ディレクトリ**で、chain は module スコープに
+  置く。`rootId` はインスタンスごとのラベルにすぎず、同じディレクトリに別の `rootId` を付けた
+  store を 2 つ作れるので、キーには使えない。これにより `expectedRevision` は
+  **同一 Core プロセス内のすべての store インスタンスにまたがって**守られる。正規化は字句的
+  なので symlink 別名と大小非区別 FS の綴り違いは別キーになる (#60)。プロセス外の writer は
+  revision 比較と rename の間に割り込めるままで、そちらは #59 (#58)
 - **一時ファイル + rename の atomic write は対象の inode ごと差し替えるので、保存後の mode は
   一時ファイル側のものになる。** 対象の mode を引き継ぐことと、**それを `open` の第 3 引数で
   与えること**の両方が要る。umask は与えた mode を削るだけなので、狭い mode は生成時に
