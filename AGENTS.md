@@ -151,6 +151,14 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `ASSET_TYPES` はこれと一致している。README の製品説明はこれより広い語（templates / checklists /
   capability bindings）を含むが型の正ではない。**#2 が type を増やしたら同じ変更で `ASSET_TYPES` を
   更新する** — enum への値追加は破壊的変更 (#47)
+- asset file の `type:` と `tier:` は `ASSET_TYPES` / `LOADING_TIERS` を**そのまま**正としている。
+  `shared/tests/enum-values.test.ts` が両者を逐語で pin し、その assertion message が
+  "Changing enum values requires bumping CONTRACT_VERSION." である。**on-disk の type / tier を
+  増やすと、wire DTO が何も変わらなくても `CONTRACT_VERSION` の bump を伴う破壊的変更になる** (#2)
+- asset frontmatter の未知 top-level key は validation error になる。`mandatory` / `priority` /
+  `disable` / `override` も v1 では拒否される。**#4 がこれらの directive を導入するときは
+  asset schema version（`schema-version:`）の bump が要る** — v1 parser は未知 version を
+  `incompatible_contract` で拒否し、暗黙の migration を行わない (#2)
 - `core` は `@types/node` を devDependency に持ち、かつ `core/tsconfig.json` に
   `"types": ["node"]` を書く。`typeRoots` を指定しても自動発見は効かず、`node:*` の import が
   `error TS2591` になって gate の typecheck step（`must_not_match: "error TS[0-9]{4}"`）を落とす。
@@ -164,3 +172,34 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `additionalProperties: false` を書くため、公開 schema を読んでも差が出ない。差を捕まえるのは
   `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema
   （`CompatibilityResult` / `DegradedInfo`）はこの網の外にある (#46)
+- `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
+  でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
+  `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと
+  なので、応答しないマウント上の root が 1 つあると健全な root の処理がその完了を待たされる
+  — `list()` を呼んで `rootId` で filter する形では防げない (#58)
+- `save` の直列化キーは **`resolve()` した root ディレクトリ**で、chain は module スコープに
+  置く。`rootId` はインスタンスごとのラベルにすぎず、同じディレクトリに別の `rootId` を付けた
+  store を 2 つ作れるので、キーには使えない。これにより `expectedRevision` は
+  **同一 Core プロセス内のすべての store インスタンスにまたがって**守られる。正規化は字句的
+  なので symlink 別名と大小非区別 FS の綴り違いは別キーになる (#60)。プロセス外の writer は
+  revision 比較と rename の間に割り込めるままで、そちらは #59 (#58)
+- **一時ファイル + rename の atomic write は対象の inode ごと差し替えるので、保存後の mode は
+  一時ファイル側のものになる。** 対象の mode を引き継ぐことと、**それを `open` の第 3 引数で
+  与えること**の両方が要る。umask は与えた mode を削るだけなので、狭い mode は生成時に
+  確定するが、書き込み後の `chmod` では**内容が緩い mode で存在する窓**が開く（実測: 既定
+  `open` は umask 22 で `0644` を作り、`0600` への `chmod` はその後）。広げる側は書き込み後の
+  `chmod` でしか実現できず、そちらは元の mode へ戻すだけなので窓にならない。rename 方式で
+  既存ファイルを更新する箇所（Runtime Store など別の永続化を足すときも）すべてに効く (#58)
+- **managed root の同一性判定は `resolve()` による字句正規化までしか見ていない。** symlink 別名と
+  大小非区別 FS の綴り違いは別 root として受理され、同じ物理ファイルが 2 つの論理 source として
+  list される。duplicate 検査は `rootId` で絞っているので診断も出ない。#4 の override / disable は
+  「同じ id を別 root で宣言する」で成立させるので、**この重複は実在しない override 候補として
+  #4 の判定に直接混入する**。完全な identity 判定は #60 (#58)
+- **`save` が受理する `relativePath` は Windows でも成立する名前に限る**（禁止文字 `< > " | ? *`、
+  制御文字、末尾のピリオド/空白、予約デバイス名 `CON` / `PRN` / `AUX` / `NUL` / `CONIN$` /
+  `CONOUT$` / `COM1-9` / `COM¹²³` / `LPT1-9` / `LPT¹²³` を、末尾空白を落とした stem の
+  完全一致で拒否）。**数字は 1 始まりで、`COM0` / `LPT0` は予約ではないので受理する。**
+  **`list` にはこの制限が効かない** — 正本は
+  human-readable filesystem なので、手で置かれた名前はそのまま読む。したがって
+  「list に出た asset の `relativePath` を、そのまま save に渡し直せるとは限らない」。
+  read-modify-write する消費側はこの非対称を前提にすること (#58)

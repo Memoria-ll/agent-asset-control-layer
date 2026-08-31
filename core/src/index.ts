@@ -87,3 +87,16 @@ export const startCore = async (options: {
 
   return listenResult;
 };
+
+export { createFilesystemAssetStore } from "./assets/filesystem-store.ts";
+export type {
+  AssetDiagnostic,
+  AssetListResult,
+  AssetLocation,
+  AssetLookupResult,
+  AssetStore,
+  ManagedAssetRoot,
+  SaveAssetInput,
+  StoredAsset,
+  StoredAssetSource,
+} from "./assets/filesystem-store.ts";
