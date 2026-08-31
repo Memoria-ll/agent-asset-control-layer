@@ -301,7 +301,7 @@ describe("filesystem asset store", () => {
     await expect(readFile(join(root, "new.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["../escape.md", "/absolute.md", "nested\\escape.md", "nul\0name.md", "not-markdown.txt", "C:/outside.md", "nested/C:/escape.md"])(
+  it.each(["../escape.md", "/absolute.md", "nested\\escape.md", "nul\0name.md", "not-markdown.txt", "C:/outside.md", "nested/C:/escape.md", "foo?.md", "bad|name.md", "CON.md", "com9.md", "nested/AUX/file.md", "nested/dir./file.md"])(
     "rejects unsafe save path %s without writing",
     async (relativePath) => {
       const root = await temporaryDirectory();
@@ -315,6 +315,22 @@ describe("filesystem asset store", () => {
       expect(await readdir(root)).toHaveLength(0);
     },
   );
+
+  it("accepts names that only contain reserved words as substrings", async () => {
+    const root = await temporaryDirectory();
+    const consoleAsset = assetFromDocument(minimalDocument("console-asset"));
+    const nulLikeAsset = assetFromDocument(minimalDocument("nul-like-asset"));
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+
+    const consoleResult = await store.save({ rootId: "global", relativePath: "console.md", asset: consoleAsset.asset });
+    const nulLikeResult = await store.save({ rootId: "global", relativePath: "nul-like.md", asset: nulLikeAsset.asset });
+
+    expect(consoleResult.ok).toBe(true);
+    expect(nulLikeResult.ok).toBe(true);
+    const listed = await store.list();
+    expect(listed.assets).toHaveLength(2);
+    expect(listed.assets.map(({ asset }) => asset.id).sort()).toEqual(["console-asset", "nul-like-asset"]);
+  });
 
   it("reports invalid roots as invalid_request and rejects relative roots at the factory", async () => {
     const existingRoot = await temporaryDirectory();

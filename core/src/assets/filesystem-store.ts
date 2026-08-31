@@ -140,6 +140,20 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
 const rootsOverlap = (left: string, right: string): boolean =>
   left === right || isContainedPath(left, right) || isContainedPath(right, left);
 
+const WINDOWS_RESERVED_NAMES = new Set([
+  "CON", "PRN", "AUX", "NUL",
+  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+]);
+
+const portableSegment = (segment: string): boolean => {
+  if (/[<>"|?*]/.test(segment)) return false;
+  if ([...segment].some((character) => (character.codePointAt(0) ?? 0) < 0x20)) return false;
+  if (/[. ]$/.test(segment)) return false;
+  const stem = segment.split(".")[0];
+  return stem !== undefined && !WINDOWS_RESERVED_NAMES.has(stem.toUpperCase());
+};
+
 const validRelativePath = (value: string): boolean => {
   // Windows forbids ":" in a file name, where it denotes an alternate data stream, and a
   // managed root is seen as one store from both Windows and WSL, so a name that only POSIX
@@ -147,6 +161,9 @@ const validRelativePath = (value: string): boolean => {
   if (value.length === 0 || value.includes("\\") || value.includes(":") || value.includes("\0") || value.startsWith("/")) return false;
   const segments = value.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return false;
+  // list reads existing names on disk as-is because the human-readable filesystem is the source
+  // of truth; only names newly created by save are restricted to the set valid on Windows.
+  if (segments.some((segment) => !portableSegment(segment))) return false;
   const name = segments[segments.length - 1];
   return name !== undefined && name !== ".md" && name.endsWith(".md");
 };
