@@ -5,6 +5,7 @@ import {
   parseAgentExecutionDto,
   parseResolvedContextDto,
   parseTransitionCandidateDto,
+  parseWorkflowDefinitionDto,
   parseWorkflowStateDto,
 } from "../src/index.ts";
 // Schema values are internal; these two are asserted on directly.
@@ -89,6 +90,7 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseWorkflowStateDto({
         workflowId: "workflow-1",
+        stateVersion: 0,
         currentStageId: "stage-1",
         entryRoleId: "role-1",
         currentRoleId: "role-1",
@@ -145,6 +147,8 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseTransitionCandidateDto({
         toStageId: "stage-2",
+        transitionKind: "advance",
+        stateVersion: 0,
         blocked: true,
         blockedReasons: [""],
       }),
@@ -183,7 +187,13 @@ describe("boundary states that cannot exist", () => {
 
   it("rejects a blocked transition with no reason", () => {
     expect(() =>
-      parseTransitionCandidateDto({ toStageId: "stage-2", blocked: true, blockedReasons: [] }),
+      parseTransitionCandidateDto({
+        toStageId: "stage-2",
+        transitionKind: "advance",
+        stateVersion: 0,
+        blocked: true,
+        blockedReasons: [],
+      }),
     ).toThrow();
   });
 
@@ -191,6 +201,8 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseTransitionCandidateDto({
         toStageId: "stage-2",
+        transitionKind: "advance",
+        stateVersion: 0,
         blocked: false,
         blockedReasons: ["Role mismatch"],
       }),
@@ -199,12 +211,77 @@ describe("boundary states that cannot exist", () => {
 
   it("round-trips both transition arms through JSON", () => {
     for (const input of [
-      { toStageId: "stage-2", blocked: false },
-      { toStageId: "stage-2", blocked: true, blockedReasons: ["Role mismatch"] },
+      { toStageId: "stage-2", transitionKind: "advance", stateVersion: 7, blocked: false },
+      {
+        toStageId: "stage-2",
+        transitionKind: "retry",
+        stateVersion: 7,
+        blocked: true,
+        blockedReasons: ["Role mismatch"],
+      },
     ]) {
       const parsed = parseTransitionCandidateDto(input);
       expect(z.parse(TransitionCandidateDto, JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
     }
+  });
+
+  it("rejects a negative workflow state version", () => {
+    expect(() =>
+      parseWorkflowStateDto({
+        workflowId: "workflow-1",
+        stateVersion: -1,
+        executionInstanceId: "instance-1",
+        currentStageId: "stage-1",
+        entryRoleId: "role-1",
+        currentRoleId: "role-1",
+        linkedAgentExecutionIds: [],
+        linkedSnapshotIds: [],
+        updatedAt: "2026-08-30T01:02:03+09:00",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an invalid transition kind", () => {
+    expect(() =>
+      parseTransitionCandidateDto({
+        toStageId: "stage-2",
+        transitionKind: "fallback",
+        stateVersion: 0,
+        blocked: false,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects malformed workflow definition shape", () => {
+    const definition = {
+      entryRoleId: "role-1",
+      entryStageId: "stage-1",
+      terminalStageId: "stage-1",
+      stages: [
+        {
+          stageId: "stage-1",
+          displayName: "Initial stage",
+          description: "The initial workflow stage.",
+        },
+      ],
+      transitions: [],
+    };
+
+    expect(() => parseWorkflowDefinitionDto({ ...definition, unknown: true })).toThrow();
+    expect(() => parseWorkflowDefinitionDto({ ...definition, stages: [] })).toThrow();
+    expect(() =>
+      parseWorkflowDefinitionDto({
+        ...definition,
+        stages: [
+          {
+            stageId: "stage-1",
+            displayName: "Initial stage",
+            description: "The initial workflow stage.",
+            requiredArtifactRefs: [],
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
 

@@ -11,21 +11,32 @@ import {
 import { NonEmptyString, Timestamp } from "./primitives.ts";
 import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
+export const TRANSITION_KINDS = ["advance", "retry", "reject", "return"] as const;
+export const TransitionKind = z.enum(TRANSITION_KINDS);
+export type TransitionKind = z.infer<typeof TransitionKind>;
+
+export const WorkflowStateVersion = z.int().check(z.gte(0));
+export type WorkflowStateVersion = z.infer<typeof WorkflowStateVersion>;
+
 /**
- * The current state of a workflow instance, addressed by its definition and
- * execution instance identifiers.
+ * The current snapshot of one workflow instance. Its logical key is
+ * `(workflowId, executionInstanceId)`: one definition carries many instances,
+ * and each instance owns an independent state.
  *
- * Each execution instance owns an independent state, and its logical key is
- * `(workflowId, executionInstanceId)`. State versioning and compare-and-swap
- * belong to #7's persistence contract.
+ * `stateVersion` names the exact snapshot a candidate query returned and the
+ * precondition a compare-and-swap update is checked against. `updatedAt` is a
+ * display and audit time, not a concurrency token.
  *
- * Completion is expressed by `currentStageId` pointing at a terminal stage; a
- * separate completion field would fix a vocabulary the workflow model (#7) has
- * not defined. Workflow definitions themselves are #7's contract, not this one.
+ * Completion is read off `currentStageId` reaching the definition's terminal
+ * stage, with no separate completion field. A definition is valid only when
+ * every stage can reach the terminal stage, so a stage-based test cannot report
+ * an instance as running forever, and a second field carrying the same fact
+ * would be a second place for it to disagree.
  */
 export const WorkflowStateDto = z.strictObject({
   workflowId: WorkflowId,
   executionInstanceId: ExecutionInstanceId,
+  stateVersion: WorkflowStateVersion,
   currentStageId: StageId,
   entryRoleId: RoleId,
   currentRoleId: RoleId,
@@ -36,6 +47,51 @@ export const WorkflowStateDto = z.strictObject({
 export type WorkflowStateDto = z.infer<typeof WorkflowStateDto>;
 export type WorkflowStateDtoInput = z.input<typeof WorkflowStateDto>;
 
+export const WorkflowStageDto = z.strictObject({
+  stageId: StageId,
+  displayName: NonEmptyString,
+  description: NonEmptyString,
+  requiredRoleId: z.optional(RoleId),
+  requiredTaskTypeId: z.optional(TaskTypeId),
+  requiredArtifactRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
+  requiredCapabilityRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
+});
+export type WorkflowStageDto = z.infer<typeof WorkflowStageDto>;
+export type WorkflowStageDtoInput = z.input<typeof WorkflowStageDto>;
+
+export const WorkflowTransitionDto = z.strictObject({
+  fromStageId: StageId,
+  toStageId: StageId,
+  transitionKind: TransitionKind,
+  requiredArtifactRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
+  requiredCapabilityRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
+});
+export type WorkflowTransitionDto = z.infer<typeof WorkflowTransitionDto>;
+export type WorkflowTransitionDtoInput = z.input<typeof WorkflowTransitionDto>;
+
+/**
+ * A workflow definition as it crosses the boundary.
+ *
+ * `workflowId` is optional because the on-disk form carries the identifier in
+ * the asset's `id` frontmatter field rather than in the definition body: the
+ * loader fills it in from the asset when the body omits it, and rejects a body
+ * naming a different one. Requiring it here would leave the published schema
+ * describing a document no author can write.
+ *
+ * `transitions` may be empty — a definition whose entry stage is also its
+ * terminal stage declares no edges.
+ */
+export const WorkflowDefinitionDto = z.strictObject({
+  workflowId: z.optional(WorkflowId),
+  entryRoleId: RoleId,
+  entryStageId: StageId,
+  terminalStageId: StageId,
+  stages: z.array(WorkflowStageDto).check(z.minLength(1)),
+  transitions: z.array(WorkflowTransitionDto),
+});
+export type WorkflowDefinitionDto = z.infer<typeof WorkflowDefinitionDto>;
+export type WorkflowDefinitionDtoInput = z.input<typeof WorkflowDefinitionDto>;
+
 /**
  * One transition a workflow state offers.
  *
@@ -43,11 +99,10 @@ export type WorkflowStateDtoInput = z.input<typeof WorkflowStateDto>;
  * display reasons attached: deciding the transition is the caller's, so Core
  * must not filter the impossible ones out silently.
  *
- * There is no transition kind field. #7 names retry / reject / return while #39
- * names retry / reject / fallback, and nothing states whether "return" and
- * "fallback" are the same thing; an enum settled here would freeze a vocabulary
- * that matches neither, and both adding and removing an enum member is a
- * breaking change.
+ * `stateVersion` travels with each candidate so a caller can preserve the
+ * snapshot used for its compare-and-swap decision. It belongs on the candidate
+ * rather than a response envelope because the envelope is owned by the
+ * transport contract and each candidate must remain independently actionable.
  *
  * Blocked and unblocked are separate arms rather than one object holding a
  * `blocked` flag beside a free-standing reason list. A single object admits both
@@ -63,6 +118,8 @@ export type WorkflowStateDtoInput = z.input<typeof WorkflowStateDto>;
  */
 const transitionCandidateFields = {
   toStageId: StageId,
+  transitionKind: TransitionKind,
+  stateVersion: WorkflowStateVersion,
   requiredRoleId: z.optional(RoleId),
   requiredTaskTypeId: z.optional(TaskTypeId),
 };
@@ -96,3 +153,11 @@ export const tryParseTransitionCandidateDto = (
   value: unknown,
 ): ParseOutcome<TransitionCandidateDto> =>
   tryParseWith(TransitionCandidateDto, value, "response");
+
+export const parseWorkflowDefinitionDto = (value: unknown): WorkflowDefinitionDto =>
+  z.parse(WorkflowDefinitionDto, value);
+
+export const tryParseWorkflowDefinitionDto = (
+  value: unknown,
+): ParseOutcome<WorkflowDefinitionDto> =>
+  tryParseWith(WorkflowDefinitionDto, value, "response");
