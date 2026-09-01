@@ -290,6 +290,16 @@ const deduplicateExactCandidates = (
   return groups.map(chooseCanonicalDuplicateRepresentative);
 };
 
+const hasSameIdOverlayRelation = (
+  group: readonly CandidateState[],
+): boolean => group.some((issuer) => {
+  const operation = issuer.candidate.rule.operation;
+  if (operation.kind === "add" || operation.targetAssetId !== issuer.candidate.assetId) return false;
+  return group.some((target) => target !== issuer &&
+    target.candidate.source.layer !== issuer.candidate.source.layer &&
+    sourcePrecedence(target.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer));
+});
+
 const compareResolutionRank = (left: ResolutionRank, right: ResolutionRank): number => {
   if (left.sourcePrecedence !== right.sourcePrecedence) return left.sourcePrecedence - right.sourcePrecedence;
   if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
@@ -560,7 +570,60 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
   if (assetOrder !== 0) return assetOrder;
   const revisionOrder = codeUnitCompare(String(left.candidate.revision), String(right.candidate.revision));
   if (revisionOrder !== 0) return revisionOrder;
-  return codeUnitCompare(String(left.candidate.source.sourceId), String(right.candidate.source.sourceId));
+  const sourceOrder = codeUnitCompare(String(left.candidate.source.sourceId), String(right.candidate.source.sourceId));
+  if (sourceOrder !== 0) return sourceOrder;
+
+  const leftCandidate = left.candidate;
+  const rightCandidate = right.candidate;
+  const payloadTypeOrder = codeUnitCompare(String(leftCandidate.assetType), String(rightCandidate.assetType));
+  if (payloadTypeOrder !== 0) return payloadTypeOrder;
+  const loadingTierOrder = codeUnitCompare(String(leftCandidate.loadingTier), String(rightCandidate.loadingTier));
+  if (loadingTierOrder !== 0) return loadingTierOrder;
+  const sourceLayerOrder = codeUnitCompare(leftCandidate.source.layer, rightCandidate.source.layer);
+  if (sourceLayerOrder !== 0) return sourceLayerOrder;
+
+  const leftRule = leftCandidate.rule;
+  const rightRule = rightCandidate.rule;
+  if (leftRule.mandatory !== rightRule.mandatory) return leftRule.mandatory ? 1 : -1;
+  const operationKindOrder = codeUnitCompare(leftRule.operation.kind, rightRule.operation.kind);
+  if (operationKindOrder !== 0) return operationKindOrder;
+  if (leftRule.operation.kind !== "add" && rightRule.operation.kind !== "add") {
+    const targetOrder = codeUnitCompare(String(leftRule.operation.targetAssetId), String(rightRule.operation.targetAssetId));
+    if (targetOrder !== 0) return targetOrder;
+  }
+  if (leftRule.explicitPriority !== undefined && rightRule.explicitPriority === undefined) return 1;
+  if (leftRule.explicitPriority === undefined && rightRule.explicitPriority !== undefined) return -1;
+  if (leftRule.explicitPriority !== undefined && rightRule.explicitPriority !== undefined && leftRule.explicitPriority !== rightRule.explicitPriority) {
+    return leftRule.explicitPriority - rightRule.explicitPriority;
+  }
+  const mergeModeOrder = codeUnitCompare(leftRule.mergeMode, rightRule.mergeMode);
+  if (mergeModeOrder !== 0) return mergeModeOrder;
+  if (leftRule.mergeGroup !== undefined && rightRule.mergeGroup === undefined) return 1;
+  if (leftRule.mergeGroup === undefined && rightRule.mergeGroup !== undefined) return -1;
+  if (leftRule.mergeGroup !== undefined && rightRule.mergeGroup !== undefined) {
+    const mergeGroupOrder = codeUnitCompare(leftRule.mergeGroup, rightRule.mergeGroup);
+    if (mergeGroupOrder !== 0) return mergeGroupOrder;
+  }
+  const requiresLengthOrder = leftRule.requires.length - rightRule.requires.length;
+  if (requiresLengthOrder !== 0) return requiresLengthOrder;
+  for (let index = 0; index < leftRule.requires.length; index += 1) {
+    const requirementOrder = codeUnitCompare(leftRule.requires[index] as string, rightRule.requires[index] as string);
+    if (requirementOrder !== 0) return requirementOrder;
+  }
+  for (const axis of RESOLUTION_AXES) {
+    const leftSelectors = leftRule.selectors[axis];
+    const rightSelectors = rightRule.selectors[axis];
+    if (leftSelectors !== undefined && rightSelectors === undefined) return 1;
+    if (leftSelectors === undefined && rightSelectors !== undefined) return -1;
+    if (leftSelectors === undefined || rightSelectors === undefined) continue;
+    const selectorLengthOrder = leftSelectors.length - rightSelectors.length;
+    if (selectorLengthOrder !== 0) return selectorLengthOrder;
+    for (let index = 0; index < leftSelectors.length; index += 1) {
+      const selectorOrder = codeUnitCompare(leftSelectors[index] as string, rightSelectors[index] as string);
+      if (selectorOrder !== 0) return selectorOrder;
+    }
+  }
+  return 0;
 };
 
 const conflictExplanation = (conflict: ResolutionConflict): string => {
@@ -682,7 +745,7 @@ export const resolveScope = (
     matchedById.set(String(state.candidate.assetId), group);
   }
   for (const group of matchedById.values()) {
-    if (group.length < 2) continue;
+    if (group.length < 2 || hasSameIdOverlayRelation(group)) continue;
     const conflict: ResolutionConflict = {
       kind: "duplicate_identity",
       assetId: group[0]!.candidate.assetId,
@@ -690,88 +753,6 @@ export const resolveScope = (
     };
     addConflict(conflict);
     for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
-  }
-
-  const activeById = new Map<string, CandidateState>();
-  for (const state of states) {
-    if (state.reason.kind === "included") activeById.set(String(state.candidate.assetId), state);
-  }
-  const operationGroups = new Map<string, { issuer: CandidateState; kind: "override" | "disable" }[]>();
-  for (const issuer of states.filter((state) => state.reason.kind === "included")) {
-    const operation = issuer.candidate.rule.operation;
-    if (operation.kind === "add") continue;
-    const target = activeById.get(String(operation.targetAssetId));
-    if (target === undefined || target === issuer || !target.matched) {
-      const conflict: ResolutionConflict = {
-        kind: "operation_conflict",
-        targetAssetId: operation.targetAssetId,
-        involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
-      };
-      addConflict(conflict);
-      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
-      continue;
-    }
-    if (target.candidate.rule.mandatory) {
-      const conflict: ResolutionConflict = {
-        kind: "mandatory_conflict",
-        involvedAssetIds: canonicalIds([issuer.candidate.assetId, target.candidate.assetId]),
-      };
-      addConflict(conflict);
-      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
-      continue;
-    }
-    if (operation.kind === "override" && (
-      issuer.candidate.rule.mergeGroup === undefined ||
-      target.candidate.rule.mergeGroup === undefined ||
-      issuer.candidate.rule.mergeGroup !== target.candidate.rule.mergeGroup
-    )) {
-      const conflict: ResolutionConflict = {
-        kind: "operation_conflict",
-        targetAssetId: operation.targetAssetId,
-        involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
-      };
-      addConflict(conflict);
-      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
-      continue;
-    }
-    const actions = operationGroups.get(String(operation.targetAssetId)) ?? [];
-    actions.push({ issuer, kind: operation.kind });
-    operationGroups.set(String(operation.targetAssetId), actions);
-  }
-
-  for (const [targetId, actions] of operationGroups) {
-    const target = activeById.get(targetId);
-    if (target === undefined || actions.length === 0) continue;
-    const bestRank = actions.reduce((best, action) => compareResolutionRank(action.issuer.rank!, best) > 0 ? action.issuer.rank! : best, actions[0]!.issuer.rank!);
-    const best = actions.filter((action) => sameResolutionRank(action.issuer.rank!, bestRank));
-    const allDisable = best.every((action) => action.kind === "disable");
-    if (best.length > 1 && !allDisable) {
-      const conflict: ResolutionConflict = {
-        kind: "operation_conflict",
-        targetAssetId: target.candidate.assetId,
-        involvedAssetIds: canonicalIds([target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]),
-      };
-      addConflict(conflict);
-      for (const action of best) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
-      continue;
-    }
-    const winner = allDisable
-      ? best.slice().sort((left, right) => codeUnitCompare(String(left.issuer.candidate.assetId), String(right.issuer.candidate.assetId)))[0]!
-      : best[0]!;
-    for (const action of actions) {
-      if (action !== winner && action.kind !== winner.kind) action.issuer.reason = resolutionConflictReason({
-        kind: "operation_conflict",
-        targetAssetId: target.candidate.assetId,
-        involvedAssetIds: canonicalIds([target.candidate.assetId, action.issuer.candidate.assetId, winner.issuer.candidate.assetId]),
-      }, action.issuer.rank);
-    }
-    if (winner.kind === "disable") target.reason = { kind: "disabled", disabledBy: winner.issuer.candidate.assetId };
-    else target.reason = {
-      kind: "overridden",
-      overriddenBy: winner.issuer.candidate.assetId,
-      mergeGroup: winner.issuer.candidate.rule.mergeGroup as string,
-      winnerRank: winner.issuer.rank!,
-    };
   }
 
   const exclusiveGroups = new Map<string, CandidateState[]>();
@@ -823,14 +804,6 @@ export const resolveScope = (
     }
   }
 
-  const baseIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
-  const finalTargetsById = new Map<string, CandidateState[]>();
-  for (const state of states) {
-    if (!baseIncluded.has(state)) continue;
-    const group = finalTargetsById.get(String(state.candidate.assetId)) ?? [];
-    group.push(state);
-    finalTargetsById.set(String(state.candidate.assetId), group);
-  }
   const stateById = new Map<string, CandidateState[]>();
   for (const state of states) {
     const group = stateById.get(String(state.candidate.assetId)) ?? [];
@@ -838,89 +811,208 @@ export const resolveScope = (
     stateById.set(String(state.candidate.assetId), group);
   }
   const invalidById = new Set(invalidStates.map((state) => String(state.candidate.assetId)));
-  const memo = new Map<CandidateState, DependencyOutcome>();
-  const visiting: CandidateState[] = [];
-  const analyze = (state: CandidateState): DependencyOutcome => {
-    const known = memo.get(state);
-    if (known !== undefined) return known;
-    const cycleStart = visiting.indexOf(state);
-    if (cycleStart >= 0) {
-      const cycleIds = canonicalIds(visiting.slice(cycleStart).map((item) => item.candidate.assetId));
-      return { ok: false, cause: "requirement_cycle", failedRequirements: [state.candidate.assetId], cycleIds };
+  const applyDependencyClosure = (): void => {
+    const baseIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
+    const finalTargetsById = new Map<string, CandidateState[]>();
+    for (const state of baseIncluded) {
+      const group = finalTargetsById.get(String(state.candidate.assetId)) ?? [];
+      group.push(state);
+      finalTargetsById.set(String(state.candidate.assetId), group);
     }
-    visiting.push(state);
-    const failures: { id: AssetId; cause: DependencyCause }[] = [];
-    let cycleIds: readonly AssetId[] | undefined;
-    for (const requiredId of state.candidate.rule.requires) {
-      const targets = finalTargetsById.get(String(requiredId)) ?? [];
-      // More than one included candidate for the same id is an unresolved identity, not a
-      // dependency the closure may pick from: falling through to the classification below
-      // reports it rather than letting an arbitrary one satisfy the requirement.
-      const target = targets.length === 1 ? targets[0] : undefined;
-      if (target === undefined) {
-        // `finalTargetsById` holds only included candidates, so the reason a requirement
-        // failed has to be read off every candidate carrying that id. Classifying from the
-        // single included target instead leaves disabled and overridden targets
-        // indistinguishable from a malformed one.
-        const candidatesForId = stateById.get(String(requiredId)) ?? [];
-        const cause = invalidById.has(String(requiredId)) ? "requirement_invalid" :
-          candidatesForId.length === 0 ? "missing_requirement" :
-          candidatesForId.every((candidate) => candidate.reason.kind === "excluded" && candidate.reason.cause === "scope_mismatch")
-            ? "requirement_out_of_scope" :
-          candidatesForId.every((candidate) => candidate.reason.kind === "disabled")
-            ? "requirement_disabled" :
-          candidatesForId.every((candidate) => candidate.reason.kind === "overridden")
-            ? "requirement_overridden" : "requirement_invalid";
-        failures.push({ id: requiredId, cause });
-        continue;
+    const memo = new Map<CandidateState, DependencyOutcome>();
+    const visiting: CandidateState[] = [];
+    const analyze = (state: CandidateState): DependencyOutcome => {
+      const known = memo.get(state);
+      if (known !== undefined) return known;
+      const cycleStart = visiting.indexOf(state);
+      if (cycleStart >= 0) {
+        const cycleIds = canonicalIds(visiting.slice(cycleStart).map((item) => item.candidate.assetId));
+        return { ok: false, cause: "requirement_cycle", failedRequirements: [state.candidate.assetId], cycleIds };
       }
-      const outcome = analyze(target);
-      if (!outcome.ok) {
-        failures.push({ id: requiredId, cause: outcome.cause });
-        if (outcome.cycleIds !== undefined) cycleIds = outcome.cycleIds;
+      visiting.push(state);
+      const failures: { id: AssetId; cause: DependencyCause }[] = [];
+      let cycleIds: readonly AssetId[] | undefined;
+      for (const requiredId of state.candidate.rule.requires) {
+        const targets = finalTargetsById.get(String(requiredId)) ?? [];
+        // More than one included candidate for the same id is an unresolved identity, not a
+        // dependency the closure may pick from: falling through to the classification below
+        // reports it rather than letting an arbitrary one satisfy the requirement.
+        const target = targets.length === 1 ? targets[0] : undefined;
+        if (target === undefined) {
+          // `finalTargetsById` holds only included candidates, so the reason a requirement
+          // failed has to be read off every candidate carrying that id. Classifying from the
+          // single included target instead leaves disabled and overridden targets
+          // indistinguishable from a malformed one.
+          const candidatesForId = stateById.get(String(requiredId)) ?? [];
+          const cause = invalidById.has(String(requiredId)) ? "requirement_invalid" :
+            candidatesForId.length === 0 ? "missing_requirement" :
+            candidatesForId.every((candidate) => candidate.reason.kind === "excluded" && candidate.reason.cause === "scope_mismatch")
+              ? "requirement_out_of_scope" :
+            candidatesForId.every((candidate) => candidate.reason.kind === "disabled")
+              ? "requirement_disabled" :
+            candidatesForId.every((candidate) => candidate.reason.kind === "overridden")
+              ? "requirement_overridden" : "requirement_invalid";
+          failures.push({ id: requiredId, cause });
+          continue;
+        }
+        const outcome = analyze(target);
+        if (!outcome.ok) {
+          failures.push({ id: requiredId, cause: outcome.cause });
+          if (outcome.cycleIds !== undefined) cycleIds = outcome.cycleIds;
+        }
       }
-    }
-    visiting.pop();
-    if (failures.length === 0) {
-      const success: DependencyOutcome = { ok: true };
-      memo.set(state, success);
-      return success;
-    }
-    failures.sort((left, right) => codeUnitCompare(left.id, right.id));
-    const result: DependencyOutcome = {
-      ok: false,
-      cause: failures[0]!.cause,
-      failedRequirements: failures.map((failure) => failure.id),
-      ...(cycleIds === undefined ? {} : { cycleIds }),
+      visiting.pop();
+      if (failures.length === 0) {
+        const success: DependencyOutcome = { ok: true };
+        memo.set(state, success);
+        return success;
+      }
+      failures.sort((left, right) => codeUnitCompare(left.id, right.id));
+      const result: DependencyOutcome = {
+        ok: false,
+        cause: failures[0]!.cause,
+        failedRequirements: failures.map((failure) => failure.id),
+        ...(cycleIds === undefined ? {} : { cycleIds }),
+      };
+      memo.set(state, result);
+      return result;
     };
-    memo.set(state, result);
-    return result;
+
+    for (const state of baseIncluded) {
+      const outcome = analyze(state);
+      if (outcome.ok) continue;
+      state.reason = {
+        kind: "unavailable",
+        availability: "unavailable",
+        cause: outcome.cause,
+        failedRequirements: [...outcome.failedRequirements],
+      };
+      if (state.candidate.rule.mandatory) {
+        if (outcome.cause === "requirement_cycle") {
+          addConflict({
+            kind: "dependency_cycle",
+            involvedAssetIds: canonicalIds([state.candidate.assetId, ...(outcome.cycleIds ?? outcome.failedRequirements)]),
+          });
+        } else {
+          addConflict({
+            kind: "dependency_failure",
+            failedRequirement: outcome.failedRequirements[0]!,
+            involvedAssetIds: canonicalIds([state.candidate.assetId, ...outcome.failedRequirements]),
+          });
+        }
+      }
+    }
   };
 
-  for (const state of states) {
-    if (!baseIncluded.has(state)) continue;
-    const outcome = analyze(state);
-    if (outcome.ok) continue;
-    state.reason = {
-      kind: "unavailable",
-      availability: "unavailable",
-      cause: outcome.cause,
-      failedRequirements: [...outcome.failedRequirements],
-    };
-    if (state.candidate.rule.mandatory) {
-      if (outcome.cause === "requirement_cycle") {
-        addConflict({
-          kind: "dependency_cycle",
-          involvedAssetIds: canonicalIds([state.candidate.assetId, ...(outcome.cycleIds ?? outcome.failedRequirements)]),
-        });
-      } else {
-        addConflict({
-          kind: "dependency_failure",
-          failedRequirement: outcome.failedRequirements[0]!,
-          involvedAssetIds: canonicalIds([state.candidate.assetId, ...outcome.failedRequirements]),
-        });
+  // An issuer must have a viable dependency closure before it is allowed to affect another candidate.
+  applyDependencyClosure();
+
+  const operationBaseReasons = new Map(states.map((state) => [state, state.reason] as const));
+  const operationBaseConflicts = new Map(conflicts);
+  const blockedOperationIssuers = new Set<CandidateState>();
+  const resolveOperations = (): ReadonlySet<CandidateState> => {
+    for (const state of states) state.reason = operationBaseReasons.get(state)!;
+    conflicts.clear();
+    for (const [key, conflict] of operationBaseConflicts) conflicts.set(key, conflict);
+
+    const appliedIssuers = new Set<CandidateState>();
+    const operationGroups = new Map<string, { issuer: CandidateState; target: CandidateState; kind: "override" | "disable" }[]>();
+    for (const issuer of states.filter((state) => state.reason.kind === "included" && !blockedOperationIssuers.has(state))) {
+      const operation = issuer.candidate.rule.operation;
+      if (operation.kind === "add") continue;
+      const targetCandidates = states.filter((state) => state !== issuer && state.matched &&
+        state.candidate.assetId === operation.targetAssetId &&
+        (state.reason.kind === "included" ||
+          (state.reason.kind === "overridden" && state.reason.overriddenBy === issuer.candidate.assetId)) &&
+        (operation.targetAssetId !== issuer.candidate.assetId ||
+          sourcePrecedence(state.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer)));
+      const target = targetCandidates.length === 1 ? targetCandidates[0] : undefined;
+      if (target === undefined) {
+        const conflict: ResolutionConflict = {
+          kind: "operation_conflict",
+          targetAssetId: operation.targetAssetId,
+          involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
+        };
+        addConflict(conflict);
+        issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+        continue;
       }
+      if (target.candidate.rule.mandatory) {
+        const conflict: ResolutionConflict = {
+          kind: "mandatory_conflict",
+          involvedAssetIds: canonicalIds([issuer.candidate.assetId, target.candidate.assetId]),
+        };
+        addConflict(conflict);
+        issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+        continue;
+      }
+      if (operation.kind === "override" && (
+        issuer.candidate.rule.mergeGroup === undefined ||
+        target.candidate.rule.mergeGroup === undefined ||
+        issuer.candidate.rule.mergeGroup !== target.candidate.rule.mergeGroup
+      )) {
+        const conflict: ResolutionConflict = {
+          kind: "operation_conflict",
+          targetAssetId: operation.targetAssetId,
+          involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
+        };
+        addConflict(conflict);
+        issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+        continue;
+      }
+      const actions = operationGroups.get(String(operation.targetAssetId)) ?? [];
+      actions.push({ issuer, target, kind: operation.kind });
+      operationGroups.set(String(operation.targetAssetId), actions);
     }
+
+    for (const actions of operationGroups.values()) {
+      if (actions.length === 0) continue;
+      const target = actions[0]!.target;
+      const bestRank = actions.reduce((best, action) => compareResolutionRank(action.issuer.rank!, best) > 0 ? action.issuer.rank! : best, actions[0]!.issuer.rank!);
+      const best = actions.filter((action) => sameResolutionRank(action.issuer.rank!, bestRank));
+      const allDisable = best.every((action) => action.kind === "disable");
+      if (best.length > 1 && !allDisable) {
+        const conflict: ResolutionConflict = {
+          kind: "operation_conflict",
+          targetAssetId: target.candidate.assetId,
+          involvedAssetIds: canonicalIds([target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]),
+        };
+        addConflict(conflict);
+        for (const action of best) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+        continue;
+      }
+      const winner = allDisable
+        ? best.slice().sort((left, right) => codeUnitCompare(String(left.issuer.candidate.assetId), String(right.issuer.candidate.assetId)))[0]!
+        : best[0]!;
+      for (const action of actions) {
+        if (action === winner || action.kind === winner.kind) continue;
+        const conflict: ResolutionConflict = {
+          kind: "operation_conflict",
+          targetAssetId: target.candidate.assetId,
+          involvedAssetIds: canonicalIds([target.candidate.assetId, action.issuer.candidate.assetId, winner.issuer.candidate.assetId]),
+        };
+        addConflict(conflict);
+        action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+      }
+      appliedIssuers.add(winner.issuer);
+      if (winner.kind === "disable") target.reason = { kind: "disabled", disabledBy: winner.issuer.candidate.assetId };
+      else target.reason = {
+        kind: "overridden",
+        overriddenBy: winner.issuer.candidate.assetId,
+        mergeGroup: winner.issuer.candidate.rule.mergeGroup as string,
+        winnerRank: winner.issuer.rank!,
+      };
+    }
+    return appliedIssuers;
+  };
+
+  for (;;) {
+    const appliedIssuers = resolveOperations();
+    applyDependencyClosure();
+    const newlyBlocked = [...appliedIssuers].filter((issuer) => issuer.reason.kind !== "included");
+    const blockedCount = blockedOperationIssuers.size;
+    for (const issuer of newlyBlocked) blockedOperationIssuers.add(issuer);
+    if (newlyBlocked.length === 0 || blockedOperationIssuers.size === blockedCount) break;
   }
 
   const allStates = [...states, ...invalidStates].sort(compareCandidatesForOutput);

@@ -236,6 +236,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
   string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
   `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
+- **scope resolver の operation は、merge と dependency closure の両方を生き残った issuer だけが適用できる。**
+  exclusive loser と unavailable issuer は target を変更せず、issuer が別 operation の target になって
+  最終的に生き残れない場合も同じ扱いにする。相反する operation の下位 issuer は
+  `operation_conflict` を evaluation と aggregate `conflicts` の両方へ残す。同一 `AssetId` の
+  異なる source layer 間で issuer が自分の ID を明示 target にする override / disable は
+  overlay relation として duplicate identity 判定より先に扱う (#71)
+- **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
+  `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
+  意味が異なる candidate を入力順へ委ねない (#71)
 
 ### Invariants / identity keys
 
