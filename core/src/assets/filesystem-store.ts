@@ -1,17 +1,13 @@
-import { randomUUID } from "node:crypto";
 import {
   mkdir,
-  open,
   readFile,
   readdir,
   realpath,
   rename as renameFile,
   stat,
   lstat,
-  unlink,
 } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   parseAssetDocument,
@@ -25,6 +21,7 @@ import { coreFailure, type CoreFailure } from "@aacl/core-domain";
 import { sha256Hex } from "../internal/digest.ts";
 import { withFilePath } from "../internal/diagnostics.ts";
 import { strictDecode } from "../internal/text.ts";
+import { writeAtomically, type Rename } from "../internal/atomic-write.ts";
 
 export type ManagedAssetRoot =
   | { readonly rootId: string; readonly kind: "global" | "personal"; readonly directory: string }
@@ -71,8 +68,6 @@ export type AssetStore = {
   readonly get: (assetId: AssetId) => Promise<AssetLookupResult>;
   readonly save: (input: SaveAssetInput) => Promise<AssetResult<StoredAsset>>;
 };
-
-type Rename = (from: string, to: string) => Promise<void>;
 
 type RootState = {
   readonly descriptor: ManagedAssetRoot;
@@ -417,58 +412,6 @@ const targetState = async (root: RootState, rootDirectory: string, relativePath:
   return { kind: "asset", stored: readResult.stored, mode: targetStat.mode & 0o777 };
 };
 
-const cleanupTemp = async (temporaryPath: string | undefined): Promise<void> => {
-  if (temporaryPath === undefined) return;
-  try {
-    await unlink(temporaryPath);
-  } catch {
-    // The caller is already reporting the save failure that led here, and a leftover
-    // temporary file is not worth replacing that failure with a different one.
-  }
-};
-
-// Only the rename is injectable. Widening this to the whole write would move the atomic
-// sequence into the test's substitute, so the exclusive create, the close and the cleanup
-// below would no longer be the code any test observes.
-const writeAtomically = async (
-  targetPath: string,
-  relativePath: string,
-  document: string,
-  rename: Rename,
-  mode?: number,
-): Promise<AssetResult<undefined>> => {
-  const parent = dirname(targetPath);
-  const temporaryPath = join(parent, `.aacl.${randomUUID()}.tmp`);
-  let activeTemporaryPath: string | undefined = temporaryPath;
-  let handle: FileHandle | undefined;
-  try {
-    // umask can only narrow the mode open is given, so a restriction has to be in place at
-    // creation or the content is briefly readable. Widening is reachable only by chmod after
-    // the write, and that merely restores the mode the target already had.
-    handle = await open(temporaryPath, "wx", mode ?? 0o666);
-    await handle.writeFile(document, "utf8");
-    if (mode !== undefined) await handle.chmod(mode);
-    await handle.close();
-    handle = undefined;
-    await rename(temporaryPath, targetPath);
-    activeTemporaryPath = undefined;
-    return { ok: true, value: undefined };
-  } catch {
-    if (handle !== undefined) {
-      try {
-        await handle.close();
-      } catch {
-        // Cleanup below still removes the temporary pathname after close failure.
-      }
-    }
-    await cleanupTemp(activeTemporaryPath);
-    return {
-      ok: false,
-      failure: failure("unavailable", "The asset could not be saved atomically.", ["file", relativePath], "unavailable"),
-    };
-  }
-};
-
 export const createFilesystemAssetStore = (
   roots: readonly ManagedAssetRoot[],
   options?: { readonly rename?: Rename },
@@ -598,8 +541,10 @@ export const createFilesystemAssetStore = (
     const parentAfterMkdir = await ensureNoSymlink(rootDirectory, parentPath);
     if (!parentAfterMkdir.ok) return parentAfterMkdir;
 
-    const writeResult = await writeAtomically(targetPath, input.relativePath, serialized.value, rename, target.kind === "asset" ? target.mode : undefined);
-    if (!writeResult.ok) return writeResult;
+    const written = await writeAtomically(targetPath, serialized.value, rename, target.kind === "asset" ? target.mode : undefined);
+    if (!written) {
+      return { ok: false, failure: failure("unavailable", "The asset could not be saved atomically.", ["file", input.relativePath], "unavailable") };
+    }
     const stored: StoredAsset = {
       asset: input.asset,
       revision: makeAssetRevision(serialized.value),
