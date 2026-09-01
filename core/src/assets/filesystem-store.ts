@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   open,
@@ -22,6 +22,8 @@ import {
 } from "@aacl/core-domain";
 import type { AssetId, AssetRevision } from "@aacl/shared";
 import { coreFailure, type CoreFailure } from "@aacl/core-domain";
+import { sha256Hex } from "../internal/digest.ts";
+import { strictDecode } from "../internal/text.ts";
 
 export type ManagedAssetRoot =
   | { readonly rootId: string; readonly kind: "global" | "personal"; readonly directory: string }
@@ -182,18 +184,6 @@ const validateRoot = (root: unknown): root is ManagedAssetRoot => {
   return (candidate.kind === "global" || candidate.kind === "personal") && !("projectId" in candidate);
 };
 
-const strictDecode = (bytes: Buffer): AssetResult<string> => {
-  try {
-    const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return { ok: true, value };
-  } catch {
-    return {
-      ok: false,
-      failure: failure("invalid_request", "The asset file is not valid UTF-8.", ["document"], "invalid_utf8"),
-    };
-  }
-};
-
 const hasAssetDelimiter = (bytes: Buffer): boolean => {
   const bomOffset = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
   const end = bytes.indexOf(0x0a, bomOffset);
@@ -229,8 +219,7 @@ const diagnostic = (root: ManagedAssetRoot, relativePath: string | undefined, so
 });
 
 const makeAssetRevision = (document: string): AssetRevision => {
-  const digest = createHash("sha256").update(Buffer.from(document, "utf8")).digest("hex");
-  return `sha256:${digest}` as AssetRevision;
+  return `sha256:${sha256Hex(document)}` as AssetRevision;
 };
 
 const listDirectoryEntries = async (directory: string): Promise<Dirent[]> => readdir(directory, { withFileTypes: true });
