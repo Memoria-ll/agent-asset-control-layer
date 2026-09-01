@@ -47,14 +47,28 @@ export const WorkflowStateDto = z.strictObject({
 export type WorkflowStateDto = z.infer<typeof WorkflowStateDto>;
 export type WorkflowStateDtoInput = z.input<typeof WorkflowStateDto>;
 
+/**
+ * A requirement list: present means "at least one", and a reference names a requirement
+ * rather than counting it, so declaring the same one twice is not a state a definition can
+ * be in. The registry entry is what carries `uniqueItems` into the published JSON Schema —
+ * a check alone validates here and leaves a schema-driven consumer accepting a definition
+ * that Core rejects while resolving it.
+ */
+const RequirementRefs = z.array(NonEmptyString)
+  .check(z.minLength(1))
+  .check(z.refine((refs) => new Set(refs).size === refs.length, {
+    error: "Requirement references must not repeat.",
+  }))
+  .register(z.globalRegistry, { uniqueItems: true });
+
 export const WorkflowStageDto = z.strictObject({
   stageId: StageId,
   displayName: NonEmptyString,
   description: NonEmptyString,
   requiredRoleId: z.optional(RoleId),
   requiredTaskTypeId: z.optional(TaskTypeId),
-  requiredArtifactRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
-  requiredCapabilityRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
+  requiredArtifactRefs: z.optional(RequirementRefs),
+  requiredCapabilityRefs: z.optional(RequirementRefs),
 });
 export type WorkflowStageDto = z.infer<typeof WorkflowStageDto>;
 export type WorkflowStageDtoInput = z.input<typeof WorkflowStageDto>;
@@ -63,8 +77,8 @@ export const WorkflowTransitionDto = z.strictObject({
   fromStageId: StageId,
   toStageId: StageId,
   transitionKind: TransitionKind,
-  requiredArtifactRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
-  requiredCapabilityRefs: z.optional(z.array(NonEmptyString).check(z.minLength(1))),
+  requiredArtifactRefs: z.optional(RequirementRefs),
+  requiredCapabilityRefs: z.optional(RequirementRefs),
 });
 export type WorkflowTransitionDto = z.infer<typeof WorkflowTransitionDto>;
 export type WorkflowTransitionDtoInput = z.input<typeof WorkflowTransitionDto>;

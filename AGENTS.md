@@ -81,6 +81,11 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - **このルールが及ぶのは JSON Schema に出力できる制約まで。** 2 欄を比較する順序制約
   （`endedAt >= startedAt` 等）は draft 2020-12 に対応キーワードが無く、構造を変えないと
   表現できない。契約形の変更を伴うため、その場で `z.refine` を足さず issue に切り出す（#48）。
+- **JSON Schema に出せる制約は、parse 側と schema 側の両方を書く。** `zod/mini` の
+  `.check(z.refine(...))` は parse でしか効かず `z.toJSONSchema()` には何も出さないので、
+  対応キーワードを `.register(z.globalRegistry, { ... })` で併記する（配列の一意性なら
+  `{ uniqueItems: true }`）。片方だけだと、schema 駆動の消費側が Core の拒否する定義を
+  受理する。`shared/tests/contradictory-states.test.ts` の schema 側 describe が検査面。
 - 相互排他な組合せは `z.discriminatedUnion` のアームに分ける。cross-field の `z.refine` は
   使わない — parser では効くが `z.toJSONSchema()` の出力に一切現れず、schema 駆動の consumer が
   同じ値を通してしまう（実測）。union の JSON Schema は `additionalProperties` を root でなく

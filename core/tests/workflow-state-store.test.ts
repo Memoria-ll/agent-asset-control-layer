@@ -149,6 +149,28 @@ describe("filesystem workflow state store", () => {
     if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
   });
 
+  it("gives up instead of spinning when the generator keeps returning a taken id", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      generateExecutionInstanceId: () => "instance-fixed" as ExecutionInstanceId,
+    });
+    const first = unwrap(await store.create(seed()));
+    expect(first.executionInstanceId).toBe("instance-fixed");
+
+    const second = await store.create(seed());
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.failure.code).toBe("conflict");
+      expect(second.failure.details?.[0]?.code).toBe("execution_instance_id_exhausted");
+    }
+
+    // The write chain is per directory, so a stuck create would strand every later operation.
+    const third = await store.get(first.workflowId, first.executionInstanceId);
+    expect(third.ok).toBe(true);
+  }, 5000);
+
   it("addresses an instance id holding an interior space and rejects a trailing one", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({

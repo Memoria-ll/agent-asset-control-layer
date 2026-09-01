@@ -579,12 +579,24 @@ const stateMismatch = (): AssetResult<never> => workflowFailure(
   )],
 );
 
+/**
+ * Index the stages once per evaluation.
+ *
+ * The contract bounds neither `stages` nor `transitions`, so resolving each transition's
+ * target by scanning the stage list makes one evaluation O(stages x outgoing transitions);
+ * a wide definition then occupies the single Core process for seconds. Every stage lookup
+ * on the evaluation path goes through this map.
+ */
+const stageIndex = (definition: ResolvedWorkflowDefinition): Map<StageId, WorkflowStageDto> =>
+  new Map(definition.stages.map((stage) => [stage.stageId, stage]));
+
 const getCurrentStage = (
   definition: ResolvedWorkflowDefinition,
   state: WorkflowStateDto,
+  stages: Map<StageId, WorkflowStageDto>,
 ): WorkflowStageDto | undefined =>
   state.workflowId === definition.workflowId
-    ? definition.stages.find((stage) => stage.stageId === state.currentStageId)
+    ? stages.get(state.currentStageId)
     : undefined;
 
 const missingRequirements = (
@@ -628,19 +640,19 @@ const missingRequirements = (
   return reasons;
 };
 
-/** Evaluate every declared outgoing transition without changing state. */
-export const possibleWorkflowTransitions = (
+const evaluateTransitions = (
   definition: ResolvedWorkflowDefinition,
   state: WorkflowStateDto,
   input: WorkflowEvaluationInput,
+  stages: Map<StageId, WorkflowStageDto>,
 ): AssetResult<readonly TransitionCandidateDto[]> => {
-  const currentStage = getCurrentStage(definition, state);
+  const currentStage = getCurrentStage(definition, state, stages);
   if (currentStage === undefined) return stateMismatch();
 
   const candidates: TransitionCandidateDto[] = [];
   for (const transition of definition.transitions) {
     if (transition.fromStageId !== currentStage.stageId) continue;
-    const target = definition.stages.find((stage) => stage.stageId === transition.toStageId);
+    const target = stages.get(transition.toStageId);
     if (target === undefined) return stateMismatch();
     const roleAndTask = {
       ...(target.requiredRoleId !== undefined ? { requiredRoleId: target.requiredRoleId } : {}),
@@ -659,6 +671,14 @@ export const possibleWorkflowTransitions = (
   }
   return { ok: true, value: candidates };
 };
+
+/** Evaluate every declared outgoing transition without changing state. */
+export const possibleWorkflowTransitions = (
+  definition: ResolvedWorkflowDefinition,
+  state: WorkflowStateDto,
+  input: WorkflowEvaluationInput,
+): AssetResult<readonly TransitionCandidateDto[]> =>
+  evaluateTransitions(definition, state, input, stageIndex(definition));
 
 const transitionConflict = (): AssetResult<never> => ({
   ok: false,
@@ -695,13 +715,14 @@ export const applyWorkflowTransition = (
 ): AssetResult<WorkflowStateMutation> => {
   const resolvedSelection = selection;
   const evaluation = input;
+  const stages = stageIndex(definition);
 
-  if (state.workflowId !== definition.workflowId || getCurrentStage(definition, state) === undefined) {
+  if (state.workflowId !== definition.workflowId || getCurrentStage(definition, state, stages) === undefined) {
     return stateMismatch();
   }
   if (resolvedSelection.expectedStateVersion !== state.stateVersion) return transitionConflict();
 
-  const candidates = possibleWorkflowTransitions(definition, state, evaluation);
+  const candidates = evaluateTransitions(definition, state, evaluation, stages);
   if (!candidates.ok) return candidates;
   const candidate = candidates.value.find(
     (value) => value.toStageId === resolvedSelection.toStageId && value.transitionKind === resolvedSelection.transitionKind,
@@ -709,7 +730,7 @@ export const applyWorkflowTransition = (
   if (candidate === undefined) return transitionNotDeclared();
   if (candidate.blocked) return transitionBlocked(candidate.blockedReasons);
 
-  const target = definition.stages.find((stage) => stage.stageId === candidate.toStageId);
+  const target = stages.get(candidate.toStageId);
   if (target === undefined) return transitionNotDeclared();
   return {
     ok: true,

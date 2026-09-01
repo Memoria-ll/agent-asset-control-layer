@@ -282,6 +282,32 @@ describe("boundary states that cannot exist", () => {
         ],
       }),
     ).toThrow();
+    expect(() =>
+      parseWorkflowDefinitionDto({
+        ...definition,
+        stages: [
+          {
+            stageId: "stage-1",
+            displayName: "Initial stage",
+            description: "The initial workflow stage.",
+            requiredArtifactRefs: ["report", "report"],
+          },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      parseWorkflowDefinitionDto({
+        ...definition,
+        transitions: [
+          {
+            fromStageId: "stage-1",
+            toStageId: "stage-1",
+            transitionKind: "retry",
+            requiredCapabilityRefs: ["review", "review"],
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
 
@@ -329,5 +355,21 @@ describe("published JSON Schema carries the same constraints", () => {
     expect(standalone.required).toEqual(["kind"]);
     expect(standalone.properties.workflowId).toBeUndefined();
     expect(standalone.properties.executionInstanceId).toBeUndefined();
+  });
+
+  it("states uniqueness on every requirement reference list", () => {
+    const definition = schemas().WorkflowDefinitionDto as any;
+    const stage = definition.properties.stages.items.properties;
+    const transition = definition.properties.transitions.items.properties;
+
+    for (const refs of [
+      stage.requiredArtifactRefs,
+      stage.requiredCapabilityRefs,
+      transition.requiredArtifactRefs,
+      transition.requiredCapabilityRefs,
+    ]) {
+      expect(refs.uniqueItems).toBe(true);
+      expect(refs.minItems).toBe(1);
+    }
   });
 });

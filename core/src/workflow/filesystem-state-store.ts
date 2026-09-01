@@ -52,6 +52,8 @@ type StoredState = {
   readonly mode: number;
 };
 
+const COLLISION_ATTEMPT_LIMIT = 8;
+
 const stateFailure = (
   code: "invalid_request" | "not_found" | "conflict" | "unavailable" | "internal",
   message: string,
@@ -282,7 +284,10 @@ export const createWorkflowStateStore = async (
   };
 
   const create = (seed: WorkflowStateSeed): Promise<AssetResult<WorkflowStateDto>> => inWriteChain(async () => {
-    while (true) {
+    // The generator is injectable, so a deterministic or coarse one can hand back an id whose
+    // file already exists on every attempt. This runs inside the per-directory write chain, so
+    // retrying forever would wedge every later create and compare-and-swap for that directory.
+    for (let attempt = 0; attempt < COLLISION_ATTEMPT_LIMIT; attempt += 1) {
       const executionInstanceId = generateExecutionInstanceId();
       const targetPath = filePathFor(workflowsDirectory, executionInstanceId);
       if (targetPath === undefined) {
@@ -321,6 +326,7 @@ export const createWorkflowStateStore = async (
       }
       return { ok: true, value: parsed.value };
     }
+    return { ok: false, failure: stateFailure("conflict", "A free execution instance id could not be generated.", ["workflowState", "executionInstanceId"], "execution_instance_id_exhausted") };
   });
 
   const get = async (workflowId: WorkflowId, executionInstanceId: ExecutionInstanceId): Promise<AssetResult<WorkflowStateDto>> => {
