@@ -1274,19 +1274,26 @@ export const resolveScope = (
   const findBlockedOperationIssuers = (
     actions: readonly OperationAction[],
   ): readonly CandidateState[] => {
+    const orderedActions = actions.slice().sort((left, right) => {
+      const issuerOrder = compareCandidatesForOutput(left.issuer, right.issuer);
+      if (issuerOrder !== 0) return issuerOrder;
+      const targetOrder = compareCandidatesForOutput(left.target, right.target);
+      if (targetOrder !== 0) return targetOrder;
+      return codeUnitCompare(left.kind, right.kind);
+    });
     const actionsByIssuerId = new Map<string, CandidateState[]>();
-    for (const action of actions) {
+    for (const action of orderedActions) {
       const issuers = actionsByIssuerId.get(String(action.issuer.candidate.assetId)) ?? [];
       if (!issuers.includes(action.issuer)) issuers.push(action.issuer);
       actionsByIssuerId.set(String(action.issuer.candidate.assetId), issuers);
     }
     const blockedThisPass = new Set<CandidateState>(
-      actions.filter((action) => action.issuer.reason.kind !== "included").map((action) => action.issuer),
+      orderedActions.filter((action) => action.issuer.reason.kind !== "included").map((action) => action.issuer),
     );
     let changed = true;
     while (changed) {
       changed = false;
-      for (const action of actions) {
+      for (const action of orderedActions) {
         const issuer = action.issuer;
         if (!blockedThisPass.has(issuer)) continue;
         const blockerId = issuer.reason.kind === "disabled"

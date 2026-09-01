@@ -883,7 +883,38 @@ scope.project: [acme]
     expect(reason(left, "asset-b")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
   });
 
-  it("case 15-f: traverses a long dependency chain without recursion", () => {
+  it("case 15-f: keeps operation feedback resolution independent of candidate order", () => {
+    const makeCandidates = () => ({
+      a: candidateFromDocument(assetDocument("asset-a", "requires: [asset-c]\n"), {
+        ...add(), operation: { kind: "disable", targetAssetId: "asset-c" as AssetId },
+      }),
+      b: candidateFromDocument(assetDocument("asset-b"), add()),
+      c: candidateFromDocument(assetDocument("asset-c"), {
+        ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId },
+      }),
+      d: candidateFromDocument(assetDocument("asset-d", "requires: [asset-c]\n"), {
+        ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId },
+      }),
+    });
+    const first = makeCandidates();
+    const second = makeCandidates();
+    const left = resultValue({}, [first.a, first.b, first.c, first.d]);
+    const right = resultValue({}, [second.b, second.c, second.a, second.d]);
+
+    expect(left.evaluations).toEqual(right.evaluations);
+    expect(left.conflicts).toEqual(right.conflicts);
+    expect(left.conflicts).toEqual([{
+      kind: "operation_conflict",
+      targetAssetId: "asset-a",
+      involvedAssetIds: ["asset-a", "asset-d"],
+    }]);
+    expect(reason(left, "asset-a").kind).toBe("included");
+    expect(reason(left, "asset-b").kind).toBe("included");
+    expect(reason(left, "asset-c").kind).toBe("included");
+    expect(reason(left, "asset-d")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+  });
+
+  it("case 15-g: traverses a long dependency chain without recursion", () => {
     const template = candidateFromDocument(assetDocument("asset-template"), add());
     const count = 10_000;
     const candidates = Array.from({ length: count }, (_, index) => ({
