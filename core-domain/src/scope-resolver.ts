@@ -1129,7 +1129,9 @@ export const resolveScope = (
       }
     }
 
-    for (const actions of operationGroups.values()) {
+    const orderedOperationGroups = [...operationGroups.values()].sort((left, right) =>
+      compareCandidatesForOutput(left[0]!.target, right[0]!.target));
+    for (const actions of orderedOperationGroups) {
       if (actions.length === 0) continue;
       const target = actions[0]!.target;
       const bestRank = actions.reduce((best, action) => compareResolutionRank(action.issuer.rank!, best) > 0 ? action.issuer.rank! : best, actions[0]!.issuer.rank!);
@@ -1333,6 +1335,7 @@ export const resolveScope = (
     const { appliedActions, eligibleIssuers, operationFailures } = resolveOperations();
     applyDependencyClosure();
     applyOperationFailures(operationFailures);
+    applyDependencyClosure();
     const operationCycles = findOperationCycles(appliedActions);
     if (operationCycles.length > 0) {
       const cycleConflicts = operationCycles.map((operationCycle) => {
@@ -1355,6 +1358,7 @@ export const resolveScope = (
       const { operationFailures: finalOperationFailures } = resolveOperations();
       applyDependencyClosure();
       applyOperationFailures(finalOperationFailures);
+      applyDependencyClosure();
       for (const { cycle, conflict } of cycleConflicts) {
         addConflict(conflict);
         for (const action of cycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);

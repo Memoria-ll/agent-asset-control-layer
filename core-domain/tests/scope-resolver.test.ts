@@ -953,6 +953,46 @@ scope.project: [acme]
     expect(result.evaluations.every((item) => item.reason.kind === "included")).toBe(true);
   });
 
+  it("case 15-i: reconciles operation groups independent of candidate order", () => {
+    const makeCandidates = () => ({
+      a: candidateFromDocument(assetDocument("asset-a"), {
+        ...add(), mergeGroup: "group", operation: { kind: "override", targetAssetId: "asset-t" as AssetId },
+      }),
+      b: candidateFromDocument(assetDocument("asset-b"), {
+        ...add(), operation: { kind: "disable", targetAssetId: "asset-t" as AssetId },
+      }),
+      t: candidateFromDocument(assetDocument("asset-t"), {
+        ...add(), mergeGroup: "group", operation: { kind: "disable", targetAssetId: "asset-a" as AssetId },
+      }),
+    });
+    const first = makeCandidates();
+    const second = makeCandidates();
+    const left = resultValue({}, [first.a, first.b, first.t]);
+    const right = resultValue({}, [second.t, second.a, second.b]);
+
+    expect(left.evaluations).toEqual(right.evaluations);
+    expect(left.conflicts).toEqual(right.conflicts);
+  });
+
+  it("case 15-j: runs dependent closure after operation failure", () => {
+    const issuer = candidateFromDocument(assetDocument("asset-issuer"), {
+      ...add(), operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+    });
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-issuer]\n"), add());
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const result = resultValue({}, [issuer, dependent, target]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ kind: "operation_conflict", targetAssetId: "asset-target", involvedAssetIds: ["asset-issuer", "asset-target"] }]);
+    expect(reason(result, "asset-issuer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "asset-dependent")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_invalid",
+      failedRequirements: ["asset-issuer"],
+    });
+  });
+
   it("case 16: keeps a healthy candidate included beside an unavailable candidate", () => {
     const result = resultValue({}, [
       candidateFromDocument(assetDocument("asset-good"), add()),
