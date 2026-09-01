@@ -58,6 +58,18 @@ const isGeneralFenceEnd = (line: string, fence: GeneralFence): boolean => {
 const blockFailure = (code: string, message: string): AssetResult<never> =>
   workflowFailure(message, [detail(["document", "body", "aacl-workflow"], code, message)]);
 
+/**
+ * Find the one `aacl-workflow` block in an asset body.
+ *
+ * An asset body is arbitrary text, so the scan has to be exact: the opener and the closer
+ * are matched whole at column zero, and a line inside another fenced block is not an opener.
+ *
+ * What makes that unambiguous rather than merely strict is the payload being JSON. A JSON
+ * string literal cannot contain a raw newline, so a line consisting only of a fence can never
+ * occur inside a valid payload — the closer cannot be captured by the content it delimits.
+ * A parser that allowed some non-JSON body language would lose that property and need an
+ * escape rule instead.
+ */
 const extractWorkflowPayload = (body: string): AssetResult<string> => {
   const lines = body.split("\n");
   const payloads: string[] = [];

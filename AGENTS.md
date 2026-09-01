@@ -103,9 +103,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
 ### レイヤ / seam mapping
 
 - logic unit（テスト対象）: `core-domain/src/`（domain semantics と失敗語彙）、
-  `core/src/` のうち `config/` `logging/` `http/router.ts` `http/responses.ts` と
-  composition root の `index.ts`、`shared/src/`、`vscode-extension/src/` のうち
-  VS Code API に依存しない client / view model。
+  `core/src/` のうち `main.ts` を除くすべて（`assets/` `catalog/` `config/` `http/`
+  `internal/` `logging/` `workflow/` と composition root の `index.ts`）、`shared/src/`、
+  `vscode-extension/src/` のうち VS Code API に依存しない client / view model。
 - view-glue（テスト対象外）: `core/src/main.ts`（`process.env` / stdout / signal だけを持つ
   host glue）、`vscode-extension/src/` のうち VS Code API へ直接触れる面
   （activation / lifecycle、command 登録、webview 配線）。
@@ -229,3 +229,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
   catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
   「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
   （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
+- **workflow instance と agent execution の link は双方向で、その鏡像はすでに契約にある** —
+  `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding`
+  （`shared/src/sessions.ts`）が互いを指し、producer 側は `core-domain/src/agent-execution.ts` の
+  `AgentExecutionRecord` が保持している。**Workflow State の「1 file を rename すれば
+  State と link が同時に確定する」という原子性は #7 の範囲でだけ成立する** — #20 が
+  Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
+  idempotency を別に設計する必要がある (#7)
+- **`shared/tests/json-schema.test.ts` の strict object 検査は root の `oneOf` までしか展開せず、
+  nested object property へは降りない。** 境界 DTO が nested object を持つとき
+  （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
+  registry に登録しただけでは検査されないので、nested の `additionalProperties` は
+  個別 assertion で pin する (#7)
