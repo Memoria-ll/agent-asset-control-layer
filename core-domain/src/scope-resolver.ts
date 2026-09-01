@@ -290,15 +290,23 @@ const deduplicateExactCandidates = (
   return groups.map(chooseCanonicalDuplicateRepresentative);
 };
 
-const hasSameIdOverlayRelation = (
-  group: readonly CandidateState[],
-): boolean => group.some((issuer) => {
+const isSameIdOverlayPair = (
+  issuer: CandidateState,
+  target: CandidateState,
+): boolean => {
   const operation = issuer.candidate.rule.operation;
-  if (operation.kind === "add" || operation.targetAssetId !== issuer.candidate.assetId) return false;
-  return group.some((target) => target !== issuer &&
+  return operation.kind !== "add" &&
+    operation.targetAssetId === issuer.candidate.assetId &&
+    target.candidate.assetId === issuer.candidate.assetId &&
     target.candidate.source.layer !== issuer.candidate.source.layer &&
-    sourcePrecedence(target.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer));
-});
+    sourcePrecedence(target.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer);
+};
+
+const hasUnresolvedIdentityPair = (
+  group: readonly CandidateState[],
+): boolean => group.some((left, leftIndex) =>
+  group.slice(leftIndex + 1).some((right) =>
+    !isSameIdOverlayPair(left, right) && !isSameIdOverlayPair(right, left)));
 
 const compareResolutionRank = (left: ResolutionRank, right: ResolutionRank): number => {
   if (left.sourcePrecedence !== right.sourcePrecedence) return left.sourcePrecedence - right.sourcePrecedence;
@@ -745,7 +753,7 @@ export const resolveScope = (
     matchedById.set(String(state.candidate.assetId), group);
   }
   for (const group of matchedById.values()) {
-    if (group.length < 2 || hasSameIdOverlayRelation(group)) continue;
+    if (group.length < 2 || !hasUnresolvedIdentityPair(group)) continue;
     const conflict: ResolutionConflict = {
       kind: "duplicate_identity",
       assetId: group[0]!.candidate.assetId,
@@ -858,7 +866,11 @@ export const resolveScope = (
         const outcome = analyze(target);
         if (!outcome.ok) {
           failures.push({ id: requiredId, cause: outcome.cause });
-          if (outcome.cycleIds !== undefined) cycleIds = outcome.cycleIds;
+          if (outcome.cycleIds !== undefined) {
+            cycleIds = cycleIds === undefined
+              ? outcome.cycleIds
+              : canonicalIds([...cycleIds, ...outcome.cycleIds]);
+          }
         }
       }
       visiting.pop();
@@ -888,12 +900,13 @@ export const resolveScope = (
         failedRequirements: [...outcome.failedRequirements],
       };
       if (state.candidate.rule.mandatory) {
-        if (outcome.cause === "requirement_cycle") {
+        if (outcome.cycleIds !== undefined) {
           addConflict({
             kind: "dependency_cycle",
             involvedAssetIds: canonicalIds([state.candidate.assetId, ...(outcome.cycleIds ?? outcome.failedRequirements)]),
           });
-        } else {
+        }
+        if (outcome.cause !== "requirement_cycle") {
           addConflict({
             kind: "dependency_failure",
             failedRequirement: outcome.failedRequirements[0]!,
@@ -904,30 +917,35 @@ export const resolveScope = (
     }
   };
 
-  // An issuer must have a viable dependency closure before it is allowed to affect another candidate.
-  applyDependencyClosure();
-
   const operationBaseReasons = new Map(states.map((state) => [state, state.reason] as const));
   const operationBaseConflicts = new Map(conflicts);
+  type OperationAction = { issuer: CandidateState; target: CandidateState; kind: "override" | "disable" };
   const blockedOperationIssuers = new Set<CandidateState>();
-  const resolveOperations = (): ReadonlySet<CandidateState> => {
+  const resolveOperations = (): readonly OperationAction[] => {
+    for (const state of states) state.reason = operationBaseReasons.get(state)!;
+    conflicts.clear();
+    for (const [key, conflict] of operationBaseConflicts) conflicts.set(key, conflict);
+    applyDependencyClosure();
+    const eligibleIssuers = new Set(states.filter((state) => state.reason.kind === "included" && !blockedOperationIssuers.has(state)));
     for (const state of states) state.reason = operationBaseReasons.get(state)!;
     conflicts.clear();
     for (const [key, conflict] of operationBaseConflicts) conflicts.set(key, conflict);
 
-    const appliedIssuers = new Set<CandidateState>();
-    const operationGroups = new Map<string, { issuer: CandidateState; target: CandidateState; kind: "override" | "disable" }[]>();
-    for (const issuer of states.filter((state) => state.reason.kind === "included" && !blockedOperationIssuers.has(state))) {
+    const appliedActions: OperationAction[] = [];
+    const operationGroups = new Map<CandidateState, OperationAction[]>();
+    for (const issuer of eligibleIssuers) {
       const operation = issuer.candidate.rule.operation;
       if (operation.kind === "add") continue;
       const targetCandidates = states.filter((state) => state !== issuer && state.matched &&
         state.candidate.assetId === operation.targetAssetId &&
         (state.reason.kind === "included" ||
-          (state.reason.kind === "overridden" && state.reason.overriddenBy === issuer.candidate.assetId)) &&
-        (operation.targetAssetId !== issuer.candidate.assetId ||
-          sourcePrecedence(state.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer)));
-      const target = targetCandidates.length === 1 ? targetCandidates[0] : undefined;
-      if (target === undefined) {
+          (state.reason.kind === "overridden" &&
+            (operation.targetAssetId === issuer.candidate.assetId
+              ? isSameIdOverlayPair(issuer, state)
+              : state.reason.overriddenBy === issuer.candidate.assetId))) &&
+        (operation.targetAssetId !== issuer.candidate.assetId || isSameIdOverlayPair(issuer, state)));
+      const targetIsAmbiguous = operation.targetAssetId !== issuer.candidate.assetId && targetCandidates.length !== 1;
+      if (targetCandidates.length === 0 || targetIsAmbiguous) {
         const conflict: ResolutionConflict = {
           kind: "operation_conflict",
           targetAssetId: operation.targetAssetId,
@@ -937,10 +955,10 @@ export const resolveScope = (
         issuer.reason = resolutionConflictReason(conflict, issuer.rank);
         continue;
       }
-      if (target.candidate.rule.mandatory) {
+      if (targetCandidates.some((target) => target.candidate.rule.mandatory)) {
         const conflict: ResolutionConflict = {
           kind: "mandatory_conflict",
-          involvedAssetIds: canonicalIds([issuer.candidate.assetId, target.candidate.assetId]),
+          involvedAssetIds: canonicalIds([issuer.candidate.assetId, ...targetCandidates.map((target) => target.candidate.assetId)]),
         };
         addConflict(conflict);
         issuer.reason = resolutionConflictReason(conflict, issuer.rank);
@@ -948,8 +966,8 @@ export const resolveScope = (
       }
       if (operation.kind === "override" && (
         issuer.candidate.rule.mergeGroup === undefined ||
-        target.candidate.rule.mergeGroup === undefined ||
-        issuer.candidate.rule.mergeGroup !== target.candidate.rule.mergeGroup
+        targetCandidates.some((target) => target.candidate.rule.mergeGroup === undefined ||
+          issuer.candidate.rule.mergeGroup !== target.candidate.rule.mergeGroup)
       )) {
         const conflict: ResolutionConflict = {
           kind: "operation_conflict",
@@ -960,9 +978,11 @@ export const resolveScope = (
         issuer.reason = resolutionConflictReason(conflict, issuer.rank);
         continue;
       }
-      const actions = operationGroups.get(String(operation.targetAssetId)) ?? [];
-      actions.push({ issuer, target, kind: operation.kind });
-      operationGroups.set(String(operation.targetAssetId), actions);
+      for (const target of targetCandidates) {
+        const actions = operationGroups.get(target) ?? [];
+        actions.push({ issuer, target, kind: operation.kind });
+        operationGroups.set(target, actions);
+      }
     }
 
     for (const actions of operationGroups.values()) {
@@ -994,7 +1014,7 @@ export const resolveScope = (
         addConflict(conflict);
         action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
       }
-      appliedIssuers.add(winner.issuer);
+      appliedActions.push(winner);
       if (winner.kind === "disable") target.reason = { kind: "disabled", disabledBy: winner.issuer.candidate.assetId };
       else target.reason = {
         kind: "overridden",
@@ -1003,13 +1023,63 @@ export const resolveScope = (
         winnerRank: winner.issuer.rank!,
       };
     }
-    return appliedIssuers;
+    return appliedActions;
+  };
+
+  const findOperationCycle = (
+    actions: readonly OperationAction[],
+  ): readonly OperationAction[] | undefined => {
+    const outgoing = new Map<CandidateState, OperationAction[]>();
+    for (const action of actions) {
+      const issuerActions = outgoing.get(action.issuer) ?? [];
+      issuerActions.push(action);
+      outgoing.set(action.issuer, issuerActions);
+    }
+    const completed = new Set<CandidateState>();
+    const visit = (
+      state: CandidateState,
+      pathStates: readonly CandidateState[],
+      pathActions: readonly OperationAction[],
+    ): readonly OperationAction[] | undefined => {
+      const cycleStart = pathStates.indexOf(state);
+      if (cycleStart >= 0) return pathActions.slice(cycleStart);
+      if (completed.has(state)) return undefined;
+      const nextStates = [...pathStates, state];
+      for (const action of outgoing.get(state) ?? []) {
+        const cycle = visit(action.target, nextStates, [...pathActions, action]);
+        if (cycle !== undefined) return cycle;
+      }
+      completed.add(state);
+      return undefined;
+    };
+    for (const action of actions) {
+      const cycle = visit(action.issuer, [], []);
+      if (cycle !== undefined) return cycle;
+    }
+    return undefined;
   };
 
   for (;;) {
-    const appliedIssuers = resolveOperations();
+    const appliedActions = resolveOperations();
     applyDependencyClosure();
-    const newlyBlocked = [...appliedIssuers].filter((issuer) => issuer.reason.kind !== "included");
+    const operationCycle = findOperationCycle(appliedActions);
+    if (operationCycle !== undefined) {
+      const cycleAssetIds = canonicalIds(operationCycle.flatMap((action) => [
+        action.issuer.candidate.assetId,
+        action.target.candidate.assetId,
+      ]));
+      const conflict: ResolutionConflict = {
+        kind: "operation_conflict",
+        targetAssetId: cycleAssetIds[0]!,
+        involvedAssetIds: cycleAssetIds,
+      };
+      addConflict(conflict);
+      for (const action of operationCycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+      break;
+    }
+    const newlyBlocked = [...new Set(appliedActions
+      .filter((action) => action.issuer.reason.kind !== "included")
+      .map((action) => action.issuer))];
     const blockedCount = blockedOperationIssuers.size;
     for (const issuer of newlyBlocked) blockedOperationIssuers.add(issuer);
     if (newlyBlocked.length === 0 || blockedOperationIssuers.size === blockedCount) break;

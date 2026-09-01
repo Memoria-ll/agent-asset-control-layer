@@ -390,6 +390,44 @@ scope.project: [acme]
     expect(overlayEvaluation?.reason.kind).toBe("included");
   });
 
+  it("case 9-c: keeps an unrelated same-ID candidate in duplicate conflict", () => {
+    const base = candidateFromDocument(assetDocument("asset-base"), add(), {
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("asset-base"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-base" as AssetId },
+    }, { source: { layer: "personal", sourceId: "personal-source" } });
+    const unrelated = candidateFromDocument(assetDocument("asset-base"), add(), {
+      source: { layer: "personal", sourceId: "other-personal-source" },
+    });
+    const result = resultValue({}, [base, overlay, unrelated]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ kind: "duplicate_identity", assetId: "asset-base", involvedAssetIds: ["asset-base"] }]);
+    expect(result.evaluations.every((item) => item.reason.kind === "excluded")).toBe(true);
+  });
+
+  it.each(["override", "disable"] as const)("case 9-d: applies a stacked %s overlay to every lower layer", (operationKind) => {
+    const directives = operationKind === "override" ? { ...add(), mergeGroup: "g" } : add();
+    const base = candidateFromDocument(assetDocument("asset-stack"), directives, {
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const personal = candidateFromDocument(assetDocument("asset-stack"), {
+      ...directives,
+      operation: { kind: operationKind, targetAssetId: "asset-stack" as AssetId },
+    }, { source: { layer: "personal", sourceId: "personal-source" } });
+    const project = candidateFromDocument(assetDocument("asset-stack"), {
+      ...directives,
+      operation: { kind: operationKind, targetAssetId: "asset-stack" as AssetId },
+    }, { source: { layer: "project", sourceId: "project-source" } });
+    const result = resultValue({}, [base, personal, project]);
+    const lowerEvaluations = result.evaluations.filter((item) => item.candidate.source.layer !== "project");
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(lowerEvaluations.every((item) => item.reason.kind === (operationKind === "override" ? "overridden" : "disabled"))).toBe(true);
+  });
+
   it("case 10: keeps additive assets and resolves the exclusive subgroup", () => {
     const candidates = [
       candidateFromDocument(assetDocument("asset-add-a"), add()),
@@ -544,6 +582,24 @@ scope.project: [acme]
     expect(right.evaluations.map((item) => item.candidate.rule.requires)).toEqual(left.evaluations.map((item) => item.candidate.rule.requires));
   });
 
+  it("case 14-f: re-evaluates dependents after a same-ID overlay resolves", () => {
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-base]\n"), add());
+    const base = candidateFromDocument(assetDocument("asset-base"), { ...add(), mergeGroup: "g" }, {
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("asset-base"), {
+      ...add(),
+      mergeGroup: "g",
+      operation: { kind: "override", targetAssetId: "asset-base" as AssetId },
+    }, { source: { layer: "project", sourceId: "project-source" } });
+    const result = resultValue({}, [dependent, base, overlay]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(reason(result, "asset-dependent").kind).toBe("included");
+    expect(result.evaluations.find((item) => item.candidate.source.layer === "global")?.reason.kind).toBe("overridden");
+  });
+
   it("case 15-a: fails a dependency whose target is outside the requested scope", () => {
     const result = resultValue({ roleId: "reviewer" }, [
       candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-target]\n"), add()),
@@ -593,6 +649,21 @@ scope.project: [acme]
     expect(reason(result, "asset-target").kind).toBe("included");
   });
 
+  it("case 15-b-4: reports a cycle between operation issuers", () => {
+    const left = candidateFromDocument(assetDocument("asset-a"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId },
+    });
+    const right = candidateFromDocument(assetDocument("asset-b"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId },
+    });
+    const result = resultValue({}, [left, right]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ kind: "operation_conflict", targetAssetId: "asset-a", involvedAssetIds: ["asset-a", "asset-b"] }]);
+    expect(reason(result, "asset-a")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "asset-b")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+  });
+
   it("case 15-c: does not redirect a dependency from an overridden loser to its winner", () => {
     const result = resultValue({}, [
       candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-loser]\n"), add()),
@@ -627,6 +698,19 @@ scope.project: [acme]
     expect(result.conflicts).toEqual([{ kind: "dependency_failure", failedRequirement: "asset-missing", involvedAssetIds: ["asset-bad", "asset-missing"] }]);
     expect(reason(result, "asset-bad")).toEqual({ kind: "unavailable", availability: "unavailable", cause: "missing_requirement", failedRequirements: ["asset-missing"] });
     expect(reason(result, "asset-good").kind).toBe("included");
+  });
+
+  it("case 17-b: retains a dependency cycle alongside an earlier dependency failure", () => {
+    const mandatory = candidateFromDocument(assetDocument("asset-mandatory", "requires: [asset-0, asset-a]\n"), { ...add(), mandatory: true });
+    const cycleA = candidateFromDocument(assetDocument("asset-a", "requires: [asset-b]\n"), add());
+    const cycleB = candidateFromDocument(assetDocument("asset-b", "requires: [asset-a]\n"), add());
+    const result = resultValue({}, [mandatory, cycleA, cycleB]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "dependency_cycle", involvedAssetIds: ["asset-a", "asset-b", "asset-mandatory"] },
+      { kind: "dependency_failure", failedRequirement: "asset-0", involvedAssetIds: ["asset-0", "asset-a", "asset-mandatory"] },
+    ]));
   });
 
   it.each(["case 18", "case 19"])("%s: treats an unknown capability or fallback requirement as missing", (caseName) => {

@@ -241,7 +241,11 @@ local-first Core、およびその Workbench となる VS Code Extension。
   最終的に生き残れない場合も同じ扱いにする。相反する operation の下位 issuer は
   `operation_conflict` を evaluation と aggregate `conflicts` の両方へ残す。同一 `AssetId` の
   異なる source layer 間で issuer が自分の ID を明示 target にする override / disable は
-  overlay relation として duplicate identity 判定より先に扱う (#71)
+  pair 単位の overlay relation として duplicate identity 判定より先に扱い、複数の lower layer
+  target にはそれぞれ適用する。dependency closure は merge 後・dependency 前の状態から
+  operation 後に再評価し、operation issuer の cycle は conflict として残す (#71)
+- **mandatory candidate の dependency failure が cycle と別の failure を同時に含む場合は、両方の conflict を残す。**
+  primary cause の選択で `dependency_cycle` を隠さない (#71)
 - **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
   `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
   意味が異なる candidate を入力順へ委ねない (#71)
