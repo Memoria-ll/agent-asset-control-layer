@@ -1,6 +1,7 @@
 import type {
   AgentExecutionDtoInput,
   AgentExecutionId,
+  ExecutionInstanceId,
   ModelId,
   ProjectId,
   ProviderId,
@@ -12,6 +13,7 @@ import type {
   TaskTypeId,
   Timestamp,
   WorkflowId,
+  WorkflowBindingInput,
 } from "@aacl/shared";
 import { tryParseAgentExecutionDto } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "./failures.ts";
@@ -19,14 +21,13 @@ import type { MetadataCatalog } from "./catalog.ts";
 import type { ResolutionContext } from "./resolution-context.ts";
 
 /** Internal execution metadata consumed by #8 routing and #20 lifecycle work. */
-export type AgentExecutionRecord = {
+type AgentExecutionRecordBase = {
   readonly agentExecutionId: AgentExecutionId;
   readonly startedAt?: Timestamp;
   readonly endedAt?: Timestamp;
   readonly sessionId?: SessionId;
   readonly snapshotId?: SnapshotId;
   readonly projectId?: ProjectId;
-  readonly workflowId?: WorkflowId;
   readonly stageId?: StageId;
   readonly taskTypeId?: TaskTypeId;
   readonly roleId?: RoleId;
@@ -34,6 +35,16 @@ export type AgentExecutionRecord = {
   readonly runtimeId?: RuntimeId;
   readonly modelId?: ModelId;
 };
+
+export type AgentExecutionRecord =
+  | (AgentExecutionRecordBase & {
+      readonly workflowId: WorkflowId;
+      readonly executionInstanceId: ExecutionInstanceId;
+    })
+  | (AgentExecutionRecordBase & {
+      readonly workflowId?: never;
+      readonly executionInstanceId?: never;
+    });
 
 type Detail = { readonly path: string[]; readonly code: string; readonly message: string };
 
@@ -94,7 +105,15 @@ export const validateAgentExecutionReferences = (
     : { ok: true, value: undefined };
 };
 
-/** Project an execution into the static scope consumed by #3; the execution ID is not a scope axis. */
+/**
+ * Project an execution into the static scope consumed by #3.
+ *
+ * Execution instance identity is not a resolution axis, and cannot become one:
+ * an asset declares its scope in frontmatter over `ASSET_SCOPE_AXES`, so it is
+ * authored before any run exists, while an execution instance id is an opaque
+ * value Core mints at start time. There is no value an asset author could write
+ * to match one.
+ */
 export const agentExecutionScope = (record: AgentExecutionRecord): ResolutionContext => ({
   ...(record.projectId !== undefined ? { projectId: record.projectId } : {}),
   ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
@@ -105,6 +124,52 @@ export const agentExecutionScope = (record: AgentExecutionRecord): ResolutionCon
   ...(record.runtimeId !== undefined ? { runtimeId: record.runtimeId } : {}),
   ...(record.modelId !== undefined ? { modelId: record.modelId } : {}),
 });
+
+const toWorkflowBindingInput = (
+  record: AgentExecutionRecord,
+): AssetResult<WorkflowBindingInput> => {
+  // The record type makes a partial pair unrepresentable, but a cast or restored
+  // data can still supply one, and no production caller exists yet to be trusted.
+  // Read through a widened view rather than narrowing the union: handling both
+  // complete cases first leaves `never` behind, and the remaining arms then cannot
+  // read either field at all.
+  const { workflowId, executionInstanceId } = record as AgentExecutionRecordBase & {
+    readonly workflowId?: WorkflowId;
+    readonly executionInstanceId?: ExecutionInstanceId;
+  };
+  if (workflowId === undefined && executionInstanceId === undefined) {
+    return { ok: true, value: { kind: "standalone" } };
+  }
+  if (workflowId === undefined) {
+    return {
+      ok: false,
+      failure: coreFailure(
+        "invalid_request",
+        "The agent execution workflow binding is incomplete.",
+        [detail(
+          ["record", "workflowId"],
+          "missing_field",
+          "A workflow-bound agent execution requires workflowId.",
+        )],
+      ),
+    };
+  }
+  if (executionInstanceId === undefined) {
+    return {
+      ok: false,
+      failure: coreFailure(
+        "invalid_request",
+        "The agent execution workflow binding is incomplete.",
+        [detail(
+          ["record", "executionInstanceId"],
+          "missing_field",
+          "A workflow-bound agent execution requires executionInstanceId.",
+        )],
+      ),
+    };
+  }
+  return { ok: true, value: { kind: "workflow", workflowId, executionInstanceId } };
+};
 
 /** Project an execution into the DTO input consumed by #12 and #20. */
 export const toAgentExecutionDto = (
@@ -118,13 +183,16 @@ export const toAgentExecutionDto = (
       ]),
     };
   }
+  const binding = toWorkflowBindingInput(record);
+  if (!binding.ok) return binding;
+
   const value: AgentExecutionDtoInput = {
     agentExecutionId: record.agentExecutionId,
     startedAt: record.startedAt,
+    workflowBinding: binding.value,
     ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
     ...(record.snapshotId !== undefined ? { snapshotId: record.snapshotId } : {}),
     ...(record.projectId !== undefined ? { projectId: record.projectId } : {}),
-    ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
     ...(record.stageId !== undefined ? { stageId: record.stageId } : {}),
     ...(record.taskTypeId !== undefined ? { taskTypeId: record.taskTypeId } : {}),
     ...(record.roleId !== undefined ? { roleId: record.roleId } : {}),

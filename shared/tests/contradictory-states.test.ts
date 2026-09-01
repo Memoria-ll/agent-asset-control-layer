@@ -2,8 +2,10 @@ import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
 import {
   contractJsonSchemas,
+  parseAgentExecutionDto,
   parseResolvedContextDto,
   parseTransitionCandidateDto,
+  parseWorkflowStateDto,
 } from "../src/index.ts";
 // Schema values are internal; these two are asserted on directly.
 import { DegradedInfo } from "../src/status.ts";
@@ -36,6 +38,67 @@ const resolvedContext = (overrides: {
 });
 
 describe("boundary states that cannot exist", () => {
+  it("accepts a workflow-bound execution with both identifiers", () => {
+    const parsed = parseAgentExecutionDto({
+      agentExecutionId: "execution-1",
+      workflowBinding: {
+        kind: "workflow",
+        workflowId: "workflow-1",
+        executionInstanceId: "instance-1",
+      },
+      startedAt: "2026-08-30T01:02:03+09:00",
+    });
+
+    expect(parsed.workflowBinding).toEqual({
+      kind: "workflow",
+      workflowId: "workflow-1",
+      executionInstanceId: "instance-1",
+    });
+  });
+
+  it("accepts a standalone execution binding", () => {
+    const parsed = parseAgentExecutionDto({
+      agentExecutionId: "execution-1",
+      workflowBinding: { kind: "standalone" },
+      startedAt: "2026-08-30T01:02:03+09:00",
+    });
+
+    expect(parsed.workflowBinding).toEqual({ kind: "standalone" });
+  });
+
+  it("requires a workflow binding on an agent execution", () => {
+    expect(() =>
+      parseAgentExecutionDto({
+        agentExecutionId: "execution-1",
+        startedAt: "2026-08-30T01:02:03+09:00",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a legacy top-level workflow identifier", () => {
+    expect(() =>
+      parseAgentExecutionDto({
+        agentExecutionId: "execution-1",
+        workflowId: "workflow-1",
+        startedAt: "2026-08-30T01:02:03+09:00",
+      }),
+    ).toThrow();
+  });
+
+  it("requires an execution instance identifier on workflow state", () => {
+    expect(() =>
+      parseWorkflowStateDto({
+        workflowId: "workflow-1",
+        currentStageId: "stage-1",
+        entryRoleId: "role-1",
+        currentRoleId: "role-1",
+        linkedAgentExecutionIds: [],
+        linkedSnapshotIds: [],
+        updatedAt: "2026-08-30T01:02:03+09:00",
+      }),
+    ).toThrow();
+  });
+
   it("accepts a well-formed resolved context", () => {
     expect(parseResolvedContextDto(resolvedContext({})).cost.includedAssetCount).toBe(1);
   });
@@ -175,5 +238,19 @@ describe("published JSON Schema carries the same constraints", () => {
     expect(blocked.properties.blockedReasons.minItems).toBe(1);
     expect(blocked.required).toContain("blockedReasons");
     expect(unblocked.properties.blockedReasons).toBeUndefined();
+  });
+
+  it("publishes strict nested workflow binding arms", () => {
+    const binding = (schemas().AgentExecutionDto as any).properties.workflowBinding;
+    const workflow = binding.oneOf.find((arm: any) => arm.properties.kind.const === "workflow");
+    const standalone = binding.oneOf.find((arm: any) => arm.properties.kind.const === "standalone");
+
+    expect(binding.oneOf).toHaveLength(2);
+    expect(workflow.additionalProperties).toBe(false);
+    expect(workflow.required).toEqual(["kind", "workflowId", "executionInstanceId"]);
+    expect(standalone.additionalProperties).toBe(false);
+    expect(standalone.required).toEqual(["kind"]);
+    expect(standalone.properties.workflowId).toBeUndefined();
+    expect(standalone.properties.executionInstanceId).toBeUndefined();
   });
 });

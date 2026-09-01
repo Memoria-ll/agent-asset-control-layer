@@ -1,6 +1,7 @@
 import * as z from "zod/mini";
 import {
   AgentExecutionId,
+  ExecutionInstanceId,
   RoleId,
   SnapshotId,
   StageId,
@@ -11,12 +12,12 @@ import { NonEmptyString, Timestamp } from "./primitives.ts";
 import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
 /**
- * The current state of a workflow, addressed by the id of its definition.
+ * The current state of a workflow instance, addressed by its definition and
+ * execution instance identifiers.
  *
- * There is no execution-instance identifier, so two runs of the same definition
- * are not distinguishable here. Whether such an identifier exists at all is
- * #7's to settle — how many runs a definition may have in flight, and who mints
- * the identifier, are workflow semantics — and #50 tracks the decision.
+ * Each execution instance owns an independent state, and its logical key is
+ * `(workflowId, executionInstanceId)`. State versioning and compare-and-swap
+ * belong to #7's persistence contract.
  *
  * Completion is expressed by `currentStageId` pointing at a terminal stage; a
  * separate completion field would fix a vocabulary the workflow model (#7) has
@@ -24,6 +25,7 @@ import { tryParseWith, type ParseOutcome } from "./errors.ts";
  */
 export const WorkflowStateDto = z.strictObject({
   workflowId: WorkflowId,
+  executionInstanceId: ExecutionInstanceId,
   currentStageId: StageId,
   entryRoleId: RoleId,
   currentRoleId: RoleId,

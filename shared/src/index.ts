@@ -52,6 +52,7 @@ export type {
   SessionId,
   AgentExecutionId,
   WorkflowId,
+  ExecutionInstanceId,
   StageId,
   SnapshotId,
 } from "./identifiers.ts";
@@ -83,6 +84,8 @@ export type {
 export type {
   SessionDto,
   AgentExecutionDto,
+  WorkflowBinding,
+  WorkflowBindingInput,
   SessionDtoInput,
   AgentExecutionDtoInput,
 } from "./sessions.ts";

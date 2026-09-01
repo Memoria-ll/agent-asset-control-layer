@@ -13,7 +13,11 @@ const parsedExecution = parseAgentExecutionDto({
   agentExecutionId: "execution-1",
   sessionId: "session-1",
   projectId: "project-1",
-  workflowId: "workflow-1",
+  workflowBinding: {
+    kind: "workflow",
+    workflowId: "workflow-1",
+    executionInstanceId: "instance-1",
+  },
   stageId: "stage-1",
   taskTypeId: "code-review",
   roleId: "reviewer",
@@ -30,12 +34,17 @@ const parsedExecution = parseAgentExecutionDto({
 // fixture supplies all thirteen fields; the guard narrows them and pins that contract, and
 // every value still comes from the real parser rather than a hand-written literal.
 const {
-  sessionId, projectId, workflowId, stageId, taskTypeId, roleId,
+  sessionId, projectId, stageId, taskTypeId, roleId,
   providerId, runtimeId, modelId, endedAt, snapshotId,
 } = parsedExecution;
+if (parsedExecution.workflowBinding.kind !== "workflow") {
+  throw new Error("The fixture must use the workflow binding arm.");
+}
+const { workflowId, executionInstanceId } = parsedExecution.workflowBinding;
 
 if (
   sessionId === undefined || projectId === undefined || workflowId === undefined ||
+  executionInstanceId === undefined ||
   stageId === undefined || taskTypeId === undefined || roleId === undefined ||
   providerId === undefined || runtimeId === undefined || modelId === undefined ||
   endedAt === undefined || snapshotId === undefined
@@ -46,7 +55,7 @@ if (
 const executionRecord: AgentExecutionRecord = {
   agentExecutionId: parsedExecution.agentExecutionId,
   startedAt: parsedExecution.startedAt,
-  sessionId, projectId, workflowId, stageId, taskTypeId, roleId,
+  sessionId, projectId, workflowId, executionInstanceId, stageId, taskTypeId, roleId,
   providerId, runtimeId, modelId, endedAt, snapshotId,
 };
 
@@ -93,6 +102,56 @@ describe("agent execution domain", () => {
       expect(missingStartedAt.failure.details?.[0]?.code).toBe("missing_field");
       expect(missingStartedAt.failure.details?.[0]?.path).toEqual(["record", "startedAt"]);
     }
+  });
+
+  it("projects a standalone record with a standalone workflow binding", () => {
+    const { workflowId: _workflowId, executionInstanceId: _executionInstanceId, ...standaloneRecord } = executionRecord;
+    const result = toAgentExecutionDto(standaloneRecord as AgentExecutionRecord);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.workflowBinding).toEqual({ kind: "standalone" });
+    }
+  });
+
+  it("rejects a record with only workflowId", () => {
+    const result = toAgentExecutionDto({
+      ...executionRecord,
+      executionInstanceId: undefined,
+    } as AgentExecutionRecord);
+
+    expect(result).toEqual({
+      ok: false,
+      failure: {
+        code: "invalid_request",
+        message: "The agent execution workflow binding is incomplete.",
+        details: [{
+          path: ["record", "executionInstanceId"],
+          code: "missing_field",
+          message: "A workflow-bound agent execution requires executionInstanceId.",
+        }],
+      },
+    });
+  });
+
+  it("rejects a record with only executionInstanceId", () => {
+    const result = toAgentExecutionDto({
+      ...executionRecord,
+      workflowId: undefined,
+    } as AgentExecutionRecord);
+
+    expect(result).toEqual({
+      ok: false,
+      failure: {
+        code: "invalid_request",
+        message: "The agent execution workflow binding is incomplete.",
+        details: [{
+          path: ["record", "workflowId"],
+          code: "missing_field",
+          message: "A workflow-bound agent execution requires workflowId.",
+        }],
+      },
+    });
   });
 
   it("rejects provider ownership mismatches for referenced runtime and model", () => {
