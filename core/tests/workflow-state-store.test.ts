@@ -149,6 +149,28 @@ describe("filesystem workflow state store", () => {
     if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
   });
 
+  // Windows resolves the superscript forms to the same devices as the ASCII ones, so they are
+  // rejected as instance ids rather than reaching a rename that fails for a different reason.
+  it.each(["CON", "NUL", "COM1", "COM¹", "COM³", "LPT¹", "LPT³"])(
+    "rejects the reserved device name %s as an instance id",
+    async (reserved) => {
+      const directory = await temporaryDirectory();
+      const store = await createStore({
+        stateDirectory: directory,
+        now: () => "2026-09-01T10:00:00Z" as Timestamp,
+        generateExecutionInstanceId: () => reserved as ExecutionInstanceId,
+      });
+
+      const created = await store.create(seed());
+      expect(created.ok).toBe(false);
+      if (!created.ok) expect(created.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
+
+      const read = await store.get("review-flow" as WorkflowId, reserved as ExecutionInstanceId);
+      expect(read.ok).toBe(false);
+      if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
+    },
+  );
+
   it("addresses an instance id the default generator would not have produced", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({

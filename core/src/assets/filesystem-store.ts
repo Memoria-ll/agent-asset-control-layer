@@ -22,6 +22,7 @@ import { sha256Hex } from "../internal/digest.ts";
 import { withFilePath } from "../internal/diagnostics.ts";
 import { strictDecode } from "../internal/text.ts";
 import { writeAtomically, type Rename } from "../internal/atomic-write.ts";
+import { portableSegment } from "../internal/portable-name.ts";
 
 export type ManagedAssetRoot =
   | { readonly rootId: string; readonly kind: "global" | "personal"; readonly directory: string }
@@ -138,21 +139,7 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
 const rootsOverlap = (left: string, right: string): boolean =>
   left === right || isContainedPath(left, right) || isContainedPath(right, left);
 
-const WINDOWS_RESERVED_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
-]);
-
 const saveChains = new Map<string, Promise<unknown>>();
-
-const portableSegment = (segment: string): boolean => {
-  if (/[<>"|?*]/.test(segment)) return false;
-  if ([...segment].some((character) => (character.codePointAt(0) ?? 0) < 0x20)) return false;
-  if (/[. ]$/.test(segment)) return false;
-  const stem = segment.split(".")[0]?.replace(/ +$/, "");
-  return stem !== undefined && !WINDOWS_RESERVED_NAMES.has(stem.toUpperCase());
-};
 
 const validRelativePath = (value: string): boolean => {
   // Windows forbids ":" in a file name, where it denotes an alternate data stream, and a

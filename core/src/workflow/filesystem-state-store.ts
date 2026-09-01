@@ -25,6 +25,7 @@ import {
   type WorkflowStateSeed,
 } from "@aacl/core-domain";
 import { writeAtomically, type Rename } from "../internal/atomic-write.ts";
+import { portableFileName } from "../internal/portable-name.ts";
 
 export type WorkflowStateStoreOptions = {
   readonly stateDirectory: string;
@@ -78,29 +79,13 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
   return remainder !== "" && !isAbsolute(remainder) && remainder !== ".." && !remainder.startsWith(`..${"/"}`) && !remainder.startsWith(`..${"\\"}`);
 };
 
-const portableSegment = (value: string): boolean => {
-  if (value.length === 0 || value.includes("\\") || value.includes("/") || value.includes(":") || value.includes("\0")) return false;
-  // An interior space is portable on every supported filesystem; only a trailing one is not,
-  // which the second test covers together with the trailing dot Windows strips.
-  if (/[<>"|?*]/.test(value) || /[. ]$/.test(value)) return false;
-  if ([...value].some((character) => (character.codePointAt(0) ?? 0) < 0x20)) return false;
-  const stem = value.split(".")[0]?.replace(/ +$/, "");
-  if (stem === undefined) return false;
-  const upper = stem.toUpperCase();
-  return !new Set([
-    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
-    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-  ]).has(upper);
-};
-
 /**
  * The contract guarantees only a non-empty string and leaves the character set to whoever maps
  * it onto a filename, so this store constrains filesystem portability and nothing else. The
  * `instance-` shape the default generator produces is that generator's convention, and a host
  * that injects its own generator is entitled to a different one.
  */
-const validExecutionInstanceId = (value: ExecutionInstanceId): boolean => portableSegment(value);
+const validExecutionInstanceId = (value: ExecutionInstanceId): boolean => portableFileName(value);
 
 const filePathFor = (
   workflowsDirectory: string,
