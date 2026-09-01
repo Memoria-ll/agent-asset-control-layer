@@ -151,6 +151,16 @@ describe("scope resolver", () => {
     expect(result.outcome).toBe("resolved");
   });
 
+  it("case 0-c: returns invalid_request for a structurally invalid candidate", () => {
+    const result = resolve({}, [null as unknown as AssetCandidate]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.[0]?.code).toBe("invalid_value");
+    }
+  });
+
   it("case 0-b: keeps different global meanings conflicted when every axis is unknown", () => {
     const assetRole = candidateFromDocument(
       assetDocument("asset-role", "scope.role: [reviewer]\n"),
@@ -623,6 +633,28 @@ scope.project: [acme]
     expect(result.outcome).toBe("resolved");
   });
 
+  it("case 15-b-1: re-evaluates a surviving issuer after removing an unavailable blocker", () => {
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const survivingIssuer = candidateFromDocument(assetDocument("asset-survivor"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const unavailableIssuer = candidateFromDocument(assetDocument("asset-blocker", "requires: [asset-target]\n"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-survivor" as AssetId },
+    });
+    const result = resultValue({}, [unavailableIssuer, target, survivingIssuer]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(reason(result, "asset-survivor").kind).toBe("included");
+    expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-survivor" });
+    expect(reason(result, "asset-blocker")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_disabled",
+      failedRequirements: ["asset-target"],
+    });
+  });
+
   it("case 15-b-2: does not let an unavailable issuer disable its target", () => {
     const issuer = candidateFromDocument(assetDocument("asset-issuer", "requires: [asset-missing]\n"), {
       ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
@@ -674,6 +706,44 @@ scope.project: [acme]
     expect(reason(result, "asset-loser")).toMatchObject({ kind: "overridden", overriddenBy: "asset-winner" });
     expect(reason(result, "asset-dependent")).toEqual({ kind: "unavailable", availability: "unavailable", cause: "requirement_overridden", failedRequirements: ["asset-loser"] });
     expect(result.outcome).toBe("resolved");
+  });
+
+  it("case 15-d: classifies a disabled in-scope requirement before an out-of-scope alternative", () => {
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-target]\n"), add());
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const outOfScopeTarget = candidateFromDocument(assetDocument("asset-target", "scope.role: [author]\n"), add());
+    const disable = candidateFromDocument(assetDocument("asset-disable"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const result = resultValue({ roleId: "reviewer" }, [dependent, outOfScopeTarget, disable, target]);
+
+    expect(reason(result, "asset-dependent")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_disabled",
+      failedRequirements: ["asset-target"],
+    });
+  });
+
+  it("case 15-e: keeps operation discovery independent of candidate order", () => {
+    const target = candidateFromDocument(assetDocument("asset-a"), add());
+    const invalidOverride = candidateFromDocument(assetDocument("asset-b"), {
+      ...add(), operation: { kind: "override", targetAssetId: "asset-a" as AssetId },
+    });
+    const disable = candidateFromDocument(assetDocument("asset-d"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId },
+    });
+    const left = resultValue({}, [invalidOverride, disable, target]);
+    const right = resultValue({}, [target, disable, invalidOverride]);
+
+    expect(left.conflicts).toEqual(right.conflicts);
+    expect(left.evaluations).toEqual(right.evaluations);
+    expect(left.conflicts).toEqual([{
+      kind: "operation_conflict",
+      targetAssetId: "asset-a",
+      involvedAssetIds: ["asset-a", "asset-b"],
+    }]);
+    expect(reason(left, "asset-b")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
   });
 
   it("case 16: keeps a healthy candidate included beside an unavailable candidate", () => {

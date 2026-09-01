@@ -710,6 +710,7 @@ export const resolveScope = (
   }
 
   const validationDetails = normalizedCandidates.flatMap(validateCandidate);
+  if (validationDetails.length > 0) return invalidRequest(validationDetails);
   const payloadByIdentity = new Map<string, { assetType: AssetType; loadingTier: LoadingTier }>();
   for (const normalized of normalizedCandidates) {
     const candidate = normalized.candidate;
@@ -852,13 +853,13 @@ export const resolveScope = (
           // single included target instead leaves disabled and overridden targets
           // indistinguishable from a malformed one.
           const candidatesForId = stateById.get(String(requiredId)) ?? [];
+          const matchedCandidatesForId = candidatesForId.filter((candidate) => candidate.matched);
           const cause = invalidById.has(String(requiredId)) ? "requirement_invalid" :
             candidatesForId.length === 0 ? "missing_requirement" :
-            candidatesForId.every((candidate) => candidate.reason.kind === "excluded" && candidate.reason.cause === "scope_mismatch")
-              ? "requirement_out_of_scope" :
-            candidatesForId.every((candidate) => candidate.reason.kind === "disabled")
+            matchedCandidatesForId.length === 0 ? "requirement_out_of_scope" :
+            matchedCandidatesForId.every((candidate) => candidate.reason.kind === "disabled")
               ? "requirement_disabled" :
-            candidatesForId.every((candidate) => candidate.reason.kind === "overridden")
+            matchedCandidatesForId.every((candidate) => candidate.reason.kind === "overridden")
               ? "requirement_overridden" : "requirement_invalid";
           failures.push({ id: requiredId, cause });
           continue;
@@ -933,17 +934,21 @@ export const resolveScope = (
 
     const appliedActions: OperationAction[] = [];
     const operationGroups = new Map<CandidateState, OperationAction[]>();
+    const operationFailureReasons = new Map<CandidateState, CandidateReason>();
     for (const issuer of eligibleIssuers) {
       const operation = issuer.candidate.rule.operation;
       if (operation.kind === "add") continue;
-      const targetCandidates = states.filter((state) => state !== issuer && state.matched &&
-        state.candidate.assetId === operation.targetAssetId &&
-        (state.reason.kind === "included" ||
-          (state.reason.kind === "overridden" &&
-            (operation.targetAssetId === issuer.candidate.assetId
-              ? isSameIdOverlayPair(issuer, state)
-              : state.reason.overriddenBy === issuer.candidate.assetId))) &&
-        (operation.targetAssetId !== issuer.candidate.assetId || isSameIdOverlayPair(issuer, state)));
+      const targetCandidates = states.filter((state) => {
+        const targetReason = operationBaseReasons.get(state)!;
+        return state !== issuer && state.matched &&
+          state.candidate.assetId === operation.targetAssetId &&
+          (targetReason.kind === "included" ||
+            (targetReason.kind === "overridden" &&
+              (operation.targetAssetId === issuer.candidate.assetId
+                ? isSameIdOverlayPair(issuer, state)
+                : targetReason.overriddenBy === issuer.candidate.assetId))) &&
+          (operation.targetAssetId !== issuer.candidate.assetId || isSameIdOverlayPair(issuer, state));
+      });
       const targetIsAmbiguous = operation.targetAssetId !== issuer.candidate.assetId && targetCandidates.length !== 1;
       if (targetCandidates.length === 0 || targetIsAmbiguous) {
         const conflict: ResolutionConflict = {
@@ -952,7 +957,7 @@ export const resolveScope = (
           involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
         };
         addConflict(conflict);
-        issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+        operationFailureReasons.set(issuer, resolutionConflictReason(conflict, issuer.rank));
         continue;
       }
       if (targetCandidates.some((target) => target.candidate.rule.mandatory)) {
@@ -961,7 +966,7 @@ export const resolveScope = (
           involvedAssetIds: canonicalIds([issuer.candidate.assetId, ...targetCandidates.map((target) => target.candidate.assetId)]),
         };
         addConflict(conflict);
-        issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+        operationFailureReasons.set(issuer, resolutionConflictReason(conflict, issuer.rank));
         continue;
       }
       if (operation.kind === "override" && (
@@ -975,7 +980,7 @@ export const resolveScope = (
           involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
         };
         addConflict(conflict);
-        issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+        operationFailureReasons.set(issuer, resolutionConflictReason(conflict, issuer.rank));
         continue;
       }
       for (const target of targetCandidates) {
@@ -984,6 +989,8 @@ export const resolveScope = (
         operationGroups.set(target, actions);
       }
     }
+
+    for (const [issuer, failureReason] of operationFailureReasons) issuer.reason = failureReason;
 
     for (const actions of operationGroups.values()) {
       if (actions.length === 0) continue;
@@ -1059,6 +1066,45 @@ export const resolveScope = (
     return undefined;
   };
 
+  const findBlockedOperationIssuers = (
+    actions: readonly OperationAction[],
+  ): readonly CandidateState[] => {
+    const actionsByIssuerId = new Map<string, CandidateState[]>();
+    for (const action of actions) {
+      const issuers = actionsByIssuerId.get(String(action.issuer.candidate.assetId)) ?? [];
+      if (!issuers.includes(action.issuer)) issuers.push(action.issuer);
+      actionsByIssuerId.set(String(action.issuer.candidate.assetId), issuers);
+    }
+    const blockedThisPass = new Set<CandidateState>();
+    for (const action of actions) {
+      if (action.issuer.reason.kind === "unavailable") blockedThisPass.add(action.issuer);
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const action of actions) {
+        const issuer = action.issuer;
+        if (blockedThisPass.has(issuer) || issuer.reason.kind === "included") continue;
+        const blockerId = issuer.reason.kind === "disabled"
+          ? issuer.reason.disabledBy
+          : issuer.reason.kind === "overridden"
+            ? issuer.reason.overriddenBy
+            : undefined;
+        if (blockerId === undefined) {
+          blockedThisPass.add(issuer);
+          changed = true;
+          continue;
+        }
+        const blockerIssuers = actionsByIssuerId.get(String(blockerId)) ?? [];
+        if (blockerIssuers.length === 0 || blockerIssuers.some((blocker) => !blockedThisPass.has(blocker))) {
+          blockedThisPass.add(issuer);
+          changed = true;
+        }
+      }
+    }
+    return [...blockedThisPass];
+  };
+
   for (;;) {
     const appliedActions = resolveOperations();
     applyDependencyClosure();
@@ -1077,9 +1123,8 @@ export const resolveScope = (
       for (const action of operationCycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
       break;
     }
-    const newlyBlocked = [...new Set(appliedActions
-      .filter((action) => action.issuer.reason.kind !== "included")
-      .map((action) => action.issuer))];
+    const newlyBlocked = findBlockedOperationIssuers(appliedActions)
+      .filter((issuer) => !blockedOperationIssuers.has(issuer));
     const blockedCount = blockedOperationIssuers.size;
     for (const issuer of newlyBlocked) blockedOperationIssuers.add(issuer);
     if (newlyBlocked.length === 0 || blockedOperationIssuers.size === blockedCount) break;
