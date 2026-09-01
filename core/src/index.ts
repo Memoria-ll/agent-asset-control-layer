@@ -100,3 +100,9 @@ export type {
   StoredAsset,
   StoredAssetSource,
 } from "./assets/filesystem-store.ts";
+
+export { loadMetadataCatalog } from "./catalog/filesystem-catalog.ts";
+export type {
+  MetadataCatalogLoadResult,
+  MetadataCatalogSource,
+} from "./catalog/filesystem-catalog.ts";

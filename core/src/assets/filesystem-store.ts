@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   mkdir,
   open,
@@ -22,6 +22,9 @@ import {
 } from "@aacl/core-domain";
 import type { AssetId, AssetRevision } from "@aacl/shared";
 import { coreFailure, type CoreFailure } from "@aacl/core-domain";
+import { sha256Hex } from "../internal/digest.ts";
+import { withFilePath } from "../internal/diagnostics.ts";
+import { strictDecode } from "../internal/text.ts";
 
 export type ManagedAssetRoot =
   | { readonly rootId: string; readonly kind: "global" | "personal"; readonly directory: string }
@@ -182,18 +185,6 @@ const validateRoot = (root: unknown): root is ManagedAssetRoot => {
   return (candidate.kind === "global" || candidate.kind === "personal") && !("projectId" in candidate);
 };
 
-const strictDecode = (bytes: Buffer): AssetResult<string> => {
-  try {
-    const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return { ok: true, value };
-  } catch {
-    return {
-      ok: false,
-      failure: failure("invalid_request", "The asset file is not valid UTF-8.", ["document"], "invalid_utf8"),
-    };
-  }
-};
-
 const hasAssetDelimiter = (bytes: Buffer): boolean => {
   const bomOffset = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
   const end = bytes.indexOf(0x0a, bomOffset);
@@ -202,35 +193,13 @@ const hasAssetDelimiter = (bytes: Buffer): boolean => {
   return withoutCr.length === 3 && withoutCr[0] === 0x2d && withoutCr[1] === 0x2d && withoutCr[2] === 0x2d;
 };
 
-const withFilePath = (root: ManagedAssetRoot, relativePath: string, sourceFailure: CoreFailure): CoreFailure => {
-  const details = sourceFailure.details;
-  if (details === undefined) {
-    return coreFailure(sourceFailure.code, sourceFailure.message, [
-      detail(["root", root.rootId, "file", relativePath], "unavailable", sourceFailure.message),
-    ]);
-  }
-  return coreFailure(
-    sourceFailure.code,
-    sourceFailure.message,
-    details.map((item) => {
-      const path = item.path[0] === "document"
-        ? ["root", root.rootId, "file", relativePath, ...item.path.slice(1)]
-        : item.path[0] === "root"
-          ? [...item.path]
-          : ["root", root.rootId, "file", relativePath, ...item.path];
-      return { ...item, path };
-    }),
-  );
-};
-
 const diagnostic = (root: ManagedAssetRoot, relativePath: string | undefined, sourceFailure: CoreFailure): AssetDiagnostic => ({
   source: relativePath === undefined ? rootLocation(root) : fileLocation(root, relativePath),
-  failure: relativePath === undefined ? sourceFailure : withFilePath(root, relativePath, sourceFailure),
+  failure: relativePath === undefined ? sourceFailure : withFilePath(root.rootId, relativePath, sourceFailure),
 });
 
 const makeAssetRevision = (document: string): AssetRevision => {
-  const digest = createHash("sha256").update(Buffer.from(document, "utf8")).digest("hex");
-  return `sha256:${digest}` as AssetRevision;
+  return `sha256:${sha256Hex(document)}` as AssetRevision;
 };
 
 const listDirectoryEntries = async (directory: string): Promise<Dirent[]> => readdir(directory, { withFileTypes: true });

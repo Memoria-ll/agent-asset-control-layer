@@ -203,3 +203,29 @@ local-first Core、およびその Workbench となる VS Code Extension。
   human-readable filesystem なので、手で置かれた名前はそのまま読む。したがって
   「list に出た asset の `relativePath` を、そのまま save に渡し直せるとは限らない」。
   read-modify-write する消費側はこの非対称を前提にすること (#58)
+- **`tsconfig.base.json` に `noUnusedLocals` は無い。** 使われなくなった import を消し忘れても
+  `pnpm -r typecheck` は緑のまま通る。**helper を別ファイルへ切り出す変更は、追加側と削除側を
+  別の完了項目として数え、削除側を `grep -c` で確認する** — 追加だけが着地した状態を gate は
+  捕まえない (#5)
+- **vitest は型を消して実行するので、`exactOptionalPropertyTypes` 違反はテストを緑にしたまま
+  `pnpm -r typecheck` だけを落とす。** テストが通ったことは型が通ったことを意味しない。
+  optional 欄を持つ値は「キーごと置かない」条件付きスプレッドで組み立てる —
+  `{ key: undefined }` も、optional 欄を持つ DTO の丸ごとスプレッドも代入できない (#5)
+- **`Array.isArray` は union から `readonly string[]` を除去しない。** `AssetFieldValue`
+  （`string | readonly string[]`）を絞るのに使うと、false 分岐に配列が残って scalar 側が
+  `string` にならない。`typeof value === "string"` で判別する (#5)
+- **branded ID どうしの変換は `as` 1 回では通らない**（2 つの brand は重ならない）。
+  `asset.id as string as RoleId` のように一度 `string` へ広げる。
+  plain string からの brand 付与（`makeAssetRevision` の `as AssetRevision`）は 1 回で通るので、
+  同じ書き方だと思って書くと落ちる (#5)
+- **`AgentExecutionRecord.providerId` は、指定された Runtime / Model 定義の `providerId` と一致する必要がある。**
+  各 ID の存在確認だけでは、別 Provider に属する実行先の組合せを通してしまう (#66)
+- **専用の execution-target catalog は `readFile` の前に `stat().isFile()` を通す。**
+  `readFile` の errno だけでは FIFO・デバイス・ソケットなどの非通常ファイルを読み取り開始前に分類できない (#66)
+- **`AgentExecutionRecord` を DTO input へ投影するときは `tryParseAgentExecutionDto` で runtime validation する。**
+  `Timestamp` の静的型は実行時の ISO datetime 検証を代替しない (#66)
+- **managed root を読む面は、失敗 detail の `path` をファイル位置へ書き換える** —
+  `core/src/internal/diagnostics.ts` の `withFilePath` が唯一の実装で、asset store と
+  catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
+  「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
+  （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
