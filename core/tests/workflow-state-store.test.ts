@@ -149,6 +149,24 @@ describe("filesystem workflow state store", () => {
     if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
   });
 
+  it("addresses an instance id the default generator would not have produced", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      generateExecutionInstanceId: () => "build-1" as ExecutionInstanceId,
+    });
+    const created = unwrap(await store.create(seed()));
+
+    expect(created.executionInstanceId).toBe("build-1");
+    expect(await readdir(join(directory, "workflows"))).toEqual(["build-1.json"]);
+    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
+
+    const escape = await store.get("review-flow" as WorkflowId, "../escape" as ExecutionInstanceId);
+    expect(escape.ok).toBe(false);
+    if (!escape.ok) expect(escape.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
+  });
+
   it("gives up instead of spinning when the generator keeps returning a taken id", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({

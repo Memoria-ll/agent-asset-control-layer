@@ -94,8 +94,13 @@ const portableSegment = (value: string): boolean => {
   ]).has(upper);
 };
 
-const validExecutionInstanceId = (value: ExecutionInstanceId): boolean =>
-  value.startsWith("instance-") && portableSegment(value);
+/**
+ * The contract guarantees only a non-empty string and leaves the character set to whoever maps
+ * it onto a filename, so this store constrains filesystem portability and nothing else. The
+ * `instance-` shape the default generator produces is that generator's convention, and a host
+ * that injects its own generator is entitled to a different one.
+ */
+const validExecutionInstanceId = (value: ExecutionInstanceId): boolean => portableSegment(value);
 
 const filePathFor = (
   workflowsDirectory: string,

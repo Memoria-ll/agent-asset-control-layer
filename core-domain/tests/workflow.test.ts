@@ -484,6 +484,69 @@ ${JSON.stringify(basicDefinitionBody)}
     }
   });
 
+  it("refuses to advance a state version that has no successor", () => {
+    const value = definition();
+    const state = stateFor(value, Number.MAX_SAFE_INTEGER);
+    const exhausted = applyWorkflowTransition(value, state, {
+      toStageId: "done" as StageId,
+      transitionKind: "advance",
+      expectedStateVersion: Number.MAX_SAFE_INTEGER,
+    }, { availableCapabilityRefs: [], availableArtifactRefs: [] });
+
+    expect(detailCodes(exhausted)).toEqual(["state_version_exhausted"]);
+  });
+
+  it("evaluates a wide definition without rebuilding the availability sets per transition", () => {
+    const count = 5000;
+    const value = definition({
+      entryRoleId: "reviewer",
+      entryStageId: "entry",
+      terminalStageId: "done",
+      stages: [
+        { stageId: "entry", displayName: "Entry", description: "Entry", requiredRoleId: "reviewer", requiredTaskTypeId: "drafting" },
+        ...Array.from({ length: count }, (_, index) => ({
+          stageId: `stage-${index}`,
+          displayName: `Stage ${index}`,
+          description: `Stage number ${index}`,
+        })),
+        { stageId: "done", displayName: "Done", description: "Done" },
+      ],
+      transitions: [
+        ...Array.from({ length: count }, (_, index) => ({
+          fromStageId: "entry", toStageId: `stage-${index}`, transitionKind: "advance",
+        })),
+        ...Array.from({ length: count }, (_, index) => ({
+          fromStageId: `stage-${index}`, toStageId: "done", transitionKind: "advance",
+        })),
+      ],
+    });
+    const state = parseWorkflowStateDto({
+      workflowId: value.workflowId,
+      executionInstanceId: "instance-1",
+      stateVersion: 0,
+      currentStageId: "entry",
+      entryRoleId: value.entryRoleId,
+      currentRoleId: value.entryRoleId,
+      linkedAgentExecutionIds: [],
+      linkedSnapshotIds: [],
+      updatedAt: "2026-08-31T12:00:00Z",
+    });
+    const refs = Array.from({ length: count }, (_, index) => `ref-${index}`);
+
+    // Rebuilding the sets per transition costs 3.0s here against 9ms once they are hoisted,
+    // so the budget separates the two by well over a hundredfold in either direction.
+    const started = Date.now();
+    const candidates = possibleWorkflowTransitions(value, state, {
+      availableCapabilityRefs: refs,
+      availableArtifactRefs: refs,
+    });
+    const elapsed = Date.now() - started;
+
+    expect(candidates.ok).toBe(true);
+    if (candidates.ok) expect(candidates.value).toHaveLength(count);
+    expect(elapsed).toBeLessThan(1000);
+  });
+
   it("rejects stale, undeclared, blocked, and mismatched state transitions", () => {
     const value = definition({
       ...basicDefinitionBody,

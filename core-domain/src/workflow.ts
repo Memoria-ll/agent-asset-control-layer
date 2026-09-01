@@ -599,12 +599,30 @@ const getCurrentStage = (
     ? stages.get(state.currentStageId)
     : undefined;
 
+/**
+ * What the caller has on hand, indexed once per evaluation.
+ *
+ * The requirement checks run per outgoing transition while the availability lists belong to
+ * the evaluation as a whole, so building the sets inside the per-transition check would cost
+ * O(transitions x available refs) — measured at 3.0s for 5000 of each.
+ */
+type AvailableRefs = {
+  readonly capabilities: ReadonlySet<string>;
+  readonly artifacts: ReadonlySet<string>;
+};
+
+const availableRefs = (input: WorkflowEvaluationInput): AvailableRefs => ({
+  capabilities: new Set(input.availableCapabilityRefs),
+  artifacts: new Set(input.availableArtifactRefs),
+});
+
 const missingRequirements = (
   target: WorkflowStageDto,
   transition: WorkflowTransitionDto,
   input: WorkflowEvaluationInput,
   state: WorkflowStateDto,
   definition: ResolvedWorkflowDefinition,
+  available: AvailableRefs,
 ): string[] => {
   const reasons: string[] = [];
   if (target.requiredRoleId !== undefined && input.roleId !== target.requiredRoleId) {
@@ -614,7 +632,7 @@ const missingRequirements = (
     reasons.push(`Required task type "${target.requiredTaskTypeId}" is not available.`);
   }
 
-  const capabilities = new Set(input.availableCapabilityRefs);
+  const capabilities = available.capabilities;
   const seenCapabilities = new Set<string>();
   for (const ref of [...(target.requiredCapabilityRefs ?? []), ...(transition.requiredCapabilityRefs ?? [])]) {
     if (seenCapabilities.has(ref)) continue;
@@ -622,7 +640,7 @@ const missingRequirements = (
     if (!capabilities.has(ref)) reasons.push(`Required capability "${ref}" is not available.`);
   }
 
-  const artifacts = new Set(input.availableArtifactRefs);
+  const artifacts = available.artifacts;
   const seenArtifacts = new Set<string>();
   for (const ref of [...(target.requiredArtifactRefs ?? []), ...(transition.requiredArtifactRefs ?? [])]) {
     if (seenArtifacts.has(ref)) continue;
@@ -649,6 +667,7 @@ const evaluateTransitions = (
   const currentStage = getCurrentStage(definition, state, stages);
   if (currentStage === undefined) return stateMismatch();
 
+  const available = availableRefs(input);
   const candidates: TransitionCandidateDto[] = [];
   for (const transition of definition.transitions) {
     if (transition.fromStageId !== currentStage.stageId) continue;
@@ -658,7 +677,7 @@ const evaluateTransitions = (
       ...(target.requiredRoleId !== undefined ? { requiredRoleId: target.requiredRoleId } : {}),
       ...(target.requiredTaskTypeId !== undefined ? { requiredTaskTypeId: target.requiredTaskTypeId } : {}),
     };
-    const reasons = missingRequirements(target, transition, input, state, definition);
+    const reasons = missingRequirements(target, transition, input, state, definition, available);
     const base = {
       toStageId: transition.toStageId,
       transitionKind: transition.transitionKind,
@@ -700,6 +719,17 @@ const transitionBlocked = (reasons: readonly string[]): AssetResult<never> => wo
 );
 
 /**
+ * `WorkflowStateVersion` admits every safe integer, so the largest one has no successor the
+ * contract can carry. Incrementing it would hand the caller a mutation that
+ * `tryParseWorkflowStateDto` rejects, which is a failure this function owes rather than one
+ * the persistence layer discovers.
+ */
+const stateVersionExhausted = (): AssetResult<never> => workflowFailure(
+  "The workflow state version cannot be advanced any further.",
+  [detail(["workflowState", "stateVersion"], "state_version_exhausted", "The workflow state version cannot be advanced any further.")],
+);
+
+/**
  * Re-evaluate and apply only the transition explicitly selected by the caller.
  *
  * `selection` carries `expectedStateVersion` as its own field rather than being a
@@ -721,6 +751,7 @@ export const applyWorkflowTransition = (
     return stateMismatch();
   }
   if (resolvedSelection.expectedStateVersion !== state.stateVersion) return transitionConflict();
+  if (state.stateVersion >= Number.MAX_SAFE_INTEGER) return stateVersionExhausted();
 
   const candidates = evaluateTransitions(definition, state, evaluation, stages);
   if (!candidates.ok) return candidates;
