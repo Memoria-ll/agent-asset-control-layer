@@ -336,7 +336,16 @@ const validateDefinitionSemantics = (
   }
   if (details.length > 0) return workflowFailure("The workflow definition is invalid.", details);
 
-  const reachableFromEntry = reachableStages(definition.entryStageId, definition.transitions);
+  // Reachability is computed over the edges a run can actually take. An outgoing edge from the
+  // terminal stage is permanently blocked unless it is a retry or a return, so counting it makes
+  // the validator accept a definition whose stage no run can enter — and, through the reversed
+  // list below, one that no run can leave for the terminal stage either.
+  const traversableTransitions = definition.transitions.filter((transition) =>
+    transition.fromStageId !== definition.terminalStageId
+    || transition.transitionKind === "retry"
+    || transition.transitionKind === "return");
+
+  const reachableFromEntry = reachableStages(definition.entryStageId, traversableTransitions);
   const unreachableStages = definition.stages.filter((stage) => !reachableFromEntry.has(stage.stageId));
   if (unreachableStages.length > 0) {
     return workflowFailure("The workflow definition is invalid.", unreachableStages.map((stage) => detail(
@@ -346,7 +355,7 @@ const validateDefinitionSemantics = (
     )));
   }
 
-  const reverseTransitions = definition.transitions.map((transition) => ({
+  const reverseTransitions = traversableTransitions.map((transition) => ({
     fromStageId: transition.toStageId,
     toStageId: transition.fromStageId,
   }));
@@ -590,12 +599,21 @@ const stateMismatch = (): AssetResult<never> => workflowFailure(
 const stageIndex = (definition: ResolvedWorkflowDefinition): Map<StageId, WorkflowStageDto> =>
   new Map(definition.stages.map((stage) => [stage.stageId, stage]));
 
+/**
+ * The stage a state is sitting on, or undefined when the state does not belong to this
+ * definition.
+ *
+ * `entryRoleId` is part of belonging, not decoration: initialization copies it off the
+ * definition, so a state carrying a different one was never produced from this definition.
+ * Admitting it lets every later mutation carry the false role forward, since a transition
+ * copies the field rather than re-deriving it.
+ */
 const getCurrentStage = (
   definition: ResolvedWorkflowDefinition,
   state: WorkflowStateDto,
   stages: Map<StageId, WorkflowStageDto>,
 ): WorkflowStageDto | undefined =>
-  state.workflowId === definition.workflowId
+  state.workflowId === definition.workflowId && state.entryRoleId === definition.entryRoleId
     ? stages.get(state.currentStageId)
     : undefined;
 

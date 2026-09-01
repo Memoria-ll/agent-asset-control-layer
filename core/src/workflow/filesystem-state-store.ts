@@ -26,6 +26,7 @@ import {
 } from "@aacl/core-domain";
 import { writeAtomically, type Rename } from "../internal/atomic-write.ts";
 import { portableFileName } from "../internal/portable-name.ts";
+import { strictDecode } from "../internal/text.ts";
 
 export type WorkflowStateStoreOptions = {
   readonly stateDirectory: string;
@@ -254,13 +255,19 @@ export const createWorkflowStateStore = async (
     if (targetInfo.isSymbolicLink() || !targetInfo.isFile()) {
       return { ok: false, failure: stateFailure("invalid_request", "The workflow state path is not a regular file.", ["workflowState", "executionInstanceId"], "state_file_not_a_file") };
     }
-    let document: string;
+    let bytes: Buffer;
     try {
-      document = await readFile(targetPath, "utf8");
+      bytes = await readFile(targetPath);
     } catch {
       return { ok: false, failure: stateFailure("unavailable", "The workflow state file could not be read.", ["workflowState", "executionInstanceId"], "unavailable") };
     }
-    const parsed = parseState(document);
+    // Fatal decoding, as every other reader of a managed file does. A lenient decode turns a
+    // malformed byte into U+FFFD, which still parses and still validates, so `get` would return
+    // an identifier that differs from the bytes on disk and the next write would make that
+    // substitution permanent.
+    const decoded = strictDecode(bytes, ["workflowState"], "workflow state");
+    if (!decoded.ok) return decoded;
+    const parsed = parseState(decoded.value);
     if (!parsed.ok) return parsed;
     if (parsed.value.executionInstanceId !== executionInstanceId) return instanceMismatch();
     if (parsed.value.workflowId !== workflowId) return workflowMismatch();

@@ -493,6 +493,40 @@ ${JSON.stringify(basicDefinitionBody)}
     }
   });
 
+  it("refuses a state whose entry role is not the definition's", () => {
+    const value = definition();
+    const foreign = parseWorkflowStateDto({ ...stateFor(value), entryRoleId: "author" });
+    const input = { availableCapabilityRefs: [], availableArtifactRefs: [] };
+
+    expect(detailCodes(possibleWorkflowTransitions(value, foreign, input)))
+      .toEqual(["state_definition_mismatch"]);
+    expect(detailCodes(applyWorkflowTransition(value, foreign, {
+      toStageId: "done" as StageId,
+      transitionKind: "advance",
+      expectedStateVersion: foreign.stateVersion,
+    }, input))).toEqual(["state_definition_mismatch"]);
+  });
+
+  it("rejects a stage reachable only through an edge the terminal stage blocks", () => {
+    // entry is also terminal, so the only edge into "extra" is an advance out of the terminal
+    // stage — which every run refuses. "extra" is therefore unreachable in practice.
+    const blockedOnly = parseWorkflowDefinitionAsset(workflowAsset({
+      entryRoleId: "reviewer",
+      entryStageId: "draft",
+      terminalStageId: "draft",
+      stages: [
+        { stageId: "draft", displayName: "Draft", description: "Draft", requiredRoleId: "reviewer", requiredTaskTypeId: "drafting" },
+        { stageId: "extra", displayName: "Extra", description: "Extra" },
+      ],
+      transitions: [
+        { fromStageId: "draft", toStageId: "extra", transitionKind: "advance" },
+        { fromStageId: "extra", toStageId: "draft", transitionKind: "return" },
+      ],
+    }), catalog());
+
+    expect(detailCodes(blockedOnly)).toEqual(["unreachable_stage"]);
+  });
+
   it("refuses to advance a state version that has no successor", () => {
     const value = definition();
     const state = stateFor(value, Number.MAX_SAFE_INTEGER);

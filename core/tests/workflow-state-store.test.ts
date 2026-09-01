@@ -189,6 +189,30 @@ describe("filesystem workflow state store", () => {
     if (!escape.ok) expect(escape.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
   });
 
+  it("refuses a state file holding malformed UTF-8 instead of substituting it", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId,
+    });
+    const created = unwrap(await store.create(seed()));
+    const target = join(directory, "workflows", "instance-one.json");
+
+    // One byte inside an identifier becomes a lone 0x80 continuation, which no UTF-8 sequence
+    // can start. JSON structure and file length are untouched, so a lenient decode substitutes
+    // U+FFFD, still parses, still validates, and reports the corruption as content.
+    const corrupted = await readFile(target);
+    const at = corrupted.indexOf(Buffer.from("agent-1", "utf8")) + "agent-".length;
+    expect(at).toBeGreaterThan("agent-".length - 1);
+    corrupted[at] = 0x80;
+    await writeFile(target, corrupted);
+
+    const read = await store.get(created.workflowId, created.executionInstanceId);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_utf8");
+  });
+
   it("gives up instead of spinning when the generator keeps returning a taken id", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({
