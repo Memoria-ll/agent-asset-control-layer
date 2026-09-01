@@ -245,14 +245,17 @@ local-first Core、およびその Workbench となる VS Code Extension。
   target にはそれぞれ適用する。dependency closure は merge 後・dependency 前の状態から
   operation 後に再評価し、operation issuer の cycle は conflict として残す (#71)。operation
   discovery は pre-operation reason を変更せず、unavailable issuer を除いた残りを安定するまで
-  再評価する。依存失敗の分類は scope mismatch の候補ではなく matched candidate を先に判定する。
+  再評価する。operation 後に eligible へ戻った issuer も discovery 対象へ加え、同一パスで
+  複数の operation cycle をすべて conflict として残す。依存失敗の分類は scope mismatch の
+  候補ではなく matched candidate を先に判定する。
 - **mandatory candidate の dependency failure が cycle と別の failure を同時に含む場合は、両方の conflict を残す。**
   primary cause の選択で `dependency_cycle` を隠さない (#71)
 - **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
   `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
   意味が異なる candidate を入力順へ委ねない (#71)
-- **scope resolver は candidate validation の detail を返してから identity map を構築する。**
-  構造不正な runtime snapshot の要素を resolver 内で dereference しない。
+- **scope resolver は candidate の構造を検証してから directory exclusion と identity map を行う。**
+  構造不正な runtime snapshot の要素を resolver 内で dereference せず、同じ operation tie に
+  参加する全 issuer を conflict evaluation と一致させる。
 
 ### Invariants / identity keys
 

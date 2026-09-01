@@ -699,8 +699,14 @@ export const resolveScope = (
 
   const invalidStates: CandidateState[] = [];
   const normalizedCandidates: NormalizedCandidate[] = [];
+  const validationDetails: CoreErrorDetail[] = [];
   for (const rawCandidate of input.snapshot.candidates) {
     const candidate = rawCandidate as AssetCandidate;
+    const structuralDetails = validateCandidate({ candidate });
+    if (structuralDetails.length > 0) {
+      validationDetails.push(...structuralDetails);
+      continue;
+    }
     const normalized = normalizeCandidateDirectory(candidate);
     if (normalized.diagnostics !== undefined) {
       invalidStates.push({ candidate, matched: false, reason: invalidDirectoryReason(normalized.diagnostics) });
@@ -709,7 +715,6 @@ export const resolveScope = (
     }
   }
 
-  const validationDetails = normalizedCandidates.flatMap(validateCandidate);
   if (validationDetails.length > 0) return invalidRequest(validationDetails);
   const payloadByIdentity = new Map<string, { assetType: AssetType; loadingTier: LoadingTier }>();
   for (const normalized of normalizedCandidates) {
@@ -922,12 +927,19 @@ export const resolveScope = (
   const operationBaseConflicts = new Map(conflicts);
   type OperationAction = { issuer: CandidateState; target: CandidateState; kind: "override" | "disable" };
   const blockedOperationIssuers = new Set<CandidateState>();
-  const resolveOperations = (): readonly OperationAction[] => {
+  const revivedOperationIssuers = new Set<CandidateState>();
+  const resolveOperations = (): {
+    readonly appliedActions: readonly OperationAction[];
+    readonly eligibleIssuers: ReadonlySet<CandidateState>;
+  } => {
     for (const state of states) state.reason = operationBaseReasons.get(state)!;
     conflicts.clear();
     for (const [key, conflict] of operationBaseConflicts) conflicts.set(key, conflict);
     applyDependencyClosure();
-    const eligibleIssuers = new Set(states.filter((state) => state.reason.kind === "included" && !blockedOperationIssuers.has(state)));
+    const eligibleIssuers = new Set(states.filter((state) =>
+      state.candidate.rule.operation.kind !== "add" &&
+      !blockedOperationIssuers.has(state) &&
+      (state.reason.kind === "included" || revivedOperationIssuers.has(state))));
     for (const state of states) state.reason = operationBaseReasons.get(state)!;
     conflicts.clear();
     for (const [key, conflict] of operationBaseConflicts) conflicts.set(key, conflict);
@@ -1005,7 +1017,7 @@ export const resolveScope = (
           involvedAssetIds: canonicalIds([target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]),
         };
         addConflict(conflict);
-        for (const action of best) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+        for (const action of actions) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
         continue;
       }
       const winner = allDisable
@@ -1030,7 +1042,7 @@ export const resolveScope = (
         winnerRank: winner.issuer.rank!,
       };
     }
-    return appliedActions;
+    return { appliedActions, eligibleIssuers };
   };
 
   const findOperationCycle = (
@@ -1066,6 +1078,81 @@ export const resolveScope = (
     return undefined;
   };
 
+  const findOperationCycles = (
+    actions: readonly OperationAction[],
+  ): readonly OperationAction[][] => {
+    const outgoing = new Map<CandidateState, OperationAction[]>();
+    const graphStates = new Set<CandidateState>();
+    const compareActions = (left: OperationAction, right: OperationAction): number => {
+      const issuerOrder = compareCandidatesForOutput(left.issuer, right.issuer);
+      if (issuerOrder !== 0) return issuerOrder;
+      const targetOrder = compareCandidatesForOutput(left.target, right.target);
+      if (targetOrder !== 0) return targetOrder;
+      return codeUnitCompare(left.kind, right.kind);
+    };
+    for (const action of actions) {
+      const issuerActions = outgoing.get(action.issuer) ?? [];
+      issuerActions.push(action);
+      outgoing.set(action.issuer, issuerActions);
+      graphStates.add(action.issuer);
+      graphStates.add(action.target);
+    }
+
+    let nextIndex = 0;
+    const indices = new Map<CandidateState, number>();
+    const lowLinks = new Map<CandidateState, number>();
+    const stack: CandidateState[] = [];
+    const onStack = new Set<CandidateState>();
+    const components: CandidateState[][] = [];
+    const strongConnect = (state: CandidateState): void => {
+      indices.set(state, nextIndex);
+      lowLinks.set(state, nextIndex);
+      nextIndex += 1;
+      stack.push(state);
+      onStack.add(state);
+      for (const action of (outgoing.get(state) ?? []).slice().sort(compareActions)) {
+        const targetIndex = indices.get(action.target);
+        if (targetIndex === undefined) {
+          strongConnect(action.target);
+          lowLinks.set(state, Math.min(lowLinks.get(state)!, lowLinks.get(action.target)!));
+        } else if (onStack.has(action.target)) {
+          lowLinks.set(state, Math.min(lowLinks.get(state)!, targetIndex));
+        }
+      }
+      if (lowLinks.get(state) !== indices.get(state)) return;
+      const component: CandidateState[] = [];
+      let member: CandidateState | undefined;
+      do {
+        member = stack.pop();
+        if (member === undefined) throw new Error("Operation cycle stack underflow.");
+        onStack.delete(member);
+        component.push(member);
+      } while (member !== state);
+      components.push(component);
+    };
+
+    for (const state of [...graphStates].sort(compareCandidatesForOutput)) {
+      if (!indices.has(state)) strongConnect(state);
+    }
+
+    const cycles: OperationAction[][] = [];
+    for (const component of components) {
+      const members = new Set(component);
+      const componentActions = actions
+        .filter((action) => members.has(action.issuer) && members.has(action.target))
+        .slice()
+        .sort(compareActions);
+      const hasCycle = component.length > 1 || componentActions.some((action) => action.issuer === action.target);
+      if (!hasCycle) continue;
+      const cycle = findOperationCycle(componentActions);
+      if (cycle !== undefined) cycles.push([...cycle]);
+    }
+    return cycles.sort((left, right) => codeUnitCompare(
+      canonicalIds(left.flatMap((action) => [action.issuer.candidate.assetId, action.target.candidate.assetId])).join("\u0000"),
+      canonicalIds(right.flatMap((action) => [action.issuer.candidate.assetId, action.target.candidate.assetId])).join("\u0000"),
+    ));
+  };
+
   const findBlockedOperationIssuers = (
     actions: readonly OperationAction[],
   ): readonly CandidateState[] => {
@@ -1075,29 +1162,24 @@ export const resolveScope = (
       if (!issuers.includes(action.issuer)) issuers.push(action.issuer);
       actionsByIssuerId.set(String(action.issuer.candidate.assetId), issuers);
     }
-    const blockedThisPass = new Set<CandidateState>();
-    for (const action of actions) {
-      if (action.issuer.reason.kind === "unavailable") blockedThisPass.add(action.issuer);
-    }
+    const blockedThisPass = new Set<CandidateState>(
+      actions.filter((action) => action.issuer.reason.kind !== "included").map((action) => action.issuer),
+    );
     let changed = true;
     while (changed) {
       changed = false;
       for (const action of actions) {
         const issuer = action.issuer;
-        if (blockedThisPass.has(issuer) || issuer.reason.kind === "included") continue;
+        if (!blockedThisPass.has(issuer)) continue;
         const blockerId = issuer.reason.kind === "disabled"
           ? issuer.reason.disabledBy
           : issuer.reason.kind === "overridden"
             ? issuer.reason.overriddenBy
             : undefined;
-        if (blockerId === undefined) {
-          blockedThisPass.add(issuer);
-          changed = true;
-          continue;
-        }
+        if (blockerId === undefined) continue;
         const blockerIssuers = actionsByIssuerId.get(String(blockerId)) ?? [];
-        if (blockerIssuers.length === 0 || blockerIssuers.some((blocker) => !blockedThisPass.has(blocker))) {
-          blockedThisPass.add(issuer);
+        if (blockerIssuers.length > 0 && blockerIssuers.every((blocker) => blockedThisPass.has(blocker))) {
+          blockedThisPass.delete(issuer);
           changed = true;
         }
       }
@@ -1106,28 +1188,37 @@ export const resolveScope = (
   };
 
   for (;;) {
-    const appliedActions = resolveOperations();
+    const { appliedActions, eligibleIssuers } = resolveOperations();
     applyDependencyClosure();
-    const operationCycle = findOperationCycle(appliedActions);
-    if (operationCycle !== undefined) {
-      const cycleAssetIds = canonicalIds(operationCycle.flatMap((action) => [
-        action.issuer.candidate.assetId,
-        action.target.candidate.assetId,
-      ]));
-      const conflict: ResolutionConflict = {
-        kind: "operation_conflict",
-        targetAssetId: cycleAssetIds[0]!,
-        involvedAssetIds: cycleAssetIds,
-      };
-      addConflict(conflict);
-      for (const action of operationCycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+    const operationCycles = findOperationCycles(appliedActions);
+    if (operationCycles.length > 0) {
+      for (const operationCycle of operationCycles) {
+        const cycleAssetIds = canonicalIds(operationCycle.flatMap((action) => [
+          action.issuer.candidate.assetId,
+          action.target.candidate.assetId,
+        ]));
+        const conflict: ResolutionConflict = {
+          kind: "operation_conflict",
+          targetAssetId: cycleAssetIds[0]!,
+          involvedAssetIds: cycleAssetIds,
+        };
+        addConflict(conflict);
+        for (const action of operationCycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+      }
       break;
     }
     const newlyBlocked = findBlockedOperationIssuers(appliedActions)
       .filter((issuer) => !blockedOperationIssuers.has(issuer));
-    const blockedCount = blockedOperationIssuers.size;
+    const newlyRevivedIssuers = states.filter((state) =>
+      state.reason.kind === "included" &&
+      state.candidate.rule.operation.kind !== "add" &&
+      !eligibleIssuers.has(state) &&
+      !blockedOperationIssuers.has(state) &&
+      !revivedOperationIssuers.has(state));
+    const hasRevivedEligibleIssuer = newlyRevivedIssuers.length > 0;
+    for (const issuer of newlyRevivedIssuers) revivedOperationIssuers.add(issuer);
     for (const issuer of newlyBlocked) blockedOperationIssuers.add(issuer);
-    if (newlyBlocked.length === 0 || blockedOperationIssuers.size === blockedCount) break;
+    if (newlyBlocked.length === 0 && !hasRevivedEligibleIssuer) break;
   }
 
   const allStates = [...states, ...invalidStates].sort(compareCandidatesForOutput);

@@ -161,6 +161,17 @@ describe("scope resolver", () => {
     }
   });
 
+  it("case 0-d: validates structure before excluding an invalid-directory candidate", () => {
+    const malformed = { rule: { selectors: { directory: "bad" } } } as unknown as AssetCandidate;
+    const result = resolve({}, [malformed]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.some((item) => item.path.includes("assetId"))).toBe(true);
+    }
+  });
+
   it("case 0-b: keeps different global meanings conflicted when every axis is unknown", () => {
     const assetRole = candidateFromDocument(
       assetDocument("asset-role", "scope.role: [reviewer]\n"),
@@ -610,6 +621,28 @@ scope.project: [acme]
     expect(result.evaluations.find((item) => item.candidate.source.layer === "global")?.reason.kind).toBe("overridden");
   });
 
+  it("case 14-g: re-runs operation discovery for a dependent revived by an overlay", () => {
+    const base = candidateFromDocument(assetDocument("asset-base"), { ...add(), mergeGroup: "g" }, {
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("asset-base"), {
+      ...add(),
+      mergeGroup: "g",
+      operation: { kind: "override", targetAssetId: "asset-base" as AssetId },
+    }, { source: { layer: "project", sourceId: "project-source" } });
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-base]\n"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const result = resultValue({}, [dependent, base, target, overlay]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(reason(result, "asset-dependent").kind).toBe("included");
+    expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-dependent" });
+    expect(result.evaluations.find((item) => item.candidate.source.layer === "global" && item.candidate.assetId === "asset-base")?.reason.kind).toBe("overridden");
+  });
+
   it("case 15-a: fails a dependency whose target is outside the requested scope", () => {
     const result = resultValue({ roleId: "reviewer" }, [
       candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-target]\n"), add()),
@@ -694,6 +727,47 @@ scope.project: [acme]
     expect(result.conflicts).toEqual([{ kind: "operation_conflict", targetAssetId: "asset-a", involvedAssetIds: ["asset-a", "asset-b"] }]);
     expect(reason(result, "asset-a")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
     expect(reason(result, "asset-b")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+  });
+
+  it("case 15-b-5: keeps an operation chain deterministic while recomputing blocked issuers", () => {
+    const makeCandidates = () => ({
+      a: candidateFromDocument(assetDocument("asset-a"), add()),
+      b: candidateFromDocument(assetDocument("asset-b"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId } }),
+      c: candidateFromDocument(assetDocument("asset-c"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId } }),
+      d: candidateFromDocument(assetDocument("asset-d"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-c" as AssetId } }),
+    });
+    const first = makeCandidates();
+    const second = makeCandidates();
+    const left = resultValue({}, [first.b, first.c, first.d, first.a]);
+    const right = resultValue({}, [second.d, second.c, second.b, second.a]);
+
+    expect(left.evaluations).toEqual(right.evaluations);
+    expect(left.conflicts).toEqual(right.conflicts);
+    expect(reason(left, "asset-a")).toEqual({ kind: "disabled", disabledBy: "asset-b" });
+    expect(reason(left, "asset-b").kind).toBe("included");
+    expect(reason(left, "asset-c")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
+  });
+
+  it("case 15-b-6: reports every disjoint operation cycle", () => {
+    const makeCandidates = () => ({
+      a: candidateFromDocument(assetDocument("asset-a"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId } }),
+      b: candidateFromDocument(assetDocument("asset-b"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId } }),
+      c: candidateFromDocument(assetDocument("asset-c"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-d" as AssetId } }),
+      d: candidateFromDocument(assetDocument("asset-d"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-c" as AssetId } }),
+    });
+    const first = makeCandidates();
+    const second = makeCandidates();
+    const left = resultValue({}, [first.c, first.d, first.a, first.b]);
+    const right = resultValue({}, [second.b, second.a, second.d, second.c]);
+
+    expect(left.conflicts).toEqual(right.conflicts);
+    expect(left.conflicts).toEqual([
+      { kind: "operation_conflict", targetAssetId: "asset-a", involvedAssetIds: ["asset-a", "asset-b"] },
+      { kind: "operation_conflict", targetAssetId: "asset-c", involvedAssetIds: ["asset-c", "asset-d"] },
+    ]);
+    for (const assetId of ["asset-a", "asset-b", "asset-c", "asset-d"]) {
+      expect(reason(left, assetId)).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
   });
 
   it("case 15-c: does not redirect a dependency from an overridden loser to its winner", () => {
@@ -902,6 +976,31 @@ scope.project: [acme]
       involvedAssetIds: ["asset-high", "asset-low", "asset-target"],
     }]);
     expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-high" });
+    expect(reason(result, "asset-low")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+  });
+
+  it("case 17.5 operation tie: marks a lower-ranked contrary issuer conflicted", () => {
+    const target = candidateFromDocument(assetDocument("asset-target"), exclusive("g"));
+    const override = (assetId: string, explicitPriority: number): AssetCandidate => candidateFromDocument(assetDocument(assetId), {
+      ...add(),
+      explicitPriority,
+      operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+      mergeGroup: "g",
+    });
+    const lowDisable = candidateFromDocument(assetDocument("asset-low"), {
+      ...add(),
+      explicitPriority: 1,
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const result = resultValue({}, [target, lowDisable, override("asset-high-a", 10), override("asset-high-b", 10)]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{
+      kind: "operation_conflict",
+      targetAssetId: "asset-target",
+      involvedAssetIds: ["asset-high-a", "asset-high-b", "asset-low", "asset-target"],
+    }]);
+    expect(reason(result, "asset-target").kind).toBe("included");
     expect(reason(result, "asset-low")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
   });
 
