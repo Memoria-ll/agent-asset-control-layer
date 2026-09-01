@@ -966,6 +966,15 @@ export const resolveScope = (
         ? canonicalIds(component.map((state) => state.candidate.assetId))
         : undefined;
       const componentStates = new Set(component);
+      const componentHasNonCycleFailure = component.some((state) => {
+        const node = dependencyNodes.get(state)!;
+        return node.directFailures.some((failure) => failure.cause !== "requirement_cycle") ||
+          node.edges.some((edge) => {
+            if (componentStates.has(edge.target)) return false;
+            const outcome = outcomes.get(edge.target);
+            return outcome !== undefined && !outcome.ok && outcome.nonCycleFailedRequirements.length > 0;
+          });
+      });
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
         const failures = [...node.directFailures];
@@ -977,7 +986,9 @@ export const resolveScope = (
         let cycleIds = componentIds;
         if (componentIds !== undefined) {
           for (const edge of node.edges) {
-            if (componentStates.has(edge.target)) failures.push({ id: edge.requiredId, cause: "requirement_cycle" });
+            if (!componentStates.has(edge.target)) continue;
+            failures.push({ id: edge.requiredId, cause: "requirement_cycle" });
+            if (componentHasNonCycleFailure) nonCycleFailedRequirements.push(edge.requiredId);
           }
         }
         for (const edge of node.edges) {
@@ -1049,6 +1060,7 @@ export const resolveScope = (
   const resolveOperations = (): {
     readonly appliedActions: readonly OperationAction[];
     readonly eligibleIssuers: ReadonlySet<CandidateState>;
+    readonly operationFailures: ReadonlyMap<CandidateState, OperationFailure>;
   } => {
     for (const state of states) state.reason = operationBaseReasons.get(state)!;
     conflicts.clear();
@@ -1155,12 +1167,17 @@ export const resolveScope = (
         winnerRank: winner.issuer.rank!,
       };
     }
+    return { appliedActions, eligibleIssuers, operationFailures };
+  };
+
+  const applyOperationFailures = (
+    operationFailures: ReadonlyMap<CandidateState, OperationFailure>,
+  ): void => {
     for (const [issuer, failure] of operationFailures) {
       if (issuer.reason.kind !== "included") continue;
       issuer.reason = failure.reason;
       addConflict(failure.conflict);
     }
-    return { appliedActions, eligibleIssuers };
   };
 
   const findOperationCycle = (
@@ -1313,8 +1330,9 @@ export const resolveScope = (
   };
 
   for (;;) {
-    const { appliedActions, eligibleIssuers } = resolveOperations();
+    const { appliedActions, eligibleIssuers, operationFailures } = resolveOperations();
     applyDependencyClosure();
+    applyOperationFailures(operationFailures);
     const operationCycles = findOperationCycles(appliedActions);
     if (operationCycles.length > 0) {
       const cycleConflicts = operationCycles.map((operationCycle) => {
@@ -1334,8 +1352,9 @@ export const resolveScope = (
       for (const { cycle } of cycleConflicts) {
         for (const action of cycle) blockedOperationIssuers.add(action.issuer);
       }
-      resolveOperations();
+      const { operationFailures: finalOperationFailures } = resolveOperations();
       applyDependencyClosure();
+      applyOperationFailures(finalOperationFailures);
       for (const { cycle, conflict } of cycleConflicts) {
         addConflict(conflict);
         for (const action of cycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);

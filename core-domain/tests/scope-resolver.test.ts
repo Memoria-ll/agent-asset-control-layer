@@ -914,7 +914,28 @@ scope.project: [acme]
     expect(reason(left, "asset-d")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
   });
 
-  it("case 15-g: traverses a long dependency chain without recursion", () => {
+  it("case 15-g: drops an operation failure when dependency closure disables its issuer", () => {
+    const issuer = candidateFromDocument(assetDocument("asset-issuer", "requires: [asset-target]\n"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-missing" as AssetId },
+    });
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const disable = candidateFromDocument(assetDocument("asset-disable"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const result = resultValue({}, [issuer, target, disable]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(reason(result, "asset-issuer")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_disabled",
+      failedRequirements: ["asset-target"],
+    });
+    expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-disable" });
+  });
+
+  it("case 15-h: traverses a long dependency chain without recursion", () => {
     const template = candidateFromDocument(assetDocument("asset-template"), add());
     const count = 10_000;
     const candidates = Array.from({ length: count }, (_, index) => ({
@@ -985,6 +1006,24 @@ scope.project: [acme]
       availability: "unavailable",
       cause: "requirement_cycle",
       failedRequirements: ["asset-a", "asset-z"],
+    });
+  });
+
+  it("case 17-d: propagates a non-cycle failure across a dependency cycle", () => {
+    const mandatory = candidateFromDocument(assetDocument("asset-a", "requires: [asset-b]\n"), { ...add(), mandatory: true });
+    const cycleMember = candidateFromDocument(assetDocument("asset-b", "requires: [asset-a, asset-missing]\n"), add());
+    const result = resultValue({}, [mandatory, cycleMember]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "dependency_cycle", involvedAssetIds: ["asset-a", "asset-b"] },
+      { kind: "dependency_failure", failedRequirement: "asset-b", involvedAssetIds: ["asset-a", "asset-b"] },
+    ]));
+    expect(reason(result, "asset-a")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_cycle",
+      failedRequirements: ["asset-b"],
     });
   });
 
