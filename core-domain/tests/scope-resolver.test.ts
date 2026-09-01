@@ -865,7 +865,7 @@ scope.project: [acme]
     });
   });
 
-  it("case 15-e: keeps operation discovery independent of candidate order", () => {
+  it("case 15-e: drops a failed operation when its issuer is disabled", () => {
     const target = candidateFromDocument(assetDocument("asset-a"), add());
     const invalidOverride = candidateFromDocument(assetDocument("asset-b"), {
       ...add(), operation: { kind: "override", targetAssetId: "asset-a" as AssetId },
@@ -878,11 +878,8 @@ scope.project: [acme]
 
     expect(left.conflicts).toEqual(right.conflicts);
     expect(left.evaluations).toEqual(right.evaluations);
-    expect(left.conflicts).toEqual([{
-      kind: "operation_conflict",
-      targetAssetId: "asset-a",
-      involvedAssetIds: ["asset-a", "asset-b"],
-    }]);
+    expect(left.conflicts).toHaveLength(0);
+    expect(reason(left, "asset-a").kind).toBe("included");
     expect(reason(left, "asset-b")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
   });
 
@@ -939,6 +936,25 @@ scope.project: [acme]
       { kind: "dependency_cycle", involvedAssetIds: ["asset-a", "asset-b", "asset-mandatory"] },
       { kind: "dependency_failure", failedRequirement: "asset-0", involvedAssetIds: ["asset-0", "asset-a", "asset-mandatory"] },
     ]));
+  });
+
+  it("case 17-c: retains a dependency failure when the cycle sorts first", () => {
+    const mandatory = candidateFromDocument(assetDocument("asset-mandatory", "requires: [asset-a, asset-z]\n"), { ...add(), mandatory: true });
+    const cycleA = candidateFromDocument(assetDocument("asset-a", "requires: [asset-b]\n"), add());
+    const cycleB = candidateFromDocument(assetDocument("asset-b", "requires: [asset-a]\n"), add());
+    const result = resultValue({}, [mandatory, cycleA, cycleB]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "dependency_cycle", involvedAssetIds: ["asset-a", "asset-b", "asset-mandatory"] },
+      { kind: "dependency_failure", failedRequirement: "asset-z", involvedAssetIds: ["asset-a", "asset-mandatory", "asset-z"] },
+    ]));
+    expect(reason(result, "asset-mandatory")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_cycle",
+      failedRequirements: ["asset-a", "asset-z"],
+    });
   });
 
   it.each(["case 18", "case 19"])("%s: treats an unknown capability or fallback requirement as missing", (caseName) => {

@@ -202,6 +202,7 @@ type DependencyOutcome =
       readonly cause: DependencyCause;
       readonly failedRequirements: readonly AssetId[];
       readonly cycleIds?: readonly AssetId[];
+      readonly nonCycleFailedRequirements: readonly AssetId[];
     };
 
 /**
@@ -968,6 +969,11 @@ export const resolveScope = (
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
         const failures = [...node.directFailures];
+        // The dominant cause may be a cycle even when another direct requirement
+        // independently fails; retain that second category for mandatory conflicts.
+        const nonCycleFailedRequirements = node.directFailures
+          .filter((failure) => failure.cause !== "requirement_cycle")
+          .map((failure) => failure.id);
         let cycleIds = componentIds;
         if (componentIds !== undefined) {
           for (const edge of node.edges) {
@@ -985,9 +991,11 @@ export const resolveScope = (
                 ? outcome.cycleIds
                 : canonicalIds([...cycleIds, ...outcome.cycleIds]);
             }
+            if (outcome.nonCycleFailedRequirements.length > 0) nonCycleFailedRequirements.push(edge.requiredId);
           }
         }
         failures.sort((left, right) => codeUnitCompare(left.id, right.id));
+        nonCycleFailedRequirements.sort(codeUnitCompare);
         const outcome: DependencyOutcome = failures.length === 0
           ? { ok: true }
           : {
@@ -995,6 +1003,7 @@ export const resolveScope = (
               cause: failures[0]!.cause,
               failedRequirements: failures.map((failure) => failure.id),
               ...(cycleIds === undefined ? {} : { cycleIds }),
+              nonCycleFailedRequirements: canonicalIds(nonCycleFailedRequirements),
             };
         outcomes.set(state, outcome);
       }
@@ -1016,10 +1025,10 @@ export const resolveScope = (
             involvedAssetIds: canonicalIds([state.candidate.assetId, ...(outcome.cycleIds ?? outcome.failedRequirements)]),
           });
         }
-        if (outcome.cause !== "requirement_cycle") {
+        if (outcome.nonCycleFailedRequirements.length > 0) {
           addConflict({
             kind: "dependency_failure",
-            failedRequirement: outcome.failedRequirements[0]!,
+            failedRequirement: outcome.nonCycleFailedRequirements[0]!,
             involvedAssetIds: canonicalIds([state.candidate.assetId, ...outcome.failedRequirements]),
           });
         }
@@ -1033,6 +1042,10 @@ export const resolveScope = (
   const blockedOperationIssuers = new Set<CandidateState>();
   const blockedOperationReasons = new Map<CandidateState, CandidateReason>();
   const revivedOperationIssuers = new Set<CandidateState>();
+  type OperationFailure = {
+    readonly conflict: ResolutionConflict;
+    readonly reason: CandidateReason;
+  };
   const resolveOperations = (): {
     readonly appliedActions: readonly OperationAction[];
     readonly eligibleIssuers: ReadonlySet<CandidateState>;
@@ -1051,7 +1064,7 @@ export const resolveScope = (
 
     const appliedActions: OperationAction[] = [];
     const operationGroups = new Map<CandidateState, OperationAction[]>();
-    const operationFailureReasons = new Map<CandidateState, CandidateReason>();
+    const operationFailures = new Map<CandidateState, OperationFailure>();
     for (const issuer of eligibleIssuers) {
       const operation = issuer.candidate.rule.operation;
       if (operation.kind === "add") continue;
@@ -1073,8 +1086,7 @@ export const resolveScope = (
           targetAssetId: operation.targetAssetId,
           involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
         };
-        addConflict(conflict);
-        operationFailureReasons.set(issuer, resolutionConflictReason(conflict, issuer.rank));
+        operationFailures.set(issuer, { conflict, reason: resolutionConflictReason(conflict, issuer.rank) });
         continue;
       }
       if (targetCandidates.some((target) => target.candidate.rule.mandatory)) {
@@ -1082,8 +1094,7 @@ export const resolveScope = (
           kind: "mandatory_conflict",
           involvedAssetIds: canonicalIds([issuer.candidate.assetId, ...targetCandidates.map((target) => target.candidate.assetId)]),
         };
-        addConflict(conflict);
-        operationFailureReasons.set(issuer, resolutionConflictReason(conflict, issuer.rank));
+        operationFailures.set(issuer, { conflict, reason: resolutionConflictReason(conflict, issuer.rank) });
         continue;
       }
       if (operation.kind === "override" && (
@@ -1096,8 +1107,7 @@ export const resolveScope = (
           targetAssetId: operation.targetAssetId,
           involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
         };
-        addConflict(conflict);
-        operationFailureReasons.set(issuer, resolutionConflictReason(conflict, issuer.rank));
+        operationFailures.set(issuer, { conflict, reason: resolutionConflictReason(conflict, issuer.rank) });
         continue;
       }
       for (const target of targetCandidates) {
@@ -1106,8 +1116,6 @@ export const resolveScope = (
         operationGroups.set(target, actions);
       }
     }
-
-    for (const [issuer, failureReason] of operationFailureReasons) issuer.reason = failureReason;
 
     for (const actions of operationGroups.values()) {
       if (actions.length === 0) continue;
@@ -1146,6 +1154,11 @@ export const resolveScope = (
         mergeGroup: winner.issuer.candidate.rule.mergeGroup as string,
         winnerRank: winner.issuer.rank!,
       };
+    }
+    for (const [issuer, failure] of operationFailures) {
+      if (issuer.reason.kind !== "included") continue;
+      issuer.reason = failure.reason;
+      addConflict(failure.conflict);
     }
     return { appliedActions, eligibleIssuers };
   };
