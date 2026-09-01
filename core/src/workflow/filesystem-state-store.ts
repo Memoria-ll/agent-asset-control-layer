@@ -78,7 +78,9 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
 
 const portableSegment = (value: string): boolean => {
   if (value.length === 0 || value.includes("\\") || value.includes("/") || value.includes(":") || value.includes("\0")) return false;
-  if (/[< >"|?*]/.test(value) || /[. ]$/.test(value)) return false;
+  // An interior space is portable on every supported filesystem; only a trailing one is not,
+  // which the second test covers together with the trailing dot Windows strips.
+  if (/[<>"|?*]/.test(value) || /[. ]$/.test(value)) return false;
   if ([...value].some((character) => (character.codePointAt(0) ?? 0) < 0x20)) return false;
   const stem = value.split(".")[0]?.replace(/ +$/, "");
   if (stem === undefined) return false;

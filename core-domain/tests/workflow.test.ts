@@ -355,6 +355,28 @@ ${JSON.stringify(basicDefinitionBody)}
     expect(detailCodes(badCycle)).toEqual(["cycle_without_retry_or_return"]);
   });
 
+  it("validates a definition far longer than the call stack can carry", () => {
+    const count = 20000;
+    const body = {
+      entryRoleId: "reviewer",
+      entryStageId: "stage-0",
+      terminalStageId: `stage-${count - 1}`,
+      stages: Array.from({ length: count }, (_, index) => ({
+        stageId: `stage-${index}`,
+        displayName: `Stage ${index}`,
+        description: `Stage number ${index}`,
+        ...(index === 0 ? { requiredRoleId: "reviewer", requiredTaskTypeId: "drafting" } : {}),
+      })),
+      transitions: Array.from({ length: count - 1 }, (_, index) => ({
+        fromStageId: `stage-${index}`,
+        toStageId: `stage-${index + 1}`,
+        transitionKind: "advance",
+      })),
+    };
+    const value = unwrap(parseWorkflowDefinitionAsset(workflowAsset(body), catalog()));
+    expect(value.stages).toHaveLength(count);
+  });
+
   it("initializes state fields from the definition and caller links", () => {
     const value = definition();
     const seed = initializeWorkflowState(value, {

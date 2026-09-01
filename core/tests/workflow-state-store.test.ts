@@ -149,6 +149,23 @@ describe("filesystem workflow state store", () => {
     if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
   });
 
+  it("addresses an instance id holding an interior space and rejects a trailing one", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      generateExecutionInstanceId: () => "instance-build 1" as ExecutionInstanceId,
+    });
+    const created = unwrap(await store.create(seed()));
+    expect(created.executionInstanceId).toBe("instance-build 1");
+    expect(await readdir(join(directory, "workflows"))).toEqual(["instance-build 1.json"]);
+    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
+
+    const trailing = await store.get("review-flow" as WorkflowId, "instance-one " as ExecutionInstanceId);
+    expect(trailing.ok).toBe(false);
+    if (!trailing.ok) expect(trailing.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
+  });
+
   it("cleans the temporary file when atomic rename fails", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({

@@ -143,7 +143,12 @@ describe("filesystem workflow definition loader", () => {
     const wrongType = await fixture([{ path: "rule.md", document: "---\nid: review-flow\ntype: rule\ntier: core\n---\n" }]);
     const wrongTypeResult = await load(wrongType.store);
     expect(wrongTypeResult.ok).toBe(false);
-    if (!wrongTypeResult.ok) expect(wrongTypeResult.failure.details?.[0]?.code).toBe("wrong_asset_type");
+    if (!wrongTypeResult.ok) {
+      expect(wrongTypeResult.failure.details?.[0]?.code).toBe("wrong_asset_type");
+      expect(wrongTypeResult.failure.details?.[0]?.path).toEqual([
+        "root", "global", "file", "rule.md", "asset", "type",
+      ]);
+    }
 
     const duplicate = await fixture([
       { path: "one.md", document: workflowDocument("review-flow", validBody()) },

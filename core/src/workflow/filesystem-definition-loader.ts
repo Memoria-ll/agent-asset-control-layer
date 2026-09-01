@@ -74,12 +74,18 @@ export const loadWorkflowDefinition = async (
 
   if (workflowMatches.length > 0 || lookup.matches.length > 0) {
     if (workflowMatches.length === 0) {
+      const wrongType = coreFailure("invalid_request", "The requested asset is not a workflow definition.", [{
+        path: ["asset", "type"],
+        code: "wrong_asset_type",
+        message: "The requested asset is not a workflow definition.",
+      }]);
+      // A lone match names the offending file, so its detail path is re-rooted there like every
+      // other read of a managed root. Several matches cannot be pointed at a single file.
+      const single = lookup.matches.length === 1 ? lookup.matches[0] : undefined;
       return failureResult(
-        coreFailure("invalid_request", "The requested asset is not a workflow definition.", [{
-            path: ["asset", "type"],
-            code: "wrong_asset_type",
-            message: "The requested asset is not a workflow definition.",
-          }]),
+        single === undefined
+          ? wrongType
+          : withFilePath(single.source.rootId, single.source.relativePath, wrongType),
         lookup.matches,
         lookup.failures,
       );

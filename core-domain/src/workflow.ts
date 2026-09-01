@@ -414,34 +414,56 @@ const findBadCycle = (
   const onStack = new Set<StageId>();
   let result: readonly [StageId, StageId] | undefined;
 
-  const visit = (stageId: StageId): void => {
-    indices.set(stageId, nextIndex);
-    lowLinks.set(stageId, nextIndex);
-    nextIndex += 1;
-    stack.push(stageId);
-    onStack.add(stageId);
+  // Tarjan over an explicit frame stack rather than the call stack: the contract puts no upper
+  // bound on `stages`, and a recursive descent over a long linear definition exhausts the call
+  // stack and throws RangeError instead of returning a failure (measured: 10000 stages).
+  type Frame = { readonly stageId: StageId; readonly targets: readonly StageId[]; next: number };
 
-    for (const target of adjacency.get(stageId) ?? []) {
-      if (!indices.has(target)) {
-        visit(target);
-        lowLinks.set(stageId, Math.min(lowLinks.get(stageId) ?? 0, lowLinks.get(target) ?? 0));
-      } else if (onStack.has(target)) {
-        lowLinks.set(stageId, Math.min(lowLinks.get(stageId) ?? 0, indices.get(target) ?? 0));
-      }
-    }
+  const visit = (root: StageId): void => {
+    const frames: Frame[] = [];
+    const enter = (stageId: StageId): void => {
+      indices.set(stageId, nextIndex);
+      lowLinks.set(stageId, nextIndex);
+      nextIndex += 1;
+      stack.push(stageId);
+      onStack.add(stageId);
+      frames.push({ stageId, targets: adjacency.get(stageId) ?? [], next: 0 });
+    };
+    enter(root);
 
-    if (lowLinks.get(stageId) !== indices.get(stageId)) return;
-    const component: StageId[] = [];
-    let member: StageId | undefined;
-    do {
-      member = stack.pop();
-      if (member !== undefined) {
-        onStack.delete(member);
-        component.push(member);
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1];
+      if (frame === undefined) break;
+      if (frame.next < frame.targets.length) {
+        const target = frame.targets[frame.next] as StageId;
+        frame.next += 1;
+        if (!indices.has(target)) {
+          enter(target);
+        } else if (onStack.has(target)) {
+          lowLinks.set(frame.stageId, Math.min(lowLinks.get(frame.stageId) ?? 0, indices.get(target) ?? 0));
+        }
+        continue;
       }
-    } while (member !== stageId);
-    if (component.length >= 2 && result === undefined) {
-      result = [component[0] as StageId, component[1] as StageId];
+
+      frames.pop();
+      const parent = frames[frames.length - 1];
+      if (parent !== undefined) {
+        lowLinks.set(parent.stageId, Math.min(lowLinks.get(parent.stageId) ?? 0, lowLinks.get(frame.stageId) ?? 0));
+      }
+
+      if (lowLinks.get(frame.stageId) !== indices.get(frame.stageId)) continue;
+      const component: StageId[] = [];
+      let member: StageId | undefined;
+      do {
+        member = stack.pop();
+        if (member !== undefined) {
+          onStack.delete(member);
+          component.push(member);
+        }
+      } while (member !== frame.stageId);
+      if (component.length >= 2 && result === undefined) {
+        result = [component[0] as StageId, component[1] as StageId];
+      }
     }
   };
 
