@@ -26,6 +26,11 @@ It becomes:
 
 Agent Asset Control Layer is an attempt to solve that problem.
 
+It acts as a control plane for reusable AI development assets and for the rules that determine when
+those assets apply. Context resolution is a central part of that job, but the system also manages
+asset lifecycle, workflow definitions and state, execution metadata, history, diagnostics, and the
+feedback loop that improves assets over time.
+
 ## The basic idea
 
 Instead of letting each tool, project, or runtime maintain its own independent copy of your AI
@@ -33,6 +38,10 @@ development setup, keep those reusable pieces as shared **assets**.
 
 An asset can be a skill, rule, role, workflow, guardrail, template, checklist, piece of project
 knowledge, routing policy, or capability definition.
+
+“Asset” is a shared management boundary, not a claim that all of those things have identical
+semantics. They can share identity, metadata, scope, dependency, lifecycle, versioning, and history
+while still keeping type-specific validation, merge behavior, and execution meaning.
 
 The Core keeps those assets in a canonical form and decides which ones apply to the current
 situation.
@@ -50,7 +59,7 @@ The result is not simply “load everything.” The Core resolves the relevant a
 they were selected, and materializes them for the target runtime.
 
 ```text
-Development assets
+Canonical assets
        |
        v
   Context Resolution
@@ -59,12 +68,18 @@ Development assets
 Resolved context + policy
        |
        v
+Runtime materialization
+       |
+       v
 AI runtime / development tool
 ```
 
+The resolver is the Core's decision boundary for applicability. Runtime adapters and clients may
+translate or present the result, but they should not silently reinterpret which assets apply.
+
 Agent Asset Control Layer does **not** replace an AI coding runtime, model provider, IDE, MCP
 implementation, or agent framework. It sits between your reusable development assets and those
-systems, providing a consistent way to manage and apply them.
+systems, providing a consistent way to manage, resolve, explain, and apply them.
 
 ## What this should make easier
 
@@ -72,6 +87,11 @@ systems, providing a consistent way to manage and apply them.
 
 Skills, rules, workflows, roles, guardrails, templates, project knowledge, and related assets can
 be managed through one canonical model instead of being independently maintained for every runtime.
+
+The common model handles shared management concerns without erasing the differences between asset
+types. A workflow can remain a workflow, a guardrail can remain an enforcement policy, and a skill
+can retain its own invocation semantics while still participating in the same management and
+resolution system.
 
 The source of truth remains human-readable and versionable, so assets can still be inspected,
 diffed, reviewed, and edited directly.
@@ -85,7 +105,11 @@ other relevant conditions before deciding what applies. Mandatory policies, over
 dependencies, conflicts, and disabled assets are handled explicitly rather than through implicit
 “last one wins” behavior.
 
-The result also includes reasons, so it is possible to answer questions such as:
+The resolution result includes both decisions and reasons. Inclusion, exclusion, override,
+unavailability, degradation, and conflict are part of the result rather than hidden implementation
+details.
+
+This makes it possible to answer questions such as:
 
 - Why was this rule included?
 - Why was this skill unavailable?
@@ -151,8 +175,12 @@ back.
                                IDE / runtime clients
 ```
 
-The **Core** owns the source-of-truth semantics: assets, scope resolution, workflow state, policy,
-history, snapshots, diagnostics, and related domain behavior.
+The **Core** is the control plane. It owns source-of-truth semantics for assets, scope and policy
+resolution, workflow state, history, snapshots, diagnostics, and related domain behavior.
+
+The resolver is where the Core turns canonical assets plus execution conditions into an explicit,
+explainable result. Materializers and adapters consume that result; they do not become alternate
+policy engines.
 
 Clients such as the VS Code extension provide the working interface. They can supply editor and
 workspace context, display resolved context and workflow state, and connect the Core to supported
@@ -164,8 +192,10 @@ remain independent of any one provider or runtime.
 ## Design principles
 
 - **One source of truth.** Reusable assets should not have to drift across tool-specific copies.
+- **Shared management, distinct semantics.** Asset types can share lifecycle and resolution infrastructure without being forced into identical behavior.
 - **Resolve, don't dump.** Give each execution what it needs instead of loading everything by default.
-- **Explain decisions.** Inclusion, exclusion, override, conflict, and unavailability should be inspectable.
+- **Resolution is a Core decision.** Applicability is decided centrally and should not be silently reinterpreted by adapters or clients.
+- **Explain decisions.** Inclusion, exclusion, override, conflict, degradation, and unavailability should be inspectable.
 - **Local-first and private-first.** Single-user local operation is a first-class deployment model.
 - **Runtime-neutral.** Core assets should not be defined by one provider's configuration format.
 - **Human-approved evolution.** The system may detect and propose improvements, but important changes remain reviewable.
