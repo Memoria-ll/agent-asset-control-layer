@@ -13,6 +13,7 @@ import type {
   Timestamp,
   WorkflowId,
 } from "@aacl/shared";
+import { tryParseAgentExecutionDto } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import type { MetadataCatalog } from "./catalog.ts";
 import type { ResolutionContext } from "./resolution-context.ts";
@@ -63,6 +64,30 @@ export const validateAgentExecutionReferences = (
   if (record.modelId !== undefined && !catalog.models.has(record.modelId)) {
     details.push(detail(["record", "modelId"], "unknown_model_id", `Model "${record.modelId}" is not in the catalog.`));
   }
+  const runtime = record.runtimeId === undefined ? undefined : catalog.runtimes.get(record.runtimeId);
+  if (
+    record.providerId !== undefined &&
+    runtime !== undefined &&
+    runtime.providerId !== record.providerId
+  ) {
+    details.push(detail(
+      ["record", "runtimeId"],
+      "runtime_provider_mismatch",
+      `Runtime "${record.runtimeId}" belongs to provider "${runtime.providerId}", not "${record.providerId}".`,
+    ));
+  }
+  const model = record.modelId === undefined ? undefined : catalog.models.get(record.modelId);
+  if (
+    record.providerId !== undefined &&
+    model !== undefined &&
+    model.providerId !== record.providerId
+  ) {
+    details.push(detail(
+      ["record", "modelId"],
+      "model_provider_mismatch",
+      `Model "${record.modelId}" belongs to provider "${model.providerId}", not "${record.providerId}".`,
+    ));
+  }
   // Relation membership belongs to #8 policy; execution may use a pair absent from the catalog relations.
   return details.length > 0
     ? { ok: false, failure: coreFailure("invalid_request", "The agent execution references are invalid.", details) }
@@ -93,22 +118,34 @@ export const toAgentExecutionDto = (
       ]),
     };
   }
+  const value: AgentExecutionDtoInput = {
+    agentExecutionId: record.agentExecutionId,
+    startedAt: record.startedAt,
+    ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
+    ...(record.snapshotId !== undefined ? { snapshotId: record.snapshotId } : {}),
+    ...(record.projectId !== undefined ? { projectId: record.projectId } : {}),
+    ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
+    ...(record.stageId !== undefined ? { stageId: record.stageId } : {}),
+    ...(record.taskTypeId !== undefined ? { taskTypeId: record.taskTypeId } : {}),
+    ...(record.roleId !== undefined ? { roleId: record.roleId } : {}),
+    ...(record.providerId !== undefined ? { providerId: record.providerId } : {}),
+    ...(record.runtimeId !== undefined ? { runtimeId: record.runtimeId } : {}),
+    ...(record.modelId !== undefined ? { modelId: record.modelId } : {}),
+    ...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
+  };
+  const parsed = tryParseAgentExecutionDto(value);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      failure: coreFailure(
+        "invalid_request",
+        "The agent execution cannot be projected to a valid DTO.",
+        parsed.error.details,
+      ),
+    };
+  }
   return {
     ok: true,
-    value: {
-      agentExecutionId: record.agentExecutionId,
-      startedAt: record.startedAt,
-      ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
-      ...(record.snapshotId !== undefined ? { snapshotId: record.snapshotId } : {}),
-      ...(record.projectId !== undefined ? { projectId: record.projectId } : {}),
-      ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
-      ...(record.stageId !== undefined ? { stageId: record.stageId } : {}),
-      ...(record.taskTypeId !== undefined ? { taskTypeId: record.taskTypeId } : {}),
-      ...(record.roleId !== undefined ? { roleId: record.roleId } : {}),
-      ...(record.providerId !== undefined ? { providerId: record.providerId } : {}),
-      ...(record.runtimeId !== undefined ? { runtimeId: record.runtimeId } : {}),
-      ...(record.modelId !== undefined ? { modelId: record.modelId } : {}),
-      ...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
-    },
+    value: parsed.value,
   };
 };

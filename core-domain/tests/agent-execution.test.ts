@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseAgentExecutionDto } from "@aacl/shared";
+import { parseAgentExecutionDto, type ModelId, type ProviderId, type RoleId, type RuntimeId, type TaskTypeId } from "@aacl/shared";
 import {
   agentExecutionScope,
+  buildMetadataCatalog,
   toAgentExecutionDto,
+  validateAgentExecutionReferences,
   type AgentExecutionRecord,
+  type CatalogRevision,
 } from "../src/index.ts";
 
 const parsedExecution = parseAgentExecutionDto({
@@ -91,5 +94,55 @@ describe("agent execution domain", () => {
       expect(missingStartedAt.failure.details?.[0]?.path).toEqual(["record", "startedAt"]);
     }
   });
-});
 
+  it("rejects provider ownership mismatches for referenced runtime and model", () => {
+    const catalogResult = buildMetadataCatalog({
+      revision: "test" as CatalogRevision,
+      roles: [{ roleId: "reviewer" as RoleId, displayName: "Reviewer" }],
+      taskTypes: [{ taskTypeId: "code-review" as TaskTypeId, displayName: "Code review" }],
+      providers: [
+        { providerId: "anthropic" as ProviderId, displayName: "Anthropic" },
+        { providerId: "openai" as ProviderId, displayName: "OpenAI" },
+      ],
+      runtimes: [{ runtimeId: "claude-code" as RuntimeId, displayName: "Claude Code", providerId: "anthropic" as ProviderId }],
+      models: [{ modelId: "claude-opus-5" as ModelId, displayName: "Claude Opus 5", providerId: "anthropic" as ProviderId }],
+      roleModelRelations: [],
+    });
+    if (!catalogResult.ok) throw new Error(catalogResult.failure.message);
+
+    const result = validateAgentExecutionReferences(catalogResult.value, {
+      ...executionRecord,
+      providerId: "openai" as ProviderId,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => ({ path: item.path, code: item.code }))).toEqual([
+        { path: ["record", "runtimeId"], code: "runtime_provider_mismatch" },
+        { path: ["record", "modelId"], code: "model_provider_mismatch" },
+      ]);
+    }
+  });
+
+  it("rejects invalid timestamps before DTO projection succeeds", () => {
+    const invalidStartedAt = toAgentExecutionDto({
+      ...executionRecord,
+      startedAt: "yesterday",
+    } as AgentExecutionRecord);
+    expect(invalidStartedAt.ok).toBe(false);
+    if (!invalidStartedAt.ok) {
+      expect(invalidStartedAt.failure.code).toBe("invalid_request");
+      expect(invalidStartedAt.failure.details?.some((item) => item.path.join(".") === "startedAt")).toBe(true);
+    }
+
+    const invalidEndedAt = toAgentExecutionDto({
+      ...executionRecord,
+      endedAt: "tomorrow",
+    } as AgentExecutionRecord);
+    expect(invalidEndedAt.ok).toBe(false);
+    if (!invalidEndedAt.ok) {
+      expect(invalidEndedAt.failure.code).toBe("invalid_request");
+      expect(invalidEndedAt.failure.details?.some((item) => item.path.join(".") === "endedAt")).toBe(true);
+    }
+  });
+});

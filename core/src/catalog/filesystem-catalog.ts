@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
   buildMetadataCatalog,
@@ -61,6 +61,11 @@ const catalogFileFailure = (error: unknown, catalogFilePath: string): CoreFailur
   ]);
 };
 
+const catalogFileNotAFileFailure = (catalogFilePath: string): CoreFailure =>
+  coreFailure("invalid_request", "The catalog path does not identify a file.", [
+    { path: ["catalog", "file"], code: "catalog_file_not_a_file", message: `The catalog path does not identify a file: ${catalogFilePath}.` },
+  ]);
+
 const sourceLabel = (asset: StoredAsset): string =>
   `root "${asset.source.rootId}", file "${asset.source.relativePath}"`;
 
@@ -119,6 +124,16 @@ const buildFromStore = async (
       projectionFailure ??= located;
       projectionDetails.push(...(located.details ?? []));
     }
+  }
+
+  let catalogStats;
+  try {
+    catalogStats = await stat(catalogFilePath);
+  } catch (error) {
+    return { ok: false, failure: catalogFileFailure(error, catalogFilePath), assetDiagnostics: listed.failures };
+  }
+  if (!catalogStats.isFile()) {
+    return { ok: false, failure: catalogFileNotAFileFailure(catalogFilePath), assetDiagnostics: listed.failures };
   }
 
   let sourceBytes: Buffer;
