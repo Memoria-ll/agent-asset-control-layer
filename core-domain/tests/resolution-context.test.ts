@@ -39,5 +39,23 @@ describe("resolution context", () => {
       expect(result.failure.details?.[0]?.code).toBe("empty_identifier");
     }
   });
-});
 
+  it("normalizes trailing slashes on a directory scope", () => {
+    const result = toResolutionContext({ directory: "/repo/src/" });
+
+    expect(result).toEqual({ ok: true, value: { directory: "/repo/src" } });
+  });
+
+  it.each(["\\repo\\src", "C:/repo", "repo/src", "/repo/./src", "/repo/../src"])(
+    "rejects an invalid directory scope %s",
+    (directory) => {
+      const result = toResolutionContext({ directory });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.failure.code).toBe("invalid_request");
+        expect(result.failure.details?.[0]?.code).toBe("invalid_directory");
+      }
+    },
+  );
+});

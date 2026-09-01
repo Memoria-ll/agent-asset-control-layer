@@ -229,3 +229,22 @@ local-first Core、およびその Workbench となる VS Code Extension。
   catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
   「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
   （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
+- **9軸の scope には語彙が2つあり、8個が改名・1個が同名。** on-disk 側は
+  `core-domain/src/assets.ts` の `ASSET_SCOPE_AXES`（`project` / `workflow` / `stage` /
+  `task-type` / `role` / `provider` / `runtime` / `model` / `directory`）、resolver 側は
+  `core-domain/src/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
+  `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
+  string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
+  `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
+
+### Invariants / identity keys
+
+- **`AssetRevision` は `sha256:${sha256Hex(serializeCanonicalAsset(asset))}`
+  （`core/src/assets/filesystem-store.ts` の `makeAssetRevision`）で、
+  `serializeCanonicalAsset` は frontmatter と body の両方を含む
+  （`core-domain/src/assets.ts`、戻り値は `${lines.join("\n")}\n${asset.body}`）。
+  したがって「同 revision ⇒ 同 body」が成り立つ。** Resolver の
+  exact-duplicate fold（同一 id・同一 revision の candidate を1件へ畳み、layer → sourceId 順で
+  代表を選ぶ）が安全なのはこの性質のためで、revision を mtime や uuid に変えると
+  **body 内容の暗黙の後勝ちに化ける**。revision の作り方を変えるときは resolver の
+  dedup を同じ変更で見直すこと (#3)

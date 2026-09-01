@@ -1,0 +1,950 @@
+import type {
+  AssetId,
+  AssetRevision,
+  AssetType,
+  ConflictDto,
+  CoreErrorDetail,
+  LoadingTier,
+  ResolutionReason,
+  ResolutionScopeInput,
+} from "@aacl/shared";
+import { coreFailure, type AssetResult } from "./failures.ts";
+import {
+  normalizeResolutionDirectory,
+  RESOLUTION_AXES,
+  type NormalizedDirectory,
+  type ResolutionAxis,
+  type ResolutionContext,
+  toResolutionContext,
+} from "./resolution-context.ts";
+import { codeUnitCompare } from "./ordering.ts";
+
+export type ResolutionSourceLayer = "global" | "personal" | "project";
+
+export type ResolutionSource = {
+  readonly layer: ResolutionSourceLayer;
+  readonly sourceId: string;
+};
+
+export type ResolutionOperation =
+  | { readonly kind: "add" }
+  | { readonly kind: "override"; readonly targetAssetId: AssetId }
+  | { readonly kind: "disable"; readonly targetAssetId: AssetId };
+
+export type ResolutionMerge =
+  | { readonly mergeMode: "additive"; readonly mergeGroup?: string }
+  | { readonly mergeMode: "exclusive"; readonly mergeGroup: string };
+
+export type ResolutionRule = {
+  readonly selectors: Readonly<Partial<Record<ResolutionAxis, readonly string[]>>>;
+  readonly mandatory: boolean;
+  readonly operation: ResolutionOperation;
+  readonly explicitPriority?: number;
+  readonly requires: readonly AssetId[];
+} & ResolutionMerge;
+
+export type AssetCandidate = {
+  readonly assetId: AssetId;
+  readonly revision: AssetRevision;
+  readonly assetType: AssetType;
+  readonly loadingTier: LoadingTier;
+  readonly source: ResolutionSource;
+  readonly rule: ResolutionRule;
+};
+
+export type ResolutionSnapshot = {
+  readonly candidates: readonly AssetCandidate[];
+};
+
+type NormalizedCandidate = {
+  readonly candidate: AssetCandidate;
+};
+
+type MatchedCandidate = NormalizedCandidate & {
+  readonly matchedAxes: readonly ResolutionAxis[];
+  readonly rank: ResolutionRank;
+};
+
+type ScopeMatchDecision =
+  | {
+      readonly matched: true;
+      readonly matchedAxes: readonly ResolutionAxis[];
+      readonly rank: ResolutionRank;
+    }
+  | {
+      readonly matched: false;
+      readonly mismatchedAxes: readonly ResolutionAxis[];
+    };
+
+type ExclusiveDecision =
+  | { readonly kind: "winner"; readonly candidate: MatchedCandidate }
+  | { readonly kind: "conflict"; readonly conflict: ResolutionConflict };
+
+export type ResolutionRank = {
+  readonly sourcePrecedence: 0 | 1 | 2;
+  readonly explicitPriority: number;
+  readonly matchingAxisCount: number;
+  readonly directoryDepth: number;
+};
+
+export type CandidateReason =
+  | {
+      readonly kind: "included";
+      readonly matchedAxes: readonly ResolutionAxis[];
+      readonly rank: ResolutionRank;
+    }
+  | {
+      readonly kind: "excluded";
+      readonly cause: "scope_mismatch";
+      readonly mismatchedAxes: readonly ResolutionAxis[];
+    }
+  | {
+      readonly kind: "excluded";
+      readonly cause: "invalid_directory";
+      readonly diagnostics: readonly CoreErrorDetail[];
+    }
+  | {
+      readonly kind: "excluded";
+      readonly cause: "resolution_conflict";
+      readonly conflict: ResolutionConflict;
+      readonly rank?: ResolutionRank;
+    }
+  | {
+      readonly kind: "overridden";
+      readonly overriddenBy: AssetId;
+      readonly mergeGroup: string;
+      readonly winnerRank: ResolutionRank;
+    }
+  | {
+      readonly kind: "disabled";
+      readonly disabledBy: AssetId;
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly availability: "degraded" | "unavailable";
+      readonly cause:
+        | "missing_requirement"
+        | "requirement_out_of_scope"
+        | "requirement_disabled"
+        | "requirement_overridden"
+        | "requirement_cycle"
+        | "requirement_invalid";
+      readonly failedRequirements: readonly AssetId[];
+    };
+
+export type ResolutionConflict =
+  | {
+      readonly kind: "exclusive_tie";
+      readonly mergeGroup: string;
+      readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "mandatory_conflict";
+      readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "operation_conflict";
+      readonly targetAssetId: AssetId;
+      readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "duplicate_identity";
+      readonly assetId: AssetId;
+      readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "dependency_cycle";
+      readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "dependency_failure";
+      readonly failedRequirement: AssetId;
+      readonly involvedAssetIds: readonly AssetId[];
+    };
+
+export type ResolveScopeInput = {
+  readonly scope: ResolutionScopeInput;
+  readonly snapshot: ResolutionSnapshot;
+};
+
+export type ResolutionEvaluation = {
+  readonly candidate: AssetCandidate;
+  readonly reason: CandidateReason;
+};
+
+export type ResolutionResult = {
+  readonly scope: ResolutionContext;
+  readonly evaluations: readonly ResolutionEvaluation[];
+  readonly outcome: "resolved" | "conflicted";
+  readonly conflicts: readonly ResolutionConflict[];
+};
+
+type CandidateState = {
+  readonly candidate: AssetCandidate;
+  matched: boolean;
+  reason: CandidateReason;
+  rank?: ResolutionRank;
+};
+
+type DependencyCause =
+  | "missing_requirement"
+  | "requirement_out_of_scope"
+  | "requirement_disabled"
+  | "requirement_overridden"
+  | "requirement_cycle"
+  | "requirement_invalid";
+
+type DependencyOutcome =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly cause: DependencyCause;
+      readonly failedRequirements: readonly AssetId[];
+      readonly cycleIds?: readonly AssetId[];
+    };
+
+/**
+ * The more specific layer wins, so a personal asset overrides a global one.
+ *
+ * Ranking a global asset above a personal one is not the way a global asset is
+ * protected: `mandatory` is. Layer order decides which of two interchangeable
+ * candidates is preferred; a global asset that must survive a personal override
+ * declares itself mandatory, and the hard rule then holds regardless of rank.
+ */
+const sourcePrecedence = (layer: ResolutionSourceLayer): 0 | 1 | 2 => {
+  switch (layer) {
+    case "global": return 0;
+    case "personal": return 1;
+    case "project": return 2;
+  }
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+
+const compareStringLists = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const sortedUniqueIds = (ids: readonly AssetId[]): readonly AssetId[] =>
+  [...new Set(ids)].sort(codeUnitCompare);
+
+const conflictKey = (conflict: ResolutionConflict): string => {
+  switch (conflict.kind) {
+    case "exclusive_tie": return `${conflict.kind}:${conflict.mergeGroup}:${conflict.involvedAssetIds.join("\u0000")}`;
+    case "operation_conflict": return `${conflict.kind}:${conflict.targetAssetId}:${conflict.involvedAssetIds.join("\u0000")}`;
+    case "duplicate_identity": return `${conflict.kind}:${conflict.assetId}:${conflict.involvedAssetIds.join("\u0000")}`;
+    case "dependency_failure": return `${conflict.kind}:${conflict.failedRequirement}:${conflict.involvedAssetIds.join("\u0000")}`;
+    default: return `${conflict.kind}:${conflict.involvedAssetIds.join("\u0000")}`;
+  }
+};
+
+const canonicalIds = (ids: readonly AssetId[]): readonly AssetId[] => sortedUniqueIds(ids);
+
+const sameOperation = (left: ResolutionOperation, right: ResolutionOperation): boolean =>
+  left.kind === right.kind && (left.kind === "add" || right.kind === "add" || left.targetAssetId === right.targetAssetId);
+
+const sameCandidateMeaning = (
+  left: NormalizedCandidate,
+  right: NormalizedCandidate,
+): boolean => {
+  if (left.candidate.assetId !== right.candidate.assetId || left.candidate.revision !== right.candidate.revision) return false;
+  const leftRule = left.candidate.rule;
+  const rightRule = right.candidate.rule;
+  if (leftRule.mandatory !== rightRule.mandatory || !sameOperation(leftRule.operation, rightRule.operation)) return false;
+  if (leftRule.explicitPriority !== rightRule.explicitPriority || leftRule.mergeMode !== rightRule.mergeMode) return false;
+  if (leftRule.mergeGroup !== rightRule.mergeGroup || !compareStringLists(leftRule.requires, rightRule.requires)) return false;
+  for (const axis of RESOLUTION_AXES) {
+    const leftHas = Object.prototype.hasOwnProperty.call(leftRule.selectors, axis);
+    const rightHas = Object.prototype.hasOwnProperty.call(rightRule.selectors, axis);
+    if (leftHas !== rightHas) return false;
+    if (leftHas && !compareStringLists(leftRule.selectors[axis] ?? [], rightRule.selectors[axis] ?? [])) return false;
+  }
+  return true;
+};
+
+const chooseCanonicalDuplicateRepresentative = (
+  candidates: readonly NormalizedCandidate[],
+): NormalizedCandidate => {
+  const first = candidates[0];
+  if (first === undefined) throw new Error("Cannot choose a representative from an empty candidate list.");
+  return candidates.slice(1).reduce((best, current) => {
+    const layerOrder = sourcePrecedence(current.candidate.source.layer) - sourcePrecedence(best.candidate.source.layer);
+    if (layerOrder < 0) return best;
+    if (layerOrder > 0) return current;
+    return codeUnitCompare(current.candidate.source.sourceId, best.candidate.source.sourceId) < 0 ? current : best;
+  }, first);
+};
+
+const deduplicateExactCandidates = (
+  candidates: readonly NormalizedCandidate[],
+): readonly NormalizedCandidate[] => {
+  const groups: NormalizedCandidate[][] = [];
+  for (const candidate of candidates) {
+    const group = groups.find((items) => sameCandidateMeaning(items[0] as NormalizedCandidate, candidate));
+    if (group === undefined) groups.push([candidate]);
+    else group.push(candidate);
+  }
+  return groups.map(chooseCanonicalDuplicateRepresentative);
+};
+
+const compareResolutionRank = (left: ResolutionRank, right: ResolutionRank): number => {
+  if (left.sourcePrecedence !== right.sourcePrecedence) return left.sourcePrecedence - right.sourcePrecedence;
+  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
+  if (left.matchingAxisCount !== right.matchingAxisCount) return left.matchingAxisCount - right.matchingAxisCount;
+  return left.directoryDepth - right.directoryDepth;
+};
+
+const sameResolutionRank = (left: ResolutionRank, right: ResolutionRank): boolean =>
+  left.sourcePrecedence === right.sourcePrecedence &&
+  left.explicitPriority === right.explicitPriority &&
+  left.matchingAxisCount === right.matchingAxisCount &&
+  left.directoryDepth === right.directoryDepth;
+
+const directorySegments = (value: string): readonly string[] => value === "/" ? [] : value.slice(1).split("/");
+
+const directoryMatches = (
+  candidateSegments: readonly string[],
+  requestSegments: readonly string[],
+): boolean =>
+  candidateSegments.length <= requestSegments.length &&
+  candidateSegments.every((segment, index) => segment === requestSegments[index]);
+
+const matchesScope = (
+  candidate: NormalizedCandidate,
+  context: ResolutionContext,
+): ScopeMatchDecision => {
+  const mismatchedAxes: ResolutionAxis[] = [];
+  const matchedAxes: ResolutionAxis[] = [];
+  let matchingAxisCount = 0;
+  let directoryDepth = 0;
+
+  for (const axis of RESOLUTION_AXES) {
+    const requestValue = context[axis];
+    if (requestValue === undefined) continue;
+    const selectors = candidate.candidate.rule.selectors[axis];
+    if (selectors === undefined) continue;
+
+    if (axis === "directory") {
+      const requestSegments = directorySegments(requestValue);
+      const matchedSelector = selectors
+        .map(directorySegments)
+        .filter((segments) => directoryMatches(segments, requestSegments))
+        .sort((left, right) => right.length - left.length)[0];
+      if (matchedSelector === undefined) mismatchedAxes.push(axis);
+      else {
+        matchedAxes.push(axis);
+        directoryDepth = matchedSelector.length;
+      }
+      continue;
+    }
+
+    if (!selectors.includes(requestValue)) mismatchedAxes.push(axis);
+    else {
+      matchedAxes.push(axis);
+      matchingAxisCount += 1;
+    }
+  }
+
+  if (mismatchedAxes.length > 0) return { matched: false, mismatchedAxes };
+  return {
+    matched: true,
+    matchedAxes,
+    rank: {
+      sourcePrecedence: sourcePrecedence(candidate.candidate.source.layer),
+      explicitPriority: candidate.candidate.rule.explicitPriority ?? -1,
+      matchingAxisCount,
+      directoryDepth,
+    },
+  };
+};
+
+const selectExclusiveWinner = (candidates: readonly MatchedCandidate[]): ExclusiveDecision => {
+  const first = candidates[0];
+  if (first === undefined) throw new Error("Cannot select an exclusive winner from an empty group.");
+  const bestRank = candidates.reduce((best, current) =>
+    compareResolutionRank(current.rank, best) > 0 ? current.rank : best, first.rank);
+  const tied = candidates.filter((candidate) => sameResolutionRank(candidate.rank, bestRank));
+  if (tied.length === 1) return { kind: "winner", candidate: tied[0] as MatchedCandidate };
+  const sameMeaning = tied.every((candidate) => sameCandidateMeaning(first, candidate));
+  if (sameMeaning) return { kind: "winner", candidate: tied[0] as MatchedCandidate };
+  return {
+    kind: "conflict",
+    conflict: {
+      kind: "exclusive_tie",
+      mergeGroup: first.candidate.rule.mergeGroup as string,
+      involvedAssetIds: canonicalIds(tied.map((candidate) => candidate.candidate.assetId)),
+    },
+  };
+};
+
+const detail = (path: readonly string[], code: string, message: string): CoreErrorDetail => ({
+  path: [...path],
+  code,
+  message,
+});
+
+const invalidRequest = (details: readonly CoreErrorDetail[]): AssetResult<never> => ({
+  ok: false,
+  failure: coreFailure("invalid_request", "The resolution input is invalid.", details),
+});
+
+const candidatePath = (candidate: AssetCandidate, ...parts: string[]): string[] => [
+  "snapshot",
+  "candidate",
+  isNonEmptyString(isRecord(candidate) ? candidate.assetId : undefined)
+    ? (candidate as unknown as Record<string, unknown>).assetId as string
+    : "",
+  ...parts,
+];
+
+const invalidDirectoryReason = (diagnostics: readonly CoreErrorDetail[]): CandidateReason => ({
+  kind: "excluded",
+  cause: "invalid_directory",
+  diagnostics,
+});
+
+const normalizeCandidateDirectory = (
+  candidate: AssetCandidate,
+): { readonly candidate?: NormalizedCandidate; readonly diagnostics?: readonly CoreErrorDetail[] } => {
+  const candidateValue: Record<string, unknown> = isRecord(candidate) ? candidate : {};
+  const ruleValue = candidateValue.rule;
+  const selectorsValue = isRecord(ruleValue) ? ruleValue.selectors : undefined;
+  if (!isRecord(selectorsValue)) return { candidate: { candidate } };
+  const directory = selectorsValue.directory;
+  if (directory === undefined) return { candidate: { candidate } };
+
+  const path = candidatePath(candidate, "rule", "selectors", "directory");
+  if (!Array.isArray(directory)) {
+    return { diagnostics: [detail(path, "invalid_directory", "The directory selector must be a list.")] };
+  }
+  if (directory.length === 0) return { diagnostics: [detail(path, "empty_list", "The directory selector must not be empty.")] };
+
+  const normalized: NormalizedDirectory[] = [];
+  const diagnostics: CoreErrorDetail[] = [];
+  for (const value of directory) {
+    const result = normalizeResolutionDirectory(value, path);
+    if (!result.ok) diagnostics.push(...(result.failure.details ?? []));
+    else normalized.push(result.value);
+  }
+  if (diagnostics.length > 0) return { diagnostics };
+
+  // Re-sorted and de-duplicated after normalization, not before: normalizing does not
+  // preserve either property. The parser stores selectors in ascending code-unit order,
+  // and `-` (0x2D) sorts before `/` (0x2F), so dropping a trailing slash turns
+  // ["/repo/src-extra", "/repo/src/"] into a descending pair; two spellings of one
+  // directory likewise only collide once both are normalized.
+  const values = [...new Map(normalized.map((item) => [item.value, item])).values()]
+    .sort((left, right) => codeUnitCompare(left.value, right.value));
+  const normalizedSelectors: Partial<Record<ResolutionAxis, readonly string[]>> = {
+    ...(selectorsValue as Partial<Record<ResolutionAxis, readonly string[]>>),
+    directory: values.map((item) => item.value),
+  };
+  const normalizedRule = {
+    ...(ruleValue as ResolutionRule),
+    selectors: normalizedSelectors,
+  } as ResolutionRule;
+  return { candidate: { candidate: { ...candidate, rule: normalizedRule } } };
+};
+
+const validateStringList = (
+  value: unknown,
+  path: readonly string[],
+  details: CoreErrorDetail[],
+  allowEmpty: boolean,
+): value is readonly string[] => {
+  if (!Array.isArray(value)) {
+    details.push(detail(path, "invalid_value", "The value must be a list of non-empty strings."));
+    return false;
+  }
+  if (value.some((item) => item === "")) {
+    details.push(detail(path, "empty_identifier", "The list must not contain empty strings."));
+    return false;
+  }
+  if (value.some((item) => !isNonEmptyString(item))) {
+    details.push(detail(path, "invalid_value", "The value must be a list of non-empty strings."));
+    return false;
+  }
+  if (!allowEmpty && value.length === 0) details.push(detail(path, "empty_list", "The list must not be empty."));
+  if (new Set(value).size !== value.length) details.push(detail(path, "duplicate_value", "The list must not contain duplicates."));
+  if (value.some((item, index) => index > 0 && codeUnitCompare(value[index - 1] as string, item) >= 0)) {
+    details.push(detail(path, "invalid_value", "The list must be code-unit sorted and unique."));
+  }
+  return true;
+};
+
+const validateCandidate = (candidate: NormalizedCandidate): readonly CoreErrorDetail[] => {
+  const details: CoreErrorDetail[] = [];
+  const value = candidate.candidate as unknown as Record<string, unknown>;
+  const path = candidatePath(candidate.candidate);
+  if (!isRecord(value)) return [detail(path, "invalid_value", "The candidate must be an object.")];
+  if (!isNonEmptyString(value.assetId)) details.push(detail([...path, "assetId"], "empty_identifier", "The asset id must not be empty."));
+  if (!isNonEmptyString(value.revision)) details.push(detail([...path, "revision"], "empty_identifier", "The revision must not be empty."));
+  if (!isNonEmptyString(value.assetType)) details.push(detail([...path, "assetType"], "invalid_value", "The asset type must be a non-empty string."));
+  if (!isNonEmptyString(value.loadingTier)) details.push(detail([...path, "loadingTier"], "invalid_value", "The loading tier must be a non-empty string."));
+
+  const source = value.source;
+  if (!isRecord(source)) {
+    details.push(detail([...path, "source"], "invalid_value", "The source must be an object."));
+  } else {
+    if (source.layer !== "global" && source.layer !== "personal" && source.layer !== "project") {
+      details.push(detail([...path, "source", "layer"], "invalid_value", "The source layer is invalid."));
+    }
+    if (!isNonEmptyString(source.sourceId)) details.push(detail([...path, "source", "sourceId"], "empty_identifier", "The source id must not be empty."));
+  }
+
+  const rule = value.rule;
+  if (!isRecord(rule)) {
+    details.push(detail([...path, "rule"], "invalid_value", "The rule must be an object."));
+    return details;
+  }
+  if (typeof rule.mandatory !== "boolean") details.push(detail([...path, "rule", "mandatory"], "invalid_value", "Mandatory must be a boolean."));
+  if (rule.explicitPriority !== undefined && (
+    typeof rule.explicitPriority !== "number" ||
+    !Number.isSafeInteger(rule.explicitPriority) ||
+    rule.explicitPriority < 0
+  )) {
+    details.push(detail([...path, "rule", "explicitPriority"], "invalid_value", "Priority must be a non-negative safe integer."));
+  }
+  if (!Array.isArray(rule.requires)) details.push(detail([...path, "rule", "requires"], "invalid_value", "Requires must be a list."));
+  else validateStringList(rule.requires, [...path, "rule", "requires"], details, true);
+
+  const selectors = rule.selectors;
+  if (!isRecord(selectors)) {
+    details.push(detail([...path, "rule", "selectors"], "invalid_value", "Selectors must be an object."));
+  } else {
+    for (const key of Object.keys(selectors)) {
+      if (!RESOLUTION_AXES.includes(key as ResolutionAxis)) {
+        details.push(detail([...path, "rule", "selectors", key], "unknown_key", `Unknown selector axis "${key}".`));
+        continue;
+      }
+      if (key === "directory") continue;
+      validateStringList(selectors[key], [...path, "rule", "selectors", key], details, false);
+    }
+  }
+
+  const operation = rule.operation;
+  if (!isRecord(operation) || (operation.kind !== "add" && operation.kind !== "override" && operation.kind !== "disable")) {
+    details.push(detail([...path, "rule", "operation"], "invalid_value", "The operation is invalid."));
+  } else if (operation.kind !== "add" && !isNonEmptyString(operation.targetAssetId)) {
+    details.push(detail([...path, "rule", "operation", "targetAssetId"], "empty_identifier", "The target asset id must not be empty."));
+  }
+
+  if (rule.mergeMode !== "additive" && rule.mergeMode !== "exclusive") {
+    details.push(detail([...path, "rule", "mergeMode"], "invalid_value", "The merge mode is invalid."));
+  } else if (rule.mergeMode === "exclusive" && !isNonEmptyString(rule.mergeGroup)) {
+    details.push(detail([...path, "rule", "mergeGroup"], "invalid_merge_group", "An exclusive merge group is required."));
+  } else if (rule.mergeMode === "additive" && rule.mergeGroup !== undefined && !isNonEmptyString(rule.mergeGroup)) {
+    details.push(detail([...path, "rule", "mergeGroup"], "invalid_merge_group", "The merge group must not be empty."));
+  }
+  return details;
+};
+
+const resolutionConflictReason = (conflict: ResolutionConflict, rank?: ResolutionRank): CandidateReason => ({
+  kind: "excluded",
+  cause: "resolution_conflict",
+  conflict,
+  ...(rank === undefined ? {} : { rank }),
+});
+
+const compareCandidatesForOutput = (left: CandidateState, right: CandidateState): number => {
+  if (left.rank !== undefined && right.rank === undefined) return -1;
+  if (left.rank === undefined && right.rank !== undefined) return 1;
+  if (left.rank !== undefined && right.rank !== undefined) {
+    const rankOrder = compareResolutionRank(right.rank, left.rank);
+    if (rankOrder !== 0) return rankOrder;
+  }
+  const assetOrder = codeUnitCompare(String(left.candidate.assetId), String(right.candidate.assetId));
+  if (assetOrder !== 0) return assetOrder;
+  const revisionOrder = codeUnitCompare(String(left.candidate.revision), String(right.candidate.revision));
+  if (revisionOrder !== 0) return revisionOrder;
+  return codeUnitCompare(String(left.candidate.source.sourceId), String(right.candidate.source.sourceId));
+};
+
+const conflictExplanation = (conflict: ResolutionConflict): string => {
+  switch (conflict.kind) {
+    case "exclusive_tie": return "Exclusive candidates have the same resolution rank.";
+    case "mandatory_conflict": return "Mandatory candidates cannot be resolved together.";
+    case "operation_conflict": return "Conflicting operations target the same asset.";
+    case "duplicate_identity": return "Candidates with the same asset identity have different meanings.";
+    case "dependency_cycle": return "Asset requirements contain a cycle.";
+    case "dependency_failure": return "A mandatory asset requirement could not be satisfied.";
+  }
+};
+
+export const toResolutionReasonDto = (reason: CandidateReason): ResolutionReason => {
+  switch (reason.kind) {
+    case "included": return { kind: "included", explanation: "The candidate matched the requested scope." };
+    case "excluded": {
+      if (reason.cause === "scope_mismatch") return { kind: "excluded", explanation: "The candidate did not match the requested scope." };
+      if (reason.cause === "invalid_directory") return { kind: "excluded", explanation: "The candidate has an invalid directory selector." };
+      return { kind: "excluded", explanation: "The candidate participated in a resolution conflict." };
+    }
+    case "overridden": return { kind: "overridden", explanation: "The candidate was overridden by a higher-ranked candidate.", overriddenBy: reason.overriddenBy };
+    case "disabled": return { kind: "disabled", explanation: "The candidate was disabled by an operation.", disabledBy: reason.disabledBy };
+    case "unavailable": return { kind: "unavailable", explanation: "The candidate is unavailable because a requirement failed.", availability: reason.availability };
+  }
+};
+
+export const toResolutionConflictDto = (conflict: ResolutionConflict): ConflictDto => ({
+  explanation: conflictExplanation(conflict),
+  involvedAssetIds: [...canonicalIds(conflict.involvedAssetIds)],
+});
+
+/**
+ * One detail per involved asset, with the id in `path`.
+ *
+ * The ids do not go into `message`: a consumer would then have to parse prose for this
+ * failure while reading `path` for every other one, which is the same split the asset
+ * store already refuses to introduce.
+ */
+export const toResolutionConflictDetails = (
+  conflict: ResolutionConflict,
+): readonly CoreErrorDetail[] => canonicalIds(conflict.involvedAssetIds).map((assetId) => ({
+  path: ["resolution", "conflict", conflict.kind, assetId],
+  code: conflict.kind,
+  message: conflictExplanation(conflict),
+}));
+
+export const resolveScope = (
+  input: ResolveScopeInput,
+): AssetResult<ResolutionResult> => {
+  const contextResult = toResolutionContextSafely(input?.scope);
+  if (!contextResult.ok) return contextResult;
+  if (!isRecord(input) || !isRecord(input.snapshot) || !Array.isArray(input.snapshot.candidates)) {
+    return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
+  }
+
+  const conflicts = new Map<string, ResolutionConflict>();
+  const addConflict = (conflict: ResolutionConflict): void => {
+    const canonical: ResolutionConflict = {
+      ...conflict,
+      involvedAssetIds: canonicalIds(conflict.involvedAssetIds),
+    } as ResolutionConflict;
+    conflicts.set(conflictKey(canonical), canonical);
+  };
+
+  const invalidStates: CandidateState[] = [];
+  const normalizedCandidates: NormalizedCandidate[] = [];
+  for (const rawCandidate of input.snapshot.candidates) {
+    const candidate = rawCandidate as AssetCandidate;
+    const normalized = normalizeCandidateDirectory(candidate);
+    if (normalized.diagnostics !== undefined) {
+      invalidStates.push({ candidate, matched: false, reason: invalidDirectoryReason(normalized.diagnostics) });
+    } else if (normalized.candidate !== undefined) {
+      normalizedCandidates.push(normalized.candidate);
+    }
+  }
+
+  const validationDetails = normalizedCandidates.flatMap(validateCandidate);
+  const payloadByIdentity = new Map<string, { assetType: AssetType; loadingTier: LoadingTier }>();
+  for (const normalized of normalizedCandidates) {
+    const candidate = normalized.candidate;
+    const identity = `${String(candidate.assetId)}\u0000${String(candidate.revision)}`;
+    const previous = payloadByIdentity.get(identity);
+    if (previous === undefined) {
+      payloadByIdentity.set(identity, { assetType: candidate.assetType, loadingTier: candidate.loadingTier });
+    } else if (previous.assetType !== candidate.assetType || previous.loadingTier !== candidate.loadingTier) {
+      validationDetails.push(detail(
+        candidatePath(candidate),
+        "invalid_value",
+        "Candidates with the same asset identity must have the same payload type and loading tier.",
+      ));
+    }
+  }
+  if (validationDetails.length > 0) return invalidRequest(validationDetails);
+
+  const deduplicated = deduplicateExactCandidates(normalizedCandidates);
+  const states: CandidateState[] = deduplicated.map((normalized) => ({
+    candidate: normalized.candidate,
+    matched: false,
+    reason: { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: [] },
+  }));
+
+  for (const state of states) {
+    const decision = matchesScope({ candidate: state.candidate }, contextResult.value);
+    if (decision.matched) {
+      state.matched = true;
+      state.rank = decision.rank;
+      state.reason = { kind: "included", matchedAxes: decision.matchedAxes, rank: decision.rank };
+    } else {
+      state.reason = { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: decision.mismatchedAxes };
+    }
+  }
+
+  const matchedById = new Map<string, CandidateState[]>();
+  for (const state of states) {
+    if (!state.matched) continue;
+    const group = matchedById.get(String(state.candidate.assetId)) ?? [];
+    group.push(state);
+    matchedById.set(String(state.candidate.assetId), group);
+  }
+  for (const group of matchedById.values()) {
+    if (group.length < 2) continue;
+    const conflict: ResolutionConflict = {
+      kind: "duplicate_identity",
+      assetId: group[0]!.candidate.assetId,
+      involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+    };
+    addConflict(conflict);
+    for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
+  }
+
+  const activeById = new Map<string, CandidateState>();
+  for (const state of states) {
+    if (state.reason.kind === "included") activeById.set(String(state.candidate.assetId), state);
+  }
+  const operationGroups = new Map<string, { issuer: CandidateState; kind: "override" | "disable" }[]>();
+  for (const issuer of states.filter((state) => state.reason.kind === "included")) {
+    const operation = issuer.candidate.rule.operation;
+    if (operation.kind === "add") continue;
+    const target = activeById.get(String(operation.targetAssetId));
+    if (target === undefined || target === issuer || !target.matched) {
+      const conflict: ResolutionConflict = {
+        kind: "operation_conflict",
+        targetAssetId: operation.targetAssetId,
+        involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
+      };
+      addConflict(conflict);
+      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+      continue;
+    }
+    if (target.candidate.rule.mandatory) {
+      const conflict: ResolutionConflict = {
+        kind: "mandatory_conflict",
+        involvedAssetIds: canonicalIds([issuer.candidate.assetId, target.candidate.assetId]),
+      };
+      addConflict(conflict);
+      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+      continue;
+    }
+    if (operation.kind === "override" && (
+      issuer.candidate.rule.mergeGroup === undefined ||
+      target.candidate.rule.mergeGroup === undefined ||
+      issuer.candidate.rule.mergeGroup !== target.candidate.rule.mergeGroup
+    )) {
+      const conflict: ResolutionConflict = {
+        kind: "operation_conflict",
+        targetAssetId: operation.targetAssetId,
+        involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
+      };
+      addConflict(conflict);
+      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+      continue;
+    }
+    const actions = operationGroups.get(String(operation.targetAssetId)) ?? [];
+    actions.push({ issuer, kind: operation.kind });
+    operationGroups.set(String(operation.targetAssetId), actions);
+  }
+
+  for (const [targetId, actions] of operationGroups) {
+    const target = activeById.get(targetId);
+    if (target === undefined || actions.length === 0) continue;
+    const bestRank = actions.reduce((best, action) => compareResolutionRank(action.issuer.rank!, best) > 0 ? action.issuer.rank! : best, actions[0]!.issuer.rank!);
+    const best = actions.filter((action) => sameResolutionRank(action.issuer.rank!, bestRank));
+    const allDisable = best.every((action) => action.kind === "disable");
+    if (best.length > 1 && !allDisable) {
+      const conflict: ResolutionConflict = {
+        kind: "operation_conflict",
+        targetAssetId: target.candidate.assetId,
+        involvedAssetIds: canonicalIds([target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]),
+      };
+      addConflict(conflict);
+      for (const action of best) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+      continue;
+    }
+    const winner = allDisable
+      ? best.slice().sort((left, right) => codeUnitCompare(String(left.issuer.candidate.assetId), String(right.issuer.candidate.assetId)))[0]!
+      : best[0]!;
+    for (const action of actions) {
+      if (action !== winner && action.kind !== winner.kind) action.issuer.reason = resolutionConflictReason({
+        kind: "operation_conflict",
+        targetAssetId: target.candidate.assetId,
+        involvedAssetIds: canonicalIds([target.candidate.assetId, action.issuer.candidate.assetId, winner.issuer.candidate.assetId]),
+      }, action.issuer.rank);
+    }
+    if (winner.kind === "disable") target.reason = { kind: "disabled", disabledBy: winner.issuer.candidate.assetId };
+    else target.reason = {
+      kind: "overridden",
+      overriddenBy: winner.issuer.candidate.assetId,
+      mergeGroup: winner.issuer.candidate.rule.mergeGroup as string,
+      winnerRank: winner.issuer.rank!,
+    };
+  }
+
+  const exclusiveGroups = new Map<string, CandidateState[]>();
+  for (const state of states) {
+    if (state.reason.kind !== "included" || state.candidate.rule.mergeMode !== "exclusive") continue;
+    const group = exclusiveGroups.get(state.candidate.rule.mergeGroup) ?? [];
+    group.push(state);
+    exclusiveGroups.set(state.candidate.rule.mergeGroup, group);
+  }
+  for (const [mergeGroup, group] of exclusiveGroups) {
+    const mandatory = group.filter((state) => state.candidate.rule.mandatory);
+    if (mandatory.length > 1) {
+      const conflict: ResolutionConflict = { kind: "mandatory_conflict", involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)) };
+      addConflict(conflict);
+      for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
+      continue;
+    }
+    if (mandatory.length === 1) {
+      const winner = mandatory[0]!;
+      for (const state of group) {
+        if (state !== winner) state.reason = {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup,
+          winnerRank: winner.rank!,
+        };
+      }
+      continue;
+    }
+    const decision = selectExclusiveWinner(group.map((state) => ({
+      candidate: state.candidate,
+      matchedAxes: state.reason.kind === "included" ? state.reason.matchedAxes : [],
+      rank: state.rank!,
+    })));
+    if (decision.kind === "conflict") {
+      addConflict(decision.conflict);
+      for (const state of group) state.reason = resolutionConflictReason(decision.conflict, state.rank);
+    } else {
+      const winner = decision.candidate;
+      for (const state of group) {
+        if (state.candidate === winner.candidate) continue;
+        state.reason = {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup,
+          winnerRank: winner.rank,
+        };
+      }
+    }
+  }
+
+  const baseIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
+  const finalTargetsById = new Map<string, CandidateState[]>();
+  for (const state of states) {
+    if (!baseIncluded.has(state)) continue;
+    const group = finalTargetsById.get(String(state.candidate.assetId)) ?? [];
+    group.push(state);
+    finalTargetsById.set(String(state.candidate.assetId), group);
+  }
+  const stateById = new Map<string, CandidateState[]>();
+  for (const state of states) {
+    const group = stateById.get(String(state.candidate.assetId)) ?? [];
+    group.push(state);
+    stateById.set(String(state.candidate.assetId), group);
+  }
+  const invalidById = new Set(invalidStates.map((state) => String(state.candidate.assetId)));
+  const memo = new Map<CandidateState, DependencyOutcome>();
+  const visiting: CandidateState[] = [];
+  const analyze = (state: CandidateState): DependencyOutcome => {
+    const known = memo.get(state);
+    if (known !== undefined) return known;
+    const cycleStart = visiting.indexOf(state);
+    if (cycleStart >= 0) {
+      const cycleIds = canonicalIds(visiting.slice(cycleStart).map((item) => item.candidate.assetId));
+      return { ok: false, cause: "requirement_cycle", failedRequirements: [state.candidate.assetId], cycleIds };
+    }
+    visiting.push(state);
+    const failures: { id: AssetId; cause: DependencyCause }[] = [];
+    let cycleIds: readonly AssetId[] | undefined;
+    for (const requiredId of state.candidate.rule.requires) {
+      const targets = finalTargetsById.get(String(requiredId)) ?? [];
+      // More than one included candidate for the same id is an unresolved identity, not a
+      // dependency the closure may pick from: falling through to the classification below
+      // reports it rather than letting an arbitrary one satisfy the requirement.
+      const target = targets.length === 1 ? targets[0] : undefined;
+      if (target === undefined) {
+        // `finalTargetsById` holds only included candidates, so the reason a requirement
+        // failed has to be read off every candidate carrying that id. Classifying from the
+        // single included target instead leaves disabled and overridden targets
+        // indistinguishable from a malformed one.
+        const candidatesForId = stateById.get(String(requiredId)) ?? [];
+        const cause = invalidById.has(String(requiredId)) ? "requirement_invalid" :
+          candidatesForId.length === 0 ? "missing_requirement" :
+          candidatesForId.every((candidate) => candidate.reason.kind === "excluded" && candidate.reason.cause === "scope_mismatch")
+            ? "requirement_out_of_scope" :
+          candidatesForId.every((candidate) => candidate.reason.kind === "disabled")
+            ? "requirement_disabled" :
+          candidatesForId.every((candidate) => candidate.reason.kind === "overridden")
+            ? "requirement_overridden" : "requirement_invalid";
+        failures.push({ id: requiredId, cause });
+        continue;
+      }
+      const outcome = analyze(target);
+      if (!outcome.ok) {
+        failures.push({ id: requiredId, cause: outcome.cause });
+        if (outcome.cycleIds !== undefined) cycleIds = outcome.cycleIds;
+      }
+    }
+    visiting.pop();
+    if (failures.length === 0) {
+      const success: DependencyOutcome = { ok: true };
+      memo.set(state, success);
+      return success;
+    }
+    failures.sort((left, right) => codeUnitCompare(left.id, right.id));
+    const result: DependencyOutcome = {
+      ok: false,
+      cause: failures[0]!.cause,
+      failedRequirements: failures.map((failure) => failure.id),
+      ...(cycleIds === undefined ? {} : { cycleIds }),
+    };
+    memo.set(state, result);
+    return result;
+  };
+
+  for (const state of states) {
+    if (!baseIncluded.has(state)) continue;
+    const outcome = analyze(state);
+    if (outcome.ok) continue;
+    state.reason = {
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: outcome.cause,
+      failedRequirements: [...outcome.failedRequirements],
+    };
+    if (state.candidate.rule.mandatory) {
+      if (outcome.cause === "requirement_cycle") {
+        addConflict({
+          kind: "dependency_cycle",
+          involvedAssetIds: canonicalIds([state.candidate.assetId, ...(outcome.cycleIds ?? outcome.failedRequirements)]),
+        });
+      } else {
+        addConflict({
+          kind: "dependency_failure",
+          failedRequirement: outcome.failedRequirements[0]!,
+          involvedAssetIds: canonicalIds([state.candidate.assetId, ...outcome.failedRequirements]),
+        });
+      }
+    }
+  }
+
+  const allStates = [...states, ...invalidStates].sort(compareCandidatesForOutput);
+  const evaluationStates = allStates;
+  const resultConflicts = [...conflicts.values()].sort((left, right) => {
+    const kindOrder = codeUnitCompare(left.kind, right.kind);
+    if (kindOrder !== 0) return kindOrder;
+    return codeUnitCompare(conflictKey(left), conflictKey(right));
+  });
+  return {
+    ok: true,
+    value: {
+      scope: contextResult.value,
+      evaluations: evaluationStates.map((state) => ({ candidate: state.candidate, reason: state.reason })),
+      outcome: resultConflicts.length === 0 ? "resolved" : "conflicted",
+      conflicts: resultConflicts,
+    },
+  };
+};
+
+const toResolutionContextSafely = (
+  scope: unknown,
+): AssetResult<ResolutionContext> => {
+  if (!isRecord(scope)) return invalidRequest([detail(["scope"], "invalid_value", "The resolution scope must be an object.")]);
+  const input = scope as ResolutionScopeInput;
+  return toResolutionContext(input);
+};
