@@ -1,3 +1,4 @@
+import { ASSET_TYPES, LOADING_TIERS } from "@aacl/shared";
 import type {
   AssetId,
   AssetRevision,
@@ -500,8 +501,12 @@ const validateCandidate = (candidate: NormalizedCandidate): readonly CoreErrorDe
   if (!isRecord(value)) return [detail(path, "invalid_value", "The candidate must be an object.")];
   if (!isNonEmptyString(value.assetId)) details.push(detail([...path, "assetId"], "empty_identifier", "The asset id must not be empty."));
   if (!isNonEmptyString(value.revision)) details.push(detail([...path, "revision"], "empty_identifier", "The revision must not be empty."));
-  if (!isNonEmptyString(value.assetType)) details.push(detail([...path, "assetType"], "invalid_value", "The asset type must be a non-empty string."));
-  if (!isNonEmptyString(value.loadingTier)) details.push(detail([...path, "loadingTier"], "invalid_value", "The loading tier must be a non-empty string."));
+  if (!isNonEmptyString(value.assetType) || !ASSET_TYPES.includes(value.assetType as AssetType)) {
+    details.push(detail([...path, "assetType"], "invalid_value", "The asset type is invalid."));
+  }
+  if (!isNonEmptyString(value.loadingTier) || !LOADING_TIERS.includes(value.loadingTier as LoadingTier)) {
+    details.push(detail([...path, "loadingTier"], "invalid_value", "The loading tier is invalid."));
+  }
 
   const source = value.source;
   if (!isRecord(source)) {
@@ -826,78 +831,177 @@ export const resolveScope = (
   }
   const invalidById = new Set(invalidStates.map((state) => String(state.candidate.assetId)));
   const applyDependencyClosure = (): void => {
-    const baseIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
+    const baseIncluded = states.filter((state) => state.reason.kind === "included");
     const finalTargetsById = new Map<string, CandidateState[]>();
     for (const state of baseIncluded) {
       const group = finalTargetsById.get(String(state.candidate.assetId)) ?? [];
       group.push(state);
       finalTargetsById.set(String(state.candidate.assetId), group);
     }
-    const memo = new Map<CandidateState, DependencyOutcome>();
-    const visiting: CandidateState[] = [];
-    const analyze = (state: CandidateState): DependencyOutcome => {
-      const known = memo.get(state);
-      if (known !== undefined) return known;
-      const cycleStart = visiting.indexOf(state);
-      if (cycleStart >= 0) {
-        const cycleIds = canonicalIds(visiting.slice(cycleStart).map((item) => item.candidate.assetId));
-        return { ok: false, cause: "requirement_cycle", failedRequirements: [state.candidate.assetId], cycleIds };
-      }
-      visiting.push(state);
-      const failures: { id: AssetId; cause: DependencyCause }[] = [];
-      let cycleIds: readonly AssetId[] | undefined;
+    type DependencyEdge = { readonly requiredId: AssetId; readonly target: CandidateState };
+    type DependencyNode = {
+      readonly edges: readonly DependencyEdge[];
+      readonly directFailures: readonly { readonly id: AssetId; readonly cause: DependencyCause }[];
+    };
+    const classifyMissingRequirement = (requiredId: AssetId): DependencyCause => {
+      // `finalTargetsById` holds only included candidates, so the reason a requirement
+      // failed has to be read off every candidate carrying that id. Classifying from the
+      // single included target instead leaves disabled and overridden targets
+      // indistinguishable from a malformed one.
+      const candidatesForId = stateById.get(String(requiredId)) ?? [];
+      const matchedCandidatesForId = candidatesForId.filter((candidate) => candidate.matched);
+      if (invalidById.has(String(requiredId))) return "requirement_invalid";
+      if (candidatesForId.length === 0) return "missing_requirement";
+      if (matchedCandidatesForId.length === 0) return "requirement_out_of_scope";
+      if (matchedCandidatesForId.every((candidate) => candidate.reason.kind === "disabled")) return "requirement_disabled";
+      if (matchedCandidatesForId.every((candidate) => candidate.reason.kind === "overridden")) return "requirement_overridden";
+      return "requirement_invalid";
+    };
+    const dependencyNodes = new Map<CandidateState, DependencyNode>();
+    const dependencyTargets = new Map<CandidateState, CandidateState[]>();
+    const dependents = new Map<CandidateState, CandidateState[]>();
+    for (const state of baseIncluded) {
+      const edges: DependencyEdge[] = [];
+      const directFailures: { id: AssetId; cause: DependencyCause }[] = [];
       for (const requiredId of state.candidate.rule.requires) {
         const targets = finalTargetsById.get(String(requiredId)) ?? [];
         // More than one included candidate for the same id is an unresolved identity, not a
         // dependency the closure may pick from: falling through to the classification below
         // reports it rather than letting an arbitrary one satisfy the requirement.
         const target = targets.length === 1 ? targets[0] : undefined;
-        if (target === undefined) {
-          // `finalTargetsById` holds only included candidates, so the reason a requirement
-          // failed has to be read off every candidate carrying that id. Classifying from the
-          // single included target instead leaves disabled and overridden targets
-          // indistinguishable from a malformed one.
-          const candidatesForId = stateById.get(String(requiredId)) ?? [];
-          const matchedCandidatesForId = candidatesForId.filter((candidate) => candidate.matched);
-          const cause = invalidById.has(String(requiredId)) ? "requirement_invalid" :
-            candidatesForId.length === 0 ? "missing_requirement" :
-            matchedCandidatesForId.length === 0 ? "requirement_out_of_scope" :
-            matchedCandidatesForId.every((candidate) => candidate.reason.kind === "disabled")
-              ? "requirement_disabled" :
-            matchedCandidatesForId.every((candidate) => candidate.reason.kind === "overridden")
-              ? "requirement_overridden" : "requirement_invalid";
-          failures.push({ id: requiredId, cause });
+        if (target === undefined) directFailures.push({ id: requiredId, cause: classifyMissingRequirement(requiredId) });
+        else edges.push({ requiredId, target });
+      }
+      dependencyNodes.set(state, { edges, directFailures });
+      dependencyTargets.set(state, edges.map((edge) => edge.target));
+      for (const edge of edges) {
+        const stateDependents = dependents.get(edge.target) ?? [];
+        stateDependents.push(state);
+        dependents.set(edge.target, stateDependents);
+      }
+    }
+
+    const orderedBaseIncluded = baseIncluded.slice().sort(compareCandidatesForOutput);
+    const visited = new Set<CandidateState>();
+    const finishOrder: CandidateState[] = [];
+    for (const start of orderedBaseIncluded) {
+      if (visited.has(start)) continue;
+      const stack: { state: CandidateState; expanded: boolean }[] = [{ state: start, expanded: false }];
+      while (stack.length > 0) {
+        const frame = stack.pop()!;
+        if (frame.expanded) {
+          finishOrder.push(frame.state);
           continue;
         }
-        const outcome = analyze(target);
-        if (!outcome.ok) {
-          failures.push({ id: requiredId, cause: outcome.cause });
-          if (outcome.cycleIds !== undefined) {
-            cycleIds = cycleIds === undefined
-              ? outcome.cycleIds
-              : canonicalIds([...cycleIds, ...outcome.cycleIds]);
-          }
+        if (visited.has(frame.state)) continue;
+        visited.add(frame.state);
+        stack.push({ state: frame.state, expanded: true });
+        const targets = (dependencyTargets.get(frame.state) ?? []).slice().sort(compareCandidatesForOutput);
+        for (let index = targets.length - 1; index >= 0; index -= 1) {
+          const target = targets[index]!;
+          if (!visited.has(target)) stack.push({ state: target, expanded: false });
         }
       }
-      visiting.pop();
-      if (failures.length === 0) {
-        const success: DependencyOutcome = { ok: true };
-        memo.set(state, success);
-        return success;
+    }
+
+    const components: CandidateState[][] = [];
+    const componentByState = new Map<CandidateState, number>();
+    for (const start of finishOrder.slice().reverse()) {
+      if (componentByState.has(start)) continue;
+      const componentIndex = components.length;
+      const component: CandidateState[] = [];
+      const stack = [start];
+      componentByState.set(start, componentIndex);
+      while (stack.length > 0) {
+        const state = stack.pop()!;
+        component.push(state);
+        for (const dependent of dependents.get(state) ?? []) {
+          if (componentByState.has(dependent)) continue;
+          componentByState.set(dependent, componentIndex);
+          stack.push(dependent);
+        }
       }
-      failures.sort((left, right) => codeUnitCompare(left.id, right.id));
-      const result: DependencyOutcome = {
-        ok: false,
-        cause: failures[0]!.cause,
-        failedRequirements: failures.map((failure) => failure.id),
-        ...(cycleIds === undefined ? {} : { cycleIds }),
-      };
-      memo.set(state, result);
-      return result;
-    };
+      component.sort(compareCandidatesForOutput);
+      components.push(component);
+    }
+
+    const componentDependencies = components.map(() => new Set<number>());
+    const componentDependents = components.map(() => new Set<number>());
+    for (const [state, targets] of dependencyTargets) {
+      const stateComponent = componentByState.get(state)!;
+      for (const target of targets) {
+        const targetComponent = componentByState.get(target)!;
+        if (stateComponent === targetComponent) continue;
+        componentDependencies[stateComponent]!.add(targetComponent);
+        componentDependents[targetComponent]!.add(stateComponent);
+      }
+    }
+    const cyclicComponents = new Set<number>();
+    for (let index = 0; index < components.length; index += 1) {
+      const component = components[index]!;
+      if (component.length > 1 || (dependencyTargets.get(component[0]!) ?? []).some((target) => target === component[0])) {
+        cyclicComponents.add(index);
+      }
+    }
+
+    const readyComponents = components
+      .map((_, index) => index)
+      .filter((index) => componentDependencies[index]!.size === 0);
+    const processedComponents: number[] = [];
+    for (let cursor = 0; cursor < readyComponents.length; cursor += 1) {
+      const componentIndex = readyComponents[cursor]!;
+      processedComponents.push(componentIndex);
+      for (const dependent of componentDependents[componentIndex]!) {
+        const dependencies = componentDependencies[dependent]!;
+        dependencies.delete(componentIndex);
+        if (dependencies.size === 0) readyComponents.push(dependent);
+      }
+    }
+
+    const outcomes = new Map<CandidateState, DependencyOutcome>();
+    for (const componentIndex of processedComponents) {
+      const component = components[componentIndex]!;
+      const componentIds = cyclicComponents.has(componentIndex)
+        ? canonicalIds(component.map((state) => state.candidate.assetId))
+        : undefined;
+      const componentStates = new Set(component);
+      for (const state of component) {
+        const node = dependencyNodes.get(state)!;
+        const failures = [...node.directFailures];
+        let cycleIds = componentIds;
+        if (componentIds !== undefined) {
+          for (const edge of node.edges) {
+            if (componentStates.has(edge.target)) failures.push({ id: edge.requiredId, cause: "requirement_cycle" });
+          }
+        }
+        for (const edge of node.edges) {
+          if (componentStates.has(edge.target)) continue;
+          const outcome = outcomes.get(edge.target);
+          if (outcome === undefined) throw new Error("Dependency component order is incomplete.");
+          if (!outcome.ok) {
+            failures.push({ id: edge.requiredId, cause: outcome.cause });
+            if (outcome.cycleIds !== undefined) {
+              cycleIds = cycleIds === undefined
+                ? outcome.cycleIds
+                : canonicalIds([...cycleIds, ...outcome.cycleIds]);
+            }
+          }
+        }
+        failures.sort((left, right) => codeUnitCompare(left.id, right.id));
+        const outcome: DependencyOutcome = failures.length === 0
+          ? { ok: true }
+          : {
+              ok: false,
+              cause: failures[0]!.cause,
+              failedRequirements: failures.map((failure) => failure.id),
+              ...(cycleIds === undefined ? {} : { cycleIds }),
+            };
+        outcomes.set(state, outcome);
+      }
+    }
 
     for (const state of baseIncluded) {
-      const outcome = analyze(state);
+      const outcome = outcomes.get(state)!;
       if (outcome.ok) continue;
       state.reason = {
         kind: "unavailable",
@@ -927,6 +1031,7 @@ export const resolveScope = (
   const operationBaseConflicts = new Map(conflicts);
   type OperationAction = { issuer: CandidateState; target: CandidateState; kind: "override" | "disable" };
   const blockedOperationIssuers = new Set<CandidateState>();
+  const blockedOperationReasons = new Map<CandidateState, CandidateReason>();
   const revivedOperationIssuers = new Set<CandidateState>();
   const resolveOperations = (): {
     readonly appliedActions: readonly OperationAction[];
@@ -1192,18 +1297,28 @@ export const resolveScope = (
     applyDependencyClosure();
     const operationCycles = findOperationCycles(appliedActions);
     if (operationCycles.length > 0) {
-      for (const operationCycle of operationCycles) {
+      const cycleConflicts = operationCycles.map((operationCycle) => {
         const cycleAssetIds = canonicalIds(operationCycle.flatMap((action) => [
           action.issuer.candidate.assetId,
           action.target.candidate.assetId,
         ]));
-        const conflict: ResolutionConflict = {
-          kind: "operation_conflict",
-          targetAssetId: cycleAssetIds[0]!,
-          involvedAssetIds: cycleAssetIds,
+        return {
+          cycle: operationCycle,
+          conflict: {
+            kind: "operation_conflict",
+            targetAssetId: cycleAssetIds[0]!,
+            involvedAssetIds: cycleAssetIds,
+          } as ResolutionConflict,
         };
+      });
+      for (const { cycle } of cycleConflicts) {
+        for (const action of cycle) blockedOperationIssuers.add(action.issuer);
+      }
+      resolveOperations();
+      applyDependencyClosure();
+      for (const { cycle, conflict } of cycleConflicts) {
         addConflict(conflict);
-        for (const action of operationCycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+        for (const action of cycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
       }
       break;
     }
@@ -1217,8 +1332,27 @@ export const resolveScope = (
       !revivedOperationIssuers.has(state));
     const hasRevivedEligibleIssuer = newlyRevivedIssuers.length > 0;
     for (const issuer of newlyRevivedIssuers) revivedOperationIssuers.add(issuer);
-    for (const issuer of newlyBlocked) blockedOperationIssuers.add(issuer);
+    for (const issuer of newlyBlocked) {
+      blockedOperationIssuers.add(issuer);
+      blockedOperationReasons.set(issuer, issuer.reason);
+    }
     if (newlyBlocked.length === 0 && !hasRevivedEligibleIssuer) break;
+  }
+
+  for (const issuer of blockedOperationIssuers) {
+    const priorReason = blockedOperationReasons.get(issuer);
+    const operation = issuer.candidate.rule.operation;
+    if (priorReason?.kind !== "unavailable" ||
+      operation.kind === "add" ||
+      priorReason.failedRequirements.includes(operation.targetAssetId) ||
+      issuer.reason.kind !== "included") continue;
+    const conflict: ResolutionConflict = {
+      kind: "operation_conflict",
+      targetAssetId: operation.targetAssetId,
+      involvedAssetIds: canonicalIds([issuer.candidate.assetId, operation.targetAssetId]),
+    };
+    addConflict(conflict);
+    issuer.reason = resolutionConflictReason(conflict, issuer.rank);
   }
 
   const allStates = [...states, ...invalidStates].sort(compareCandidatesForOutput);
