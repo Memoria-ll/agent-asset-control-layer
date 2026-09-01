@@ -38,9 +38,6 @@ const workflowFailure = (
   failure: coreFailure("invalid_request", message, details),
 });
 
-const hasOwn = (value: object, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(value, key);
-
 type GeneralFence = { readonly character: "`" | "~"; readonly length: number };
 
 const generalFenceStart = (line: string): GeneralFence | undefined => {
@@ -501,23 +498,10 @@ export type WorkflowStateLinks = {
 };
 
 /** Create the initial state fields owned by the domain. */
-export function initializeWorkflowState(
+export const initializeWorkflowState = (
   definition: ResolvedWorkflowDefinition,
   links: WorkflowStateLinks,
-): WorkflowStateSeed;
-export function initializeWorkflowState(
-  definition: ResolvedWorkflowDefinition,
-  linkedAgentExecutionIds: readonly AgentExecutionId[],
-  linkedSnapshotIds: readonly SnapshotId[],
-): WorkflowStateSeed;
-export function initializeWorkflowState(
-  definition: ResolvedWorkflowDefinition,
-  linksOrAgentIds: WorkflowStateLinks | readonly AgentExecutionId[],
-  linkedSnapshotIds?: readonly SnapshotId[],
-): WorkflowStateSeed {
-  const links: WorkflowStateLinks = "linkedAgentExecutionIds" in linksOrAgentIds
-    ? linksOrAgentIds
-    : { linkedAgentExecutionIds: linksOrAgentIds, linkedSnapshotIds: linkedSnapshotIds ?? [] };
+): WorkflowStateSeed => {
   return {
     workflowId: definition.workflowId,
     currentStageId: definition.entryStageId,
@@ -526,7 +510,7 @@ export function initializeWorkflowState(
     linkedAgentExecutionIds: [...links.linkedAgentExecutionIds],
     linkedSnapshotIds: [...links.linkedSnapshotIds],
   };
-}
+};
 
 export type WorkflowEvaluationInput = {
   readonly roleId?: RoleId;
@@ -551,8 +535,6 @@ export type WorkflowTransitionSelection = {
   readonly transitionKind: TransitionKind;
   readonly expectedStateVersion: WorkflowStateVersion;
 };
-
-export type WorkflowTransitionApplicationInput = WorkflowEvaluationInput & WorkflowTransitionSelection;
 
 const stateMismatch = (): AssetResult<never> => workflowFailure(
   "The workflow state does not belong to the definition.",
@@ -663,71 +645,22 @@ const transitionBlocked = (reasons: readonly string[]): AssetResult<never> => wo
   [detail(["transition"], "transition_blocked", reasons.join(" "))],
 );
 
-/** Re-evaluate and apply only the transition explicitly selected by the caller. */
-export function applyWorkflowTransition(
+/**
+ * Re-evaluate and apply only the transition explicitly selected by the caller.
+ *
+ * `selection` carries `expectedStateVersion` as its own field rather than being a
+ * `TransitionCandidateDto`. A candidate already holds the version it was evaluated
+ * against, so accepting one here would let the precondition be read off whatever the
+ * query happened to return instead of off the state the caller decided on.
+ */
+export const applyWorkflowTransition = (
   definition: ResolvedWorkflowDefinition,
   state: WorkflowStateDto,
   selection: WorkflowTransitionSelection,
   input: WorkflowEvaluationInput,
-): AssetResult<WorkflowStateMutation>;
-export function applyWorkflowTransition(
-  definition: ResolvedWorkflowDefinition,
-  state: WorkflowStateDto,
-  selection: TransitionCandidateDto,
-  input: WorkflowEvaluationInput,
-): AssetResult<WorkflowStateMutation>;
-export function applyWorkflowTransition(
-  definition: ResolvedWorkflowDefinition,
-  state: WorkflowStateDto,
-  input: WorkflowEvaluationInput,
-  selection: WorkflowTransitionSelection,
-): AssetResult<WorkflowStateMutation>;
-export function applyWorkflowTransition(
-  definition: ResolvedWorkflowDefinition,
-  state: WorkflowStateDto,
-  input: WorkflowEvaluationInput,
-  selection: TransitionCandidateDto,
-): AssetResult<WorkflowStateMutation>;
-export function applyWorkflowTransition(
-  definition: ResolvedWorkflowDefinition,
-  state: WorkflowStateDto,
-  input: WorkflowTransitionApplicationInput,
-): AssetResult<WorkflowStateMutation>;
-export function applyWorkflowTransition(
-  definition: ResolvedWorkflowDefinition,
-  state: WorkflowStateDto,
-  first: WorkflowEvaluationInput | WorkflowTransitionSelection | TransitionCandidateDto | WorkflowTransitionApplicationInput,
-  second?: WorkflowEvaluationInput | WorkflowTransitionSelection | TransitionCandidateDto,
-): AssetResult<WorkflowStateMutation> {
-  type SelectionLike = WorkflowTransitionSelection | TransitionCandidateDto;
-  const hasSelectionFields = (value: object): value is SelectionLike =>
-    hasOwn(value, "toStageId") && hasOwn(value, "transitionKind");
-  const toSelection = (value: SelectionLike): WorkflowTransitionSelection => ({
-    toStageId: value.toStageId,
-    transitionKind: value.transitionKind,
-    expectedStateVersion: hasOwn(value, "expectedStateVersion")
-      ? (value as WorkflowTransitionSelection).expectedStateVersion
-      : (value as TransitionCandidateDto).stateVersion,
-  });
-  const selectionLike = second === undefined
-    ? first as WorkflowTransitionApplicationInput
-    : hasSelectionFields(first)
-      ? first
-      : second as SelectionLike;
-  const evaluationSource = second === undefined
-    ? first as WorkflowTransitionApplicationInput
-    : hasSelectionFields(first)
-      ? second as WorkflowEvaluationInput
-      : first as WorkflowEvaluationInput;
-  const resolvedSelection: WorkflowTransitionSelection = {
-    ...toSelection(selectionLike),
-  };
-  const evaluation: WorkflowEvaluationInput = {
-    ...(evaluationSource.roleId !== undefined ? { roleId: evaluationSource.roleId } : {}),
-    ...(evaluationSource.taskTypeId !== undefined ? { taskTypeId: evaluationSource.taskTypeId } : {}),
-    availableCapabilityRefs: evaluationSource.availableCapabilityRefs,
-    availableArtifactRefs: evaluationSource.availableArtifactRefs,
-  };
+): AssetResult<WorkflowStateMutation> => {
+  const resolvedSelection = selection;
+  const evaluation = input;
 
   if (state.workflowId !== definition.workflowId || getCurrentStage(definition, state) === undefined) {
     return stateMismatch();
@@ -757,4 +690,4 @@ export function applyWorkflowTransition(
       linkedSnapshotIds: [...state.linkedSnapshotIds],
     },
   };
-}
+};

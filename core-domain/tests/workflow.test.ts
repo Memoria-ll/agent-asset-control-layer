@@ -440,7 +440,12 @@ ${JSON.stringify(basicDefinitionBody)}
       expect(candidates.value.every((candidate) => !candidate.blocked)).toBe(true);
       expect(candidates.value.every((candidate) => !Object.hasOwn(candidate, "blockedReasons"))).toBe(true);
 
-      const applied = applyWorkflowTransition(value, state, candidates.value[1]!, input);
+      const selected = candidates.value[1]!;
+      const applied = applyWorkflowTransition(value, state, {
+        toStageId: selected.toStageId,
+        transitionKind: selected.transitionKind,
+        expectedStateVersion: state.stateVersion,
+      }, input);
       expect(applied).toEqual({
         ok: true,
         value: {

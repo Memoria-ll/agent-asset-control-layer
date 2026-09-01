@@ -57,7 +57,6 @@ export type {
   WorkflowStateLinks,
   WorkflowStateMutation,
   WorkflowStateSeed,
-  WorkflowTransitionApplicationInput,
   WorkflowTransitionSelection,
 } from "./workflow.ts";
 
