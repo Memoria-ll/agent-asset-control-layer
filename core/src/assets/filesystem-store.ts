@@ -23,6 +23,7 @@ import {
 import type { AssetId, AssetRevision } from "@aacl/shared";
 import { coreFailure, type CoreFailure } from "@aacl/core-domain";
 import { sha256Hex } from "../internal/digest.ts";
+import { withFilePath } from "../internal/diagnostics.ts";
 import { strictDecode } from "../internal/text.ts";
 
 export type ManagedAssetRoot =
@@ -192,30 +193,9 @@ const hasAssetDelimiter = (bytes: Buffer): boolean => {
   return withoutCr.length === 3 && withoutCr[0] === 0x2d && withoutCr[1] === 0x2d && withoutCr[2] === 0x2d;
 };
 
-const withFilePath = (root: ManagedAssetRoot, relativePath: string, sourceFailure: CoreFailure): CoreFailure => {
-  const details = sourceFailure.details;
-  if (details === undefined) {
-    return coreFailure(sourceFailure.code, sourceFailure.message, [
-      detail(["root", root.rootId, "file", relativePath], "unavailable", sourceFailure.message),
-    ]);
-  }
-  return coreFailure(
-    sourceFailure.code,
-    sourceFailure.message,
-    details.map((item) => {
-      const path = item.path[0] === "document"
-        ? ["root", root.rootId, "file", relativePath, ...item.path.slice(1)]
-        : item.path[0] === "root"
-          ? [...item.path]
-          : ["root", root.rootId, "file", relativePath, ...item.path];
-      return { ...item, path };
-    }),
-  );
-};
-
 const diagnostic = (root: ManagedAssetRoot, relativePath: string | undefined, sourceFailure: CoreFailure): AssetDiagnostic => ({
   source: relativePath === undefined ? rootLocation(root) : fileLocation(root, relativePath),
-  failure: relativePath === undefined ? sourceFailure : withFilePath(root, relativePath, sourceFailure),
+  failure: relativePath === undefined ? sourceFailure : withFilePath(root.rootId, relativePath, sourceFailure),
 });
 
 const makeAssetRevision = (document: string): AssetRevision => {

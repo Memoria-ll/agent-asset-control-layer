@@ -12,6 +12,7 @@ import {
   type TaskTypeDefinition,
 } from "@aacl/core-domain";
 import { coreFailure, type CoreFailure } from "@aacl/core-domain";
+import { withFilePath } from "../internal/diagnostics.ts";
 import type { AssetDiagnostic } from "../assets/filesystem-store.ts";
 import {
   createFilesystemAssetStore,
@@ -99,28 +100,24 @@ const buildFromStore = async (
   const projectionDetails: Array<{ readonly path: string[]; readonly code: string; readonly message: string }> = [];
   let projectionFailure: CoreFailure | undefined;
 
+  // Projection failures are re-rooted at their file with the same helper the asset store
+  // uses, so a defect in a role asset reads identically whichever reader found it.
   for (const stored of roleAssets) {
     const projected = projectRoleDefinition(stored.asset);
     if (projected.ok) roles.push(projected.value);
     else {
-      const details = (projected.failure.details ?? []).map((item) => ({
-      ...item,
-      message: `${item.message} (${sourceLabel(stored)}.)`,
-      }));
-      projectionFailure ??= coreFailure(projected.failure.code, projected.failure.message, details);
-      projectionDetails.push(...details);
+      const located = withFilePath(stored.source.rootId, stored.source.relativePath, projected.failure);
+      projectionFailure ??= located;
+      projectionDetails.push(...(located.details ?? []));
     }
   }
   for (const stored of taskTypeAssets) {
     const projected = projectTaskTypeDefinition(stored.asset);
     if (projected.ok) taskTypes.push(projected.value);
     else {
-      const details = (projected.failure.details ?? []).map((item) => ({
-      ...item,
-      message: `${item.message} (${sourceLabel(stored)}.)`,
-      }));
-      projectionFailure ??= coreFailure(projected.failure.code, projected.failure.message, details);
-      projectionDetails.push(...details);
+      const located = withFilePath(stored.source.rootId, stored.source.relativePath, projected.failure);
+      projectionFailure ??= located;
+      projectionDetails.push(...(located.details ?? []));
     }
   }
 
