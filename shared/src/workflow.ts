@@ -84,6 +84,21 @@ export type WorkflowTransitionDto = z.infer<typeof WorkflowTransitionDto>;
 export type WorkflowTransitionDtoInput = z.input<typeof WorkflowTransitionDto>;
 
 /**
+ * The size a workflow graph may reach.
+ *
+ * A definition is a hand-authored asset, so the bounds sit far above any workflow a person
+ * writes while keeping the graph small enough that whole-graph work (cycle detection,
+ * per-transition evaluation) is bounded by the contract rather than by whatever the
+ * implementation happens to cost. The transition bound is the wider of the two because a
+ * dense graph declares more edges than stages.
+ *
+ * These reach consumers as `maxItems` in the published JSON Schema, not as exported constants:
+ * the schema is the contract's carrier, and the index publishes no numeric surface.
+ */
+export const WORKFLOW_STAGE_LIMIT = 1000;
+export const WORKFLOW_TRANSITION_LIMIT = 4000;
+
+/**
  * A workflow definition as it crosses the boundary.
  *
  * `workflowId` is optional because the on-disk form carries the identifier in
@@ -100,8 +115,8 @@ export const WorkflowDefinitionDto = z.strictObject({
   entryRoleId: RoleId,
   entryStageId: StageId,
   terminalStageId: StageId,
-  stages: z.array(WorkflowStageDto).check(z.minLength(1)),
-  transitions: z.array(WorkflowTransitionDto),
+  stages: z.array(WorkflowStageDto).check(z.minLength(1)).check(z.maxLength(WORKFLOW_STAGE_LIMIT)),
+  transitions: z.array(WorkflowTransitionDto).check(z.maxLength(WORKFLOW_TRANSITION_LIMIT)),
 });
 export type WorkflowDefinitionDto = z.infer<typeof WorkflowDefinitionDto>;
 export type WorkflowDefinitionDtoInput = z.input<typeof WorkflowDefinitionDto>;

@@ -8,9 +8,9 @@ import {
   parseWorkflowDefinitionDto,
   parseWorkflowStateDto,
 } from "../src/index.ts";
-// Schema values are internal; these two are asserted on directly.
+// Schema values and the graph bounds are internal to the package; asserted on directly here.
 import { DegradedInfo } from "../src/status.ts";
-import { TransitionCandidateDto } from "../src/workflow.ts";
+import { TransitionCandidateDto, WORKFLOW_STAGE_LIMIT, WORKFLOW_TRANSITION_LIMIT } from "../src/workflow.ts";
 
 const resolvedContext = (overrides: {
   cost?: Record<string, unknown>;
@@ -371,5 +371,17 @@ describe("published JSON Schema carries the same constraints", () => {
       expect(refs.uniqueItems).toBe(true);
       expect(refs.minItems).toBe(1);
     }
+  });
+
+  // The bounds are asserted as literals rather than against the exported constants: comparing
+  // the schema to the constant passes when both are absent, which is the case this pins.
+  it("states the workflow graph bounds", () => {
+    const definition = schemas().WorkflowDefinitionDto as any;
+
+    expect(WORKFLOW_STAGE_LIMIT).toBe(1000);
+    expect(WORKFLOW_TRANSITION_LIMIT).toBe(4000);
+    expect(definition.properties.stages.minItems).toBe(1);
+    expect(definition.properties.stages.maxItems).toBe(1000);
+    expect(definition.properties.transitions.maxItems).toBe(4000);
   });
 });

@@ -355,26 +355,35 @@ ${JSON.stringify(basicDefinitionBody)}
     expect(detailCodes(badCycle)).toEqual(["cycle_without_retry_or_return"]);
   });
 
-  it("validates a definition far longer than the call stack can carry", () => {
-    const count = 20000;
-    const body = {
-      entryRoleId: "reviewer",
-      entryStageId: "stage-0",
-      terminalStageId: `stage-${count - 1}`,
-      stages: Array.from({ length: count }, (_, index) => ({
-        stageId: `stage-${index}`,
-        displayName: `Stage ${index}`,
-        description: `Stage number ${index}`,
-        ...(index === 0 ? { requiredRoleId: "reviewer", requiredTaskTypeId: "drafting" } : {}),
-      })),
-      transitions: Array.from({ length: count - 1 }, (_, index) => ({
-        fromStageId: `stage-${index}`,
-        toStageId: `stage-${index + 1}`,
-        transitionKind: "advance",
-      })),
-    };
-    const value = unwrap(parseWorkflowDefinitionAsset(workflowAsset(body), catalog()));
-    expect(value.stages).toHaveLength(count);
+  // WorkflowDefinitionDto's stage bound. shared pins the value itself; core-domain only needs
+  // to sit on either side of it.
+  const STAGE_LIMIT = 1000;
+
+  const chain = (count: number) => ({
+    entryRoleId: "reviewer",
+    entryStageId: "stage-0",
+    terminalStageId: `stage-${count - 1}`,
+    stages: Array.from({ length: count }, (_, index) => ({
+      stageId: `stage-${index}`,
+      displayName: `Stage ${index}`,
+      description: `Stage number ${index}`,
+      ...(index === 0 ? { requiredRoleId: "reviewer", requiredTaskTypeId: "drafting" } : {}),
+    })),
+    transitions: Array.from({ length: count - 1 }, (_, index) => ({
+      fromStageId: `stage-${index}`,
+      toStageId: `stage-${index + 1}`,
+      transitionKind: "advance",
+    })),
+  });
+
+  it("validates a definition at the contract's stage limit", () => {
+    const value = unwrap(parseWorkflowDefinitionAsset(workflowAsset(chain(STAGE_LIMIT)), catalog()));
+    expect(value.stages).toHaveLength(STAGE_LIMIT);
+  });
+
+  it("rejects a definition past the contract's stage limit", () => {
+    const over = parseWorkflowDefinitionAsset(workflowAsset(chain(STAGE_LIMIT + 1)), catalog());
+    expect(detailCodes(over)).toEqual(["too_big"]);
   });
 
   it("initializes state fields from the definition and caller links", () => {
@@ -494,57 +503,6 @@ ${JSON.stringify(basicDefinitionBody)}
     }, { availableCapabilityRefs: [], availableArtifactRefs: [] });
 
     expect(detailCodes(exhausted)).toEqual(["state_version_exhausted"]);
-  });
-
-  it("evaluates a wide definition without rebuilding the availability sets per transition", () => {
-    const count = 5000;
-    const value = definition({
-      entryRoleId: "reviewer",
-      entryStageId: "entry",
-      terminalStageId: "done",
-      stages: [
-        { stageId: "entry", displayName: "Entry", description: "Entry", requiredRoleId: "reviewer", requiredTaskTypeId: "drafting" },
-        ...Array.from({ length: count }, (_, index) => ({
-          stageId: `stage-${index}`,
-          displayName: `Stage ${index}`,
-          description: `Stage number ${index}`,
-        })),
-        { stageId: "done", displayName: "Done", description: "Done" },
-      ],
-      transitions: [
-        ...Array.from({ length: count }, (_, index) => ({
-          fromStageId: "entry", toStageId: `stage-${index}`, transitionKind: "advance",
-        })),
-        ...Array.from({ length: count }, (_, index) => ({
-          fromStageId: `stage-${index}`, toStageId: "done", transitionKind: "advance",
-        })),
-      ],
-    });
-    const state = parseWorkflowStateDto({
-      workflowId: value.workflowId,
-      executionInstanceId: "instance-1",
-      stateVersion: 0,
-      currentStageId: "entry",
-      entryRoleId: value.entryRoleId,
-      currentRoleId: value.entryRoleId,
-      linkedAgentExecutionIds: [],
-      linkedSnapshotIds: [],
-      updatedAt: "2026-08-31T12:00:00Z",
-    });
-    const refs = Array.from({ length: count }, (_, index) => `ref-${index}`);
-
-    // Rebuilding the sets per transition costs 3.0s here against 9ms once they are hoisted,
-    // so the budget separates the two by well over a hundredfold in either direction.
-    const started = Date.now();
-    const candidates = possibleWorkflowTransitions(value, state, {
-      availableCapabilityRefs: refs,
-      availableArtifactRefs: refs,
-    });
-    const elapsed = Date.now() - started;
-
-    expect(candidates.ok).toBe(true);
-    if (candidates.ok) expect(candidates.value).toHaveLength(count);
-    expect(elapsed).toBeLessThan(1000);
   });
 
   it("rejects stale, undeclared, blocked, and mismatched state transitions", () => {
