@@ -54,7 +54,11 @@ const representativeInputs: Record<string, unknown> = {
     agentExecutionId: "execution-1",
     sessionId: "session-1",
     projectId: "project-1",
-    workflowId: "workflow-1",
+    workflowBinding: {
+      kind: "workflow",
+      workflowId: "workflow-1",
+      executionInstanceId: "instance-1",
+    },
     stageId: "stage-1",
     taskTypeId: "task-type-1",
     roleId: "role-1",
@@ -67,6 +71,7 @@ const representativeInputs: Record<string, unknown> = {
   },
   WorkflowStateDto: {
     workflowId: "workflow-1",
+    executionInstanceId: "instance-1",
     currentStageId: "stage-1",
     entryRoleId: "role-1",
     currentRoleId: "role-1",

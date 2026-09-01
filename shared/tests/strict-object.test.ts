@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 // The .js suffix is required for NodeNext resolution of the TypeScript source.
-import type { IdeContextInput, ResolutionScopeInput } from "../src/index.ts";
+import type {
+  IdeContextInput,
+  ResolutionScopeInput,
+  WorkflowBindingInput,
+} from "../src/index.ts";
 import {
+  parseAgentExecutionDto,
   parseResolveRequest,
   tryParseResolveRequest,
 } from "../src/index.ts";
@@ -37,6 +42,13 @@ const composedScope: ResolutionScopeInput = {
   directory: "/workspace",
 };
 
+// The nested binding input is composed from plain strings without importing the schema value.
+const composedWorkflowBinding: WorkflowBindingInput = {
+  kind: "workflow",
+  workflowId: "workflow-1",
+  executionInstanceId: "instance-1",
+};
+
 const composedIdeContext: IdeContextInput = {
   workspaceFolder: "/workspace",
   selectedFilePaths: ["/workspace/readme.md"],
@@ -51,5 +63,12 @@ describe("input aliases are composable from plain strings", () => {
 
     expect(request.scope.projectId).toBe("project-1");
     expect(request.ide?.workspaceFolder).toBe("/workspace");
+
+    const execution = parseAgentExecutionDto({
+      agentExecutionId: "execution-1",
+      workflowBinding: composedWorkflowBinding,
+      startedAt: "2026-08-30T01:02:03+09:00",
+    });
+    expect(execution.workflowBinding).toEqual(composedWorkflowBinding);
   });
 });

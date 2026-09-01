@@ -2,9 +2,9 @@ import * as z from "zod/mini";
 import { brandedId } from "./internal/branded-id.ts";
 
 /**
- * Every identifier is a distinct branded string, because a DTO such as
- * `AgentExecutionDto` carries eight identifier fields side by side and a plain
- * `string` lets two of them be swapped without the type checker noticing.
+ * Every identifier is a distinct branded string. Boundary DTOs carry several
+ * identifier fields side by side, and a plain `string` lets two of them be
+ * swapped without the type checker noticing.
  *
  * The only value constraint is "non-empty". The permitted character set, the
  * maximum length and case normalisation are NOT constrained by this contract:
@@ -47,6 +47,9 @@ export type AgentExecutionId = z.infer<typeof AgentExecutionId>;
 
 export const WorkflowId = brandedId<"WorkflowId">();
 export type WorkflowId = z.infer<typeof WorkflowId>;
+
+export const ExecutionInstanceId = brandedId<"ExecutionInstanceId">();
+export type ExecutionInstanceId = z.infer<typeof ExecutionInstanceId>;
 
 export const StageId = brandedId<"StageId">();
 export type StageId = z.infer<typeof StageId>;

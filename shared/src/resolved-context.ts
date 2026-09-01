@@ -44,6 +44,10 @@ export type LoadingTier = z.infer<typeof LoadingTier>;
  * The dimensions a resolution is evaluated against. Every axis is optional: a
  * caller resolves against the axes it actually knows.
  *
+ * An execution instance id is not among them. Assets declare the scope they
+ * apply to, and are authored before any run exists, so an opaque identifier
+ * minted when a run starts is a dimension no asset could ever be matched on.
+ *
  * It is defined here rather than beside `ResolveRequest` because a resolved
  * context embeds the scope it was resolved for, while a resolve response embeds
  * the resolved context — the reverse placement makes the two modules import each

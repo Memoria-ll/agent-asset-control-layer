@@ -5,6 +5,10 @@ import {
 } from "../src/index.ts";
 
 describe("contract compatibility", () => {
+  it("uses the current contract version", () => {
+    expect(CONTRACT_VERSION).toBe("0.2.0");
+  });
+
   it("does not call two different versions a match", () => {
     const patchOnly = checkContractCompatibility("1.2.0", "1.2.9");
     const identical = checkContractCompatibility("1.2.0", "1.2.0");

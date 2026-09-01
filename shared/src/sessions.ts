@@ -1,6 +1,7 @@
 import * as z from "zod/mini";
 import {
   AgentExecutionId,
+  ExecutionInstanceId,
   ModelId,
   ProjectId,
   ProviderId,
@@ -36,6 +37,18 @@ export const SessionDto = z.strictObject({
 export type SessionDto = z.infer<typeof SessionDto>;
 export type SessionDtoInput = z.input<typeof SessionDto>;
 
+const workflowBindingArms = [
+  z.strictObject({
+    kind: z.literal("workflow"),
+    workflowId: WorkflowId,
+    executionInstanceId: ExecutionInstanceId,
+  }),
+  z.strictObject({ kind: z.literal("standalone") }),
+] as const;
+export const WorkflowBinding = z.discriminatedUnion("kind", workflowBindingArms);
+export type WorkflowBinding = z.infer<typeof WorkflowBinding>;
+export type WorkflowBindingInput = z.input<typeof WorkflowBinding>;
+
 /**
  * One agent execution and the metadata it was started with.
  *
@@ -47,7 +60,7 @@ export const AgentExecutionDto = z.strictObject({
   agentExecutionId: AgentExecutionId,
   sessionId: z.optional(SessionId),
   projectId: z.optional(ProjectId),
-  workflowId: z.optional(WorkflowId),
+  workflowBinding: WorkflowBinding,
   stageId: z.optional(StageId),
   taskTypeId: z.optional(TaskTypeId),
   roleId: z.optional(RoleId),
