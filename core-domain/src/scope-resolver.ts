@@ -1239,9 +1239,14 @@ const resolveScopeFixedPoint = (
     const failures: OperationFailure[] = [];
     const operationConflicts: OperationConflictEntry[] = [];
     const conflictByIssuer = new Map<CandidateState, ResolutionConflict>();
-    const targetCandidatesFor = (issuer: CandidateState, targetAssetId: AssetId): CandidateState[] => {
-      const candidates = (matchedById.get(String(targetAssetId)) ?? []).filter((state) => {
-        if (state === issuer) return false;
+    const matchedTargetsFor = (issuer: CandidateState, targetAssetId: AssetId): CandidateState[] =>
+      (matchedById.get(String(targetAssetId)) ?? []).filter((state) => state !== issuer);
+    const actionableTargetsFor = (
+      issuer: CandidateState,
+      targetAssetId: AssetId,
+      matchedTargets: readonly CandidateState[],
+    ): CandidateState[] => {
+      const candidates = matchedTargets.filter((state) => {
         if (baseIncluded.has(state)) return true;
         const reason = baseReasons.get(state);
         return reason?.kind === "overridden" && reason.overriddenBy === issuer.candidate.assetId;
@@ -1255,19 +1260,22 @@ const resolveScopeFixedPoint = (
       if (!plan.has(issuer) || forcedConflicts.has(issuer)) continue;
       const operation = issuer.candidate.rule.operation;
       if (operation.kind === "add") continue;
-      const targets = targetCandidatesFor(issuer, operation.targetAssetId);
-      // Same ordering reason as the exclusive group check: a cross-type relation is
-      // not expressible, so it is settled ahead of every rule that presumes an
-      // expressible one — the direct requirement below and mandatory protection
-      // alike.  The relation conflicts even where the action would never be applied.
-      if (targets.some((target) => target.candidate.assetType !== issuer.candidate.assetType)) {
+      const matchedTargets = matchedTargetsFor(issuer, operation.targetAssetId);
+      // Expressibility is read off every matched candidate carrying the target id,
+      // before eligibility narrows them: a candidate that lost an exclusive merge or
+      // was excluded elsewhere is no longer actionable, while the cross-type relation
+      // it stands in remains one.  Same ordering reason as the exclusive group check —
+      // a relation that is not expressible is settled ahead of every rule that
+      // presumes an expressible one, the direct requirement below and mandatory
+      // protection alike.
+      if (matchedTargets.some((target) => target.candidate.assetType !== issuer.candidate.assetType)) {
         failures.push({
           issuer,
           conflict: {
             kind: "asset_type_conflict",
             involvedAssetIds: canonicalIds([
               issuer.candidate.assetId,
-              ...targets.map((target) => target.candidate.assetId),
+              ...matchedTargets.map((target) => target.candidate.assetId),
             ]),
           },
         });
@@ -1277,6 +1285,7 @@ const resolveScopeFixedPoint = (
       // same target: applying that action would invalidate its issuer.  The
       // candidate remains available, while the action is simply inapplicable.
       if (issuer.candidate.rule.requires.includes(operation.targetAssetId)) continue;
+      const targets = actionableTargetsFor(issuer, operation.targetAssetId, matchedTargets);
       if (targets.length === 0 || (operation.targetAssetId !== issuer.candidate.assetId && targets.length !== 1)) {
         failures.push({
           issuer,

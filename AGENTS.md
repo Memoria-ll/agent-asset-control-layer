@@ -301,6 +301,12 @@ local-first Core、およびその Workbench となる VS Code Extension。
   （cross-Type の override / disable / exclusive group）は候補単位の reason +
   `asset_type_conflict` にし、target は変更しない。この境界は既存の構造検証と意味的衝突の
   分かれ方と同じで、**新しい Type 規則を足すときも同じ問いで置き場所を決める** (#75)
+- **cross-Type の判定は「関係が表現可能か」なので、突き合わせる候補を絞り込む前に置く。**
+  operation の cross-Type 判定は `matchedById` が持つ target id の全候補に対して行い、
+  そこから適用可能な target へ絞る。要求関係 (`requires`)・mandatory 保護・target 個数・
+  適用可能性（exclusive merge に負けた候補など）はいずれも「関係が表現可能である」ことを
+  前提にした規則なので、絞り込み後に判定すると cross-Type 関係が
+  `operation_conflict` や無検出に化ける (#75)
 - **Type 固有の意味論は `core-domain/src/asset-type-contracts.ts` の
   `Record<AssetType, AssetTypeContract>` にだけ置く。** 網羅はコンパイル時の義務であり
   runtime 検査を持たない。contract 自身は `assetType` 欄を持たない — Record のキーが唯一の

@@ -236,6 +236,23 @@ describe("asset type contracts", () => {
     expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["rule-issuer", "skill-target"] }]);
   });
 
+  it("rejects a cross-type disable of a candidate that lost an exclusive merge", () => {
+    const winner = candidateFromDocument(assetDocument("rule-winner", "rule"), {
+      mandatory: true,
+      operation: { kind: "add" },
+      mergeMode: "exclusive",
+      mergeGroup: "merge-group",
+    });
+    const loser = candidateFromDocument(assetDocument("rule-loser", "rule"), exclusive("merge-group"));
+    const issuer = candidateFromDocument(assetDocument("skill-issuer", "skill"), disable("rule-loser"));
+    const result = resultValue([issuer, winner, loser]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "skill-issuer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "rule-loser")).toMatchObject({ kind: "overridden", overriddenBy: "rule-winner" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["rule-loser", "skill-issuer"] }]);
+  });
+
   it("rejects an exclusive group spanning different asset types", () => {
     const rule = candidateFromDocument(assetDocument("rule-candidate", "rule"), exclusive("cross-type"));
     const skill = candidateFromDocument(assetDocument("skill-candidate", "skill"), exclusive("cross-type"));
