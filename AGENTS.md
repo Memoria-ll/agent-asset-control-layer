@@ -278,6 +278,11 @@ local-first Core、およびその Workbench となる VS Code Extension。
   （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
   registry に登録しただけでは検査されないので、nested の `additionalProperties` は
   個別 assertion で pin する (#7)
+- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
+  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
+  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
+  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
+  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
 
 ### Invariants / identity keys
 
@@ -290,6 +295,24 @@ local-first Core、およびその Workbench となる VS Code Extension。
   代表を選ぶ）が安全なのはこの性質のためで、revision を mtime や uuid に変えると
   **body 内容の暗黙の後勝ちに化ける**。revision の作り方を変えるときは resolver の
   dedup を同じ変更で見直すこと (#3)
+- **Asset Type 契約違反の落とし方は「候補 1 枚で判定できるか」で決まる。** 1 枚で判定できる違反
+  （その Type が許さない operation / exclusive merge）は `validateCandidate` に置き
+  `invalid_request` で snapshot 全体を失敗させる。2 候補以上を突き合わせて初めて判る違反
+  （cross-Type の override / disable / exclusive group）は候補単位の reason +
+  `asset_type_conflict` にし、target は変更しない。この境界は既存の構造検証と意味的衝突の
+  分かれ方と同じで、**新しい Type 規則を足すときも同じ問いで置き場所を決める** (#75)
+- **Type 固有の意味論は `core-domain/src/asset-type-contracts.ts` の
+  `Record<AssetType, AssetTypeContract>` にだけ置く。** 網羅はコンパイル時の義務であり
+  runtime 検査を持たない。contract 自身は `assetType` 欄を持たない — Record のキーが唯一の
+  型表明で、キーと中身が食い違う registry を書けなくするため。`ASSET_TYPES` に値を足すと
+  この Record がビルドを落とす。共通 pipeline 側の type 分岐禁止は
+  `core-domain/tests/asset-type-contracts.test.ts` の source scan が機械判定する
+  （**走査対象は `scope-resolver.ts` 1 ファイルのみ** — `workflow.ts` や `catalog.ts` には
+  正当な type 比較がある） (#75)
+- **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
+  検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
+  `metadata.*` は `isLowerKebabToken` を満たす任意キーを受理する開いた名前空間で、許可値集合が
+  まだ存在しないため。保存欄が決まってから有効化する (#87) (#75)
 - **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
   instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
   名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて

@@ -287,6 +287,10 @@ describe("asset type contracts", () => {
   });
 
   it("keeps asset type branching out of the shared resolver source", () => {
+    // Scoped to the resolver alone, not to `src/**`: an asset type comparison is
+    // legitimate elsewhere in the domain — `workflow.ts` rejects a definition
+    // whose type is not `workflow`, and the catalog projects role and task-type
+    // by name. Only the shared resolution pipeline owes type-blindness.
     const sourceFiles = import.meta.glob<string>("../src/scope-resolver.ts", {
       eager: true,
       import: "default",
