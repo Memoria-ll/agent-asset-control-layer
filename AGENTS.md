@@ -337,3 +337,11 @@ local-first Core、およびその Workbench となる VS Code Extension。
   実ディレクトリであることを要求できるが、設定されたルートより上の祖先は運用者のもの。
   ルートから全祖先を辿る検査は OS 提供の symlink (macOS の `/var`) を弾き、そのために
   パスを両セパレータで分割する必要が生じて、backslash を含む POSIX ディレクトリ名を壊す (#7)
+- **exclusive winner は「他のどの候補にも負けない候補が一意ならそれ、いなければ conflict」で
+  選ぶ。候補を段階的に脱落させる形にしない。** directory 特則（両者が directory 一致なら
+  priority → 最深 path → specificity）と一般 key（specificity → 軸 precedence → depth →
+  source layer）は混在集合に対して非推移で、先に脱落させると **自分では勝てない候補を足す
+  だけで勝者が変わる** — `/repo`+role+model が `/repo/src/deep` に深さで脱落し、勝てるはず
+  だった相手の role+model が勝つ。directory 軸に一致したかは `scopePrecedence` が directory の
+  rank を含むかで判定する。`directoryDepth > 0` では root 一致 (depth 0) と directory selector
+  無しを区別できない (#76)
