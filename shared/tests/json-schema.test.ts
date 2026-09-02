@@ -111,6 +111,8 @@ describe("contract JSON Schemas", () => {
     const schemas = contractJsonSchemas() as any;
     expect(schemas.ProjectMarkerDto.required).toEqual(["schemaVersion", "projectId"]);
     expect(schemas.ProjectMarkerDto.properties.schemaVersion.const).toBe(1);
+    expect(schemas.ProjectMarkerDto.properties.projectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(schemas.ProjectMarkerDto.properties.projectId.maxLength).toBe(128);
     expect(schemas.ProjectInitRequest.required).toEqual(["projectRoot"]);
     expect(schemas.ProjectDiscoveryDto.oneOf).toHaveLength(4);
 

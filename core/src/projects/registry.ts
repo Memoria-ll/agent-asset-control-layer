@@ -1,10 +1,12 @@
 import { homedir } from "node:os";
-import { lstat, mkdir, readFile, rename } from "node:fs/promises";
+import { lstat, mkdir, rename } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { tryParseProjectMarkerDto } from "@aacl/shared";
 import type { ProjectId } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "@aacl/core-domain";
 import { writeAtomically } from "../internal/atomic-write.ts";
+import { withFileLock, type FileLockOptions } from "../internal/file-lock.ts";
+import { readRegularUtf8 } from "../internal/regular-file.ts";
 
 export const PROJECT_REGISTRY_SCHEMA_VERSION = 1;
 
@@ -41,6 +43,11 @@ export type ProjectRegistry = {
   readonly reconcile: () => Promise<AssetResult<undefined>>;
 };
 
+export type ProjectRegistryOptions = {
+  readonly lock?: FileLockOptions;
+  readonly beforeWrite?: () => Promise<void>;
+};
+
 const registryFailure = (
   code: "invalid_request" | "conflict" | "unavailable" | "internal",
   message: string,
@@ -55,6 +62,10 @@ const errorCode = (error: unknown): string | undefined => {
   return typeof error.code === "string" ? error.code : undefined;
 };
 
+const isProjectId = (value: unknown): value is ProjectId =>
+  typeof value === "string"
+  && tryParseProjectMarkerDto({ schemaVersion: 1, projectId: value }).ok;
+
 const isEntry = (value: unknown): value is RegistryEntry => {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;
@@ -68,14 +79,13 @@ const isEntry = (value: unknown): value is RegistryEntry => {
     && typeof entry.projectRoot === "string"
     && isAbsolute(entry.projectRoot)
     && resolve(entry.projectRoot) === entry.projectRoot
-    && typeof entry.projectId === "string"
-    && entry.projectId.length > 0
+    && isProjectId(entry.projectId)
     && (entry.state === "pending" || entry.state === "bound" || entry.state === "mismatch")
     && keys.length === expectedKeys.length
     && keys.every((key, index) => key === expectedKeys[index]);
   if (!base) return false;
   if (entry.state === "mismatch") {
-    return typeof entry.markerProjectId === "string" && entry.markerProjectId.length > 0;
+    return isProjectId(entry.markerProjectId);
   }
   return entry.markerProjectId === undefined;
 };
@@ -100,17 +110,18 @@ const parseRegistry = (document: string): RegistryDocument | undefined => {
 const emptyRegistry = (): RegistryDocument => ({ schemaVersion: 1, entries: [] });
 
 const readRegistry = async (registryPath: string): Promise<AssetResult<{ document: RegistryDocument; mode?: number }>> => {
-  try {
-    const [contents, info] = await Promise.all([readFile(registryPath, "utf8"), lstat(registryPath)]);
-    if (info.isSymbolicLink() || !info.isFile()) return registryFailure("invalid_request", "The Project Registry is not a regular file.", "invalid_registry_file");
-    const document = parseRegistry(contents);
-    return document === undefined
-      ? registryFailure("invalid_request", "The Project Registry has an invalid shape.", "invalid_registry")
-      : { ok: true, value: { document, mode: info.mode } };
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return { ok: true, value: { document: emptyRegistry() } };
+  const read = await readRegularUtf8(registryPath);
+  if (read.status === "missing") return { ok: true, value: { document: emptyRegistry() } };
+  if (read.status === "not_regular") {
+    return registryFailure("invalid_request", "The Project Registry is not a regular file.", "invalid_registry_file");
+  }
+  if (read.status === "unavailable") {
     return registryFailure("unavailable", "The Project Registry could not be read.", "unavailable");
   }
+  const document = parseRegistry(read.contents);
+  return document === undefined
+    ? registryFailure("invalid_request", "The Project Registry has an invalid shape.", "invalid_registry")
+    : { ok: true, value: { document, mode: read.mode & 0o777 } };
 };
 
 const writeRegistry = async (
@@ -148,70 +159,121 @@ const serialized = async <T>(registryPath: string, operation: () => Promise<T>):
   }
 };
 
-const markerAt = async (projectRoot: string): Promise<ProjectId | undefined> => {
+type MarkerObservation =
+  | { readonly status: "missing" }
+  | { readonly status: "valid"; readonly projectId: ProjectId }
+  | { readonly status: "invalid" }
+  | { readonly status: "unavailable" };
+
+const markerAt = async (projectRoot: string): Promise<MarkerObservation> => {
   const projectDirectory = join(projectRoot, ".aacl");
   const markerPath = join(projectDirectory, "project.json");
   try {
     const directoryInfo = await lstat(projectDirectory);
-    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) return undefined;
-    const info = await lstat(markerPath);
-    if (info.isSymbolicLink() || !info.isFile()) return undefined;
-    const parsed = tryParseProjectMarkerDto(JSON.parse(await readFile(markerPath, "utf8")) as unknown);
-    return parsed.ok ? parsed.value.projectId : undefined;
+    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) return { status: "invalid" };
+  } catch (error) {
+    return errorCode(error) === "ENOENT" ? { status: "missing" } : { status: "unavailable" };
+  }
+
+  const read = await readRegularUtf8(markerPath);
+  if (read.status === "missing") return { status: "missing" };
+  if (read.status === "not_regular") return { status: "invalid" };
+  if (read.status === "unavailable") return { status: "unavailable" };
+  try {
+    const parsed = tryParseProjectMarkerDto(JSON.parse(read.contents) as unknown);
+    return parsed.ok ? { status: "valid", projectId: parsed.value.projectId } : { status: "invalid" };
   } catch {
-    return undefined;
+    return { status: "invalid" };
   }
 };
 
 export const defaultProjectRegistryPath = (homeDirectory = homedir()): string =>
-  join(homeDirectory, ".aacl", "project-registry.json");
+  join(homeDirectory, ".aacl-state", "project-registry.json");
 
-export const createProjectRegistry = (registryPath: string): ProjectRegistry => {
+const withRegistryLock = async <T>(
+  registryPath: string,
+  lockOptions: FileLockOptions | undefined,
+  operation: () => Promise<AssetResult<T>>,
+): Promise<AssetResult<T>> => {
+  try {
+    return await withFileLock(`${registryPath}.lock`, operation, lockOptions);
+  } catch {
+    return registryFailure("unavailable", "The Project Registry lock could not be acquired.", "lock_unavailable");
+  }
+};
+
+export const createProjectRegistry = (
+  registryPath: string,
+  options: ProjectRegistryOptions = {},
+): ProjectRegistry => {
   const normalizedRegistryPath = resolve(registryPath);
+  const runLocked = <T>(operation: () => Promise<AssetResult<T>>): Promise<AssetResult<T>> =>
+    serialized<AssetResult<T>>(
+      normalizedRegistryPath,
+      () => withRegistryLock<T>(normalizedRegistryPath, options.lock, operation),
+    );
+  const persistRegistry = async (
+    document: RegistryDocument,
+    mode?: number,
+  ): Promise<AssetResult<undefined>> => {
+    await options.beforeWrite?.();
+    return writeRegistry(normalizedRegistryPath, document, mode);
+  };
 
   return {
-    prepare: (workspacePath, projectRoot, proposedProjectId) => serialized(normalizedRegistryPath, async () => {
+    prepare: (workspacePath, projectRoot, proposedProjectId) => runLocked<ProjectId>(async (): Promise<AssetResult<ProjectId>> => {
+      if (!isProjectId(proposedProjectId)) {
+        return registryFailure("internal", "The proposed Project ID is invalid.", "invalid_project_id");
+      }
       const loaded = await readRegistry(normalizedRegistryPath);
       if (!loaded.ok) return loaded;
       const normalizedWorkspace = resolve(workspacePath);
+      const normalizedRoot = resolve(projectRoot);
       const existing = loaded.value.document.entries.find((entry) => entry.workspacePath === normalizedWorkspace);
       if (existing?.state === "mismatch") {
         return registryFailure("conflict", "The workspace conflicts with its registered Project identity.", "project_id_mismatch");
       }
-      if (existing !== undefined) return { ok: true, value: existing.projectId };
+      if (existing?.state === "pending") return { ok: true, value: existing.projectId };
 
       const entry: RegistryEntry = {
         workspacePath: normalizedWorkspace,
-        projectRoot: resolve(projectRoot),
+        projectRoot: normalizedRoot,
         projectId: proposedProjectId,
         state: "pending",
       };
-      const saved = await writeRegistry(normalizedRegistryPath, {
+      const entries = existing === undefined
+        ? [...loaded.value.document.entries, entry]
+        : loaded.value.document.entries.map((candidate) => candidate.workspacePath === normalizedWorkspace ? entry : candidate);
+      const saved = await persistRegistry({
         schemaVersion: 1,
-        entries: [...loaded.value.document.entries, entry],
+        entries,
       }, loaded.value.mode);
       return saved.ok ? { ok: true, value: proposedProjectId } : saved;
     }),
 
-    observe: (workspacePath, projectRoot, markerProjectId) => serialized(normalizedRegistryPath, async () => {
+    observe: (workspacePath, projectRoot, markerProjectId) => runLocked<RegistryObservation>(async (): Promise<AssetResult<RegistryObservation>> => {
+      if (!isProjectId(markerProjectId)) {
+        return registryFailure("invalid_request", "The Project Marker ID is invalid.", "invalid_project_id");
+      }
       const loaded = await readRegistry(normalizedRegistryPath);
       if (!loaded.ok) return loaded;
       const normalizedWorkspace = resolve(workspacePath);
+      const normalizedRoot = resolve(projectRoot);
       const existing = loaded.value.document.entries.find((entry) => entry.workspacePath === normalizedWorkspace);
       const registryProjectId = existing?.projectId ?? markerProjectId;
       const observation: RegistryObservation = registryProjectId === markerProjectId
         ? { status: "bound" }
         : { status: "mismatch", registryProjectId };
       const replacement: RegistryEntry = observation.status === "bound"
-        ? {
+          ? {
             workspacePath: normalizedWorkspace,
-            projectRoot: resolve(projectRoot),
+            projectRoot: normalizedRoot,
             projectId: registryProjectId,
             state: "bound",
           }
-        : {
+          : {
             workspacePath: normalizedWorkspace,
-            projectRoot: resolve(projectRoot),
+            projectRoot: normalizedRoot,
             projectId: registryProjectId,
             state: "mismatch",
             markerProjectId,
@@ -219,11 +281,11 @@ export const createProjectRegistry = (registryPath: string): ProjectRegistry => 
       const entries = existing === undefined
         ? [...loaded.value.document.entries, replacement]
         : loaded.value.document.entries.map((entry) => entry.workspacePath === normalizedWorkspace ? replacement : entry);
-      const saved = await writeRegistry(normalizedRegistryPath, { schemaVersion: 1, entries }, loaded.value.mode);
+      const saved = await persistRegistry({ schemaVersion: 1, entries }, loaded.value.mode);
       return saved.ok ? { ok: true, value: observation } : saved;
     }),
 
-    reconcile: () => serialized(normalizedRegistryPath, async () => {
+    reconcile: () => runLocked<undefined>(async (): Promise<AssetResult<undefined>> => {
       const loaded = await readRegistry(normalizedRegistryPath);
       if (!loaded.ok) return loaded;
       if (loaded.value.document.entries.length === 0 && loaded.value.mode === undefined) {
@@ -232,15 +294,27 @@ export const createProjectRegistry = (registryPath: string): ProjectRegistry => 
       const entries: RegistryEntry[] = [];
       for (const entry of loaded.value.document.entries) {
         const observed = await markerAt(entry.projectRoot);
-        entries.push(observed === undefined
-          ? { workspacePath: entry.workspacePath, projectRoot: entry.projectRoot, projectId: entry.projectId, state: "pending" }
-          : observed === entry.projectId
-            ? { workspacePath: entry.workspacePath, projectRoot: entry.projectRoot, projectId: entry.projectId, state: "bound" }
-            : { workspacePath: entry.workspacePath, projectRoot: entry.projectRoot, projectId: entry.projectId, state: "mismatch", markerProjectId: observed });
+        if (observed.status === "missing") {
+          if (entry.state === "pending") entries.push(entry);
+          continue;
+        }
+        if (observed.status !== "valid") {
+          entries.push(entry);
+          continue;
+        }
+        entries.push(observed.projectId === entry.projectId
+          ? { workspacePath: entry.workspacePath, projectRoot: entry.projectRoot, projectId: entry.projectId, state: "bound" }
+          : {
+              workspacePath: entry.workspacePath,
+              projectRoot: entry.projectRoot,
+              projectId: entry.projectId,
+              state: "mismatch",
+              markerProjectId: observed.projectId,
+            });
       }
       const next: RegistryDocument = { schemaVersion: 1, entries };
       if (JSON.stringify(next) === JSON.stringify(loaded.value.document)) return { ok: true, value: undefined };
-      return writeRegistry(normalizedRegistryPath, next, loaded.value.mode);
+      return persistRegistry(next, loaded.value.mode);
     }),
   };
 };

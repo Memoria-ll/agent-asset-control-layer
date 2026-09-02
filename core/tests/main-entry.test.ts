@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -57,6 +57,27 @@ const waitForExit = (child: ReturnType<typeof spawn>): Promise<void> =>
     child.once("exit", onExit);
   });
 
+const readOutputUntilExit = (child: ReturnType<typeof spawn>): Promise<string> => {
+  if (child.stdout === null) return Promise.reject(new Error("Child stdout is unavailable."));
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Core process did not stop."));
+    }, 5000);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => { output += chunk; });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve(output);
+    });
+  });
+};
+
 describe("Core main entry", () => {
   it("starts, serves health, and stops on SIGTERM", async () => {
     const testHome = await mkdtemp(join(tmpdir(), "aacl-main-entry-"));
@@ -87,6 +108,35 @@ describe("Core main entry", () => {
 
       child.kill("SIGTERM");
       await waitForExit(child);
+    } finally {
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+        await waitForExit(child);
+      }
+      await rm(testHome, { recursive: true, force: true });
+    }
+  });
+
+  it("logs a Project Registry startup failure as its own stage", async () => {
+    const testHome = await mkdtemp(join(tmpdir(), "aacl-main-entry-"));
+    await mkdir(join(testHome, ".aacl-state"), { recursive: true });
+    await writeFile(join(testHome, ".aacl-state", "project-registry.json"), "{}\n", "utf8");
+    const child = spawn(process.execPath, ["src/main.ts"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        HOME: testHome,
+        USERPROFILE: testHome,
+        AACL_CORE_HOST: "127.0.0.1",
+        AACL_CORE_PORT: "0",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    try {
+      const output = await readOutputUntilExit(child);
+      const event = JSON.parse(output.trim()) as { event: string };
+      expect(event.event).toBe("core.project_registry_failed");
     } finally {
       if (child.exitCode === null) {
         child.kill("SIGTERM");

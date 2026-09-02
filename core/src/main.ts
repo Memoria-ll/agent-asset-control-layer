@@ -11,9 +11,10 @@ const logger = createJsonLogger(
 const main = async (): Promise<void> => {
   const outcome = await startCore({ env: process.env, logger });
   if (!outcome.ok) {
-    const event =
-      outcome.failure.code === "invalid_request"
-        ? "core.settings_invalid"
+    const event = outcome.stage === "settings"
+      ? "core.settings_invalid"
+      : outcome.stage === "project-registry"
+        ? "core.project_registry_failed"
         : "core.listen_failed";
     logger.log("error", event, { message: outcome.failure.message });
     process.exitCode = 1;

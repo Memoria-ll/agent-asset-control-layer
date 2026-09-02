@@ -4,11 +4,16 @@ import { ProjectId } from "./identifiers.ts";
 import { DirectoryPath } from "./primitives.ts";
 
 export const PROJECT_MARKER_SCHEMA_VERSION = 1;
+export const PROJECT_MARKER_ID_MAX_LENGTH = 128;
+
+const ProjectMarkerId = ProjectId
+  .check(z.regex(/^project-[a-z0-9-]+$/))
+  .check(z.maxLength(PROJECT_MARKER_ID_MAX_LENGTH));
 
 /** The durable identity stored at `<project-root>/.aacl/project.json`. */
 export const ProjectMarkerDto = z.strictObject({
   schemaVersion: z.literal(PROJECT_MARKER_SCHEMA_VERSION),
-  projectId: ProjectId,
+  projectId: ProjectMarkerId,
 });
 export type ProjectMarkerDto = z.infer<typeof ProjectMarkerDto>;
 export type ProjectMarkerDtoInput = z.input<typeof ProjectMarkerDto>;

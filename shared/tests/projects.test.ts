@@ -21,6 +21,8 @@ describe("Project contracts", () => {
     });
     expect(() => parseProjectMarkerDto({ schemaVersion: 2, projectId: "project-a" })).toThrow();
     expect(() => parseProjectMarkerDto({ schemaVersion: 1, projectId: "project-a", extra: true })).toThrow();
+    expect(() => parseProjectMarkerDto({ schemaVersion: 1, projectId: "INVALID" })).toThrow();
+    expect(() => parseProjectMarkerDto({ schemaVersion: 1, projectId: `project-${"a".repeat(121)}` })).toThrow();
   });
 
   it("validates init, info, and discovery requests", () => {
