@@ -81,6 +81,11 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - **このルールが及ぶのは JSON Schema に出力できる制約まで。** 2 欄を比較する順序制約
   （`endedAt >= startedAt` 等）は draft 2020-12 に対応キーワードが無く、構造を変えないと
   表現できない。契約形の変更を伴うため、その場で `z.refine` を足さず issue に切り出す（#48）。
+- **JSON Schema に出せる制約は、parse 側と schema 側の両方を書く。** `zod/mini` の
+  `.check(z.refine(...))` は parse でしか効かず `z.toJSONSchema()` には何も出さないので、
+  対応キーワードを `.register(z.globalRegistry, { ... })` で併記する（配列の一意性なら
+  `{ uniqueItems: true }`）。片方だけだと、schema 駆動の消費側が Core の拒否する定義を
+  受理する。`shared/tests/contradictory-states.test.ts` の schema 側 describe が検査面。
 - 相互排他な組合せは `z.discriminatedUnion` のアームに分ける。cross-field の `z.refine` は
   使わない — parser では効くが `z.toJSONSchema()` の出力に一切現れず、schema 駆動の consumer が
   同じ値を通してしまう（実測）。union の JSON Schema は `additionalProperties` を root でなく
@@ -103,9 +108,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
 ### レイヤ / seam mapping
 
 - logic unit（テスト対象）: `core-domain/src/`（domain semantics と失敗語彙）、
-  `core/src/` のうち `config/` `logging/` `http/router.ts` `http/responses.ts` と
-  composition root の `index.ts`、`shared/src/`、`vscode-extension/src/` のうち
-  VS Code API に依存しない client / view model。
+  `core/src/` のうち `main.ts` を除くすべて（`assets/` `catalog/` `config/` `http/`
+  `internal/` `logging/` `workflow/` と composition root の `index.ts`）、`shared/src/`、
+  `vscode-extension/src/` のうち VS Code API に依存しない client / view model。
 - view-glue（テスト対象外）: `core/src/main.ts`（`process.env` / stdout / signal だけを持つ
   host glue）、`vscode-extension/src/` のうち VS Code API へ直接触れる面
   （activation / lifecycle、command 登録、webview 配線）。
@@ -229,3 +234,36 @@ local-first Core、およびその Workbench となる VS Code Extension。
   catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
   「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
   （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
+- **workflow instance と agent execution の link は双方向で、その鏡像はすでに契約にある** —
+  `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding`
+  （`shared/src/sessions.ts`）が互いを指し、producer 側は `core-domain/src/agent-execution.ts` の
+  `AgentExecutionRecord` が保持している。**Workflow State の「1 file を rename すれば
+  State と link が同時に確定する」という原子性は #7 の範囲でだけ成立する** — #20 が
+  Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
+  idempotency を別に設計する必要がある (#7)
+- **`shared/tests/json-schema.test.ts` の strict object 検査は root の `oneOf` までしか展開せず、
+  nested object property へは降りない。** 境界 DTO が nested object を持つとき
+  （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
+  registry に登録しただけでは検査されないので、nested の `additionalProperties` は
+  個別 assertion で pin する (#7)
+
+### Invariants / identity keys
+
+- **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
+  instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
+  名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
+  `instance_workflow_mismatch` を返す。schema は opaque 値の一意性を検査できないので、
+  独自に発番する producer 側がこの一意性を負う (#7)
+- **State store は execution instance id を「受け取らず」「組み立てる」。** 注入口は乱数部分だけ
+  (`newInstanceSuffix`) で、`instance-<suffix>` の合成と検査は store が持つ。契約が文字集合を
+  縛らないため、id を丸ごと受け取る形は「契約上妥当だがファイル名として使えない値」を
+  無限に生む（空白・接頭辞・デバイス名・大小文字衝突・長さ・Unicode 正規化で 5 ラウンド分の
+  指摘が出た）。**検査は正規化ではなく拒否**で行う — 小文字化や NFC 変換で畳むと、相異なる
+  id が 1 ファイルに写像されて一意性が壊れる (#7)
+- **ファイル名の安全性は「明示的な英数字集合」で決める — 禁止則の積み上げでは閉じない。**
+  大文字禁止 + NFC 必須でも σ と ς は同じ文字に case-fold するため、両方が 1 ファイルを指す。
+  case pair も正規化形も持たない集合 (`[a-z0-9-]`) だけが次の一手を許さない (#7)
+- **Core が作る階層だけを検査対象にする。** state directory とその配下は store の所有物なので
+  実ディレクトリであることを要求できるが、設定されたルートより上の祖先は運用者のもの。
+  ルートから全祖先を辿る検査は OS 提供の symlink (macOS の `/var`) を弾き、そのために
+  パスを両セパレータで分割する必要が生じて、backslash を含む POSIX ディレクトリ名を壊す (#7)

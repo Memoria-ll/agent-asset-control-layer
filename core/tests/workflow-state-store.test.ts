@@ -1,0 +1,253 @@
+import { chmod, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { initializeWorkflowState, type AssetResult, type WorkflowStateMutation, type WorkflowStateSeed } from "@aacl/core-domain";
+import type { AgentExecutionId, ExecutionInstanceId, RoleId, SnapshotId, StageId, Timestamp, WorkflowId, WorkflowStateVersion } from "@aacl/shared";
+import { createWorkflowStateStore, type WorkflowStateStore } from "../src/index.ts";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  const directories = temporaryDirectories.splice(0);
+  await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+const temporaryDirectory = async (): Promise<string> => {
+  const directory = await mkdtemp(join(tmpdir(), "aacl-workflow-state-"));
+  temporaryDirectories.push(directory);
+  return directory;
+};
+
+const unwrap = <Value>(result: AssetResult<Value>): Value => {
+  if (!result.ok) throw new Error(result.failure.message);
+  return result.value;
+};
+
+const seed = (workflowId = "review-flow" as WorkflowId): WorkflowStateSeed => ({
+  workflowId,
+  currentStageId: "start" as StageId,
+  entryRoleId: "reviewer" as RoleId,
+  currentRoleId: "reviewer" as RoleId,
+  linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
+  linkedSnapshotIds: ["snapshot-1" as SnapshotId],
+});
+
+const mutation = (state: { readonly workflowId: WorkflowId; readonly executionInstanceId: ExecutionInstanceId; readonly stateVersion: number }, agentId: string, version = state.stateVersion + 1): WorkflowStateMutation => ({
+  workflowId: state.workflowId,
+  executionInstanceId: state.executionInstanceId,
+  stateVersion: version as WorkflowStateVersion,
+  currentStageId: "done" as StageId,
+  entryRoleId: "reviewer" as RoleId,
+  currentRoleId: "reviewer" as RoleId,
+  linkedAgentExecutionIds: [agentId as AgentExecutionId],
+  linkedSnapshotIds: ["snapshot-2" as SnapshotId],
+});
+
+const createStore = async (options: { readonly stateDirectory: string; readonly now?: () => Timestamp; readonly newInstanceSuffix?: () => string; readonly rename?: (from: string, to: string) => Promise<void> }): Promise<WorkflowStateStore> =>
+  unwrap(await createWorkflowStateStore(options));
+
+describe("filesystem workflow state store", () => {
+  it("creates, reads, CAS-updates, and preserves the existing mode", async () => {
+    const directory = await temporaryDirectory();
+    const times = ["2026-09-01T10:00:00Z", "2026-09-01T10:01:00Z"] as Timestamp[];
+    let nowCalls = 0;
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => times[nowCalls++] as Timestamp,
+      newInstanceSuffix: () => "one",
+    });
+    const created = unwrap(await store.create(seed()));
+    const target = join(directory, "workflows", "instance-one.json");
+    expect(created.stateVersion).toBe(0);
+    expect(created.updatedAt).toBe(times[0]);
+    expect((await stat(target)).mode & 0o777).toBe(0o600);
+
+    await chmod(target, 0o640);
+    const before = await readFile(target);
+    const updated = unwrap(await store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "agent-2")));
+    expect(updated.stateVersion).toBe(1);
+    expect(updated.updatedAt).toBe(times[1]);
+    expect((await stat(target)).mode & 0o777).toBe(0o640);
+    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: updated });
+    expect(await readFile(target)).not.toBe(before);
+    expect(nowCalls).toBe(2);
+  });
+
+  it("serializes factories sharing a lexical state directory and handles an id collision without overwrite", async () => {
+    const directory = await temporaryDirectory();
+    let sequence = 0;
+    const first = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "existing" });
+    const original = unwrap(await first.create(seed()));
+    const second = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:01Z" as Timestamp,
+      newInstanceSuffix: () => (sequence++ === 0 ? "existing" : "new"),
+    });
+    const created = unwrap(await second.create(seed("second-flow" as WorkflowId)));
+    expect(created.executionInstanceId).toBe("instance-new");
+    expect(unwrap(await first.get(original.workflowId, original.executionInstanceId)).workflowId).toBe("review-flow");
+    expect((await readdir(join(directory, "workflows"))).sort()).toEqual(["instance-existing.json", "instance-new.json"]);
+  });
+
+  it("allows only one concurrent stale CAS and leaves the loser links untouched", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "one" });
+    const created = unwrap(await store.create(seed()));
+    const results = await Promise.all([
+      store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "winner-a")),
+      store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "winner-b")),
+    ]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok && result.failure.code === "conflict")).toHaveLength(1);
+    const final = unwrap(await store.get(created.workflowId, created.executionInstanceId));
+    expect(final.stateVersion).toBe(1);
+    expect(["winner-a", "winner-b"]).toContain(final.linkedAgentExecutionIds[0]);
+  });
+
+  it("does not update, rename, or consume now for stale or invalid CAS", async () => {
+    const directory = await temporaryDirectory();
+    let nowCalls = 0;
+    let renameCalls = 0;
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => (++nowCalls, "2026-09-01T10:00:00Z" as Timestamp),
+      newInstanceSuffix: () => "one",
+      rename: async (from, to) => { renameCalls++; await (await import("node:fs/promises")).rename(from, to); },
+    });
+    const created = unwrap(await store.create(seed()));
+    const stale = await store.compareAndSwap(created.workflowId, created.executionInstanceId, 1 as never, mutation(created, "stale", 2));
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.failure.details?.[0]?.code).toBe("state_version_conflict");
+    const invalid = await store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "invalid", 3));
+    expect(invalid.ok).toBe(false);
+    expect(nowCalls).toBe(1);
+    expect(renameCalls).toBe(1);
+  });
+
+  it("rejects path escapes, identity mismatches, symlinks, and non-files", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "one" });
+    const created = unwrap(await store.create(seed()));
+    const wrongWorkflow = await store.get("other-flow" as WorkflowId, created.executionInstanceId);
+    expect(wrongWorkflow.ok).toBe(false);
+    if (!wrongWorkflow.ok) expect(wrongWorkflow.failure.details?.[0]?.code).toBe("instance_workflow_mismatch");
+    const escaped = await store.get("review-flow" as WorkflowId, "../escape" as ExecutionInstanceId);
+    expect(escaped.ok).toBe(false);
+    if (!escaped.ok) expect(escaped.failure.code).toBe("invalid_request");
+
+    const target = join(directory, "workflows", "instance-two.json");
+    await symlink("instance-one.json", target);
+    const link = await store.get("review-flow" as WorkflowId, "instance-two" as ExecutionInstanceId);
+    expect(link.ok).toBe(false);
+    if (!link.ok) expect(link.failure.details?.[0]?.code).toBe("state_file_not_a_file");
+
+    await rm(target);
+    await (await import("node:fs/promises")).mkdir(target);
+    const directoryResult = await store.get("review-flow" as WorkflowId, "instance-two" as ExecutionInstanceId);
+    expect(directoryResult.ok).toBe(false);
+    if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
+  });
+
+  it("composes the identifier itself so a caller supplies only the random part", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      newInstanceSuffix: () => "9f2c",
+    });
+    const created = unwrap(await store.create(seed()));
+
+    expect(created.executionInstanceId).toBe("instance-9f2c");
+    expect(await readdir(join(directory, "workflows"))).toEqual(["instance-9f2c.json"]);
+    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
+  });
+
+  // An identifier reaching `get` comes from the caller, so every filename rule still guards that
+  // path even though `create` can no longer produce a value that breaks one.
+  it.each([
+    ["a path escape", "../escape"],
+    ["a reserved device name", "CON"],
+    ["a superscript device name", "com¹"],
+    ["an uppercase letter", "instance-Build"],
+    // "cafe" + U+0301 combining acute, i.e. NFD. A case-preserving filesystem may store the
+    // composed form and hand back a string that no longer equals what was written.
+    ["a decomposed character", "instance-café"],
+    ["a name past the filename byte limit", `instance-${"a".repeat(255)}`],
+    // Sigma and final sigma both case-fold to the same letter, so a lowercase-and-NFC rule
+    // would admit both and let them name one file. The safe alphabet admits neither.
+    ["a letter outside the safe alphabet", "instance-σ"],
+    ["the letter it case-folds with", "instance-ς"],
+    ["an interior space", "instance-build 1"],
+  ])("refuses %s as an instance id", async (_name, value) => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      newInstanceSuffix: () => "one",
+    });
+
+    const read = await store.get("review-flow" as WorkflowId, value as ExecutionInstanceId);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
+  });
+
+  it("refuses a state file holding malformed UTF-8 instead of substituting it", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      newInstanceSuffix: () => "one",
+    });
+    const created = unwrap(await store.create(seed()));
+    const target = join(directory, "workflows", "instance-one.json");
+
+    // One byte inside an identifier becomes a lone 0x80 continuation, which no UTF-8 sequence
+    // can start. JSON structure and file length are untouched, so a lenient decode substitutes
+    // U+FFFD, still parses, still validates, and reports the corruption as content.
+    const corrupted = await readFile(target);
+    const at = corrupted.indexOf(Buffer.from("agent-1", "utf8")) + "agent-".length;
+    expect(at).toBeGreaterThan("agent-".length - 1);
+    corrupted[at] = 0x80;
+    await writeFile(target, corrupted);
+
+    const read = await store.get(created.workflowId, created.executionInstanceId);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_utf8");
+  });
+
+  it("gives up instead of spinning when the generator keeps returning a taken id", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      newInstanceSuffix: () => "fixed",
+    });
+    const first = unwrap(await store.create(seed()));
+    expect(first.executionInstanceId).toBe("instance-fixed");
+
+    const second = await store.create(seed());
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.failure.code).toBe("conflict");
+      expect(second.failure.details?.[0]?.code).toBe("execution_instance_id_exhausted");
+    }
+
+    // The write chain is per directory, so a stuck create would strand every later operation.
+    const third = await store.get(first.workflowId, first.executionInstanceId);
+    expect(third.ok).toBe(true);
+  }, 5000);
+
+  it("cleans the temporary file when atomic rename fails", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      newInstanceSuffix: () => "one",
+      rename: async () => { throw new Error("rename failed"); },
+    });
+    const result = await store.create(seed());
+    expect(result.ok).toBe(false);
+    expect(await readdir(join(directory, "workflows"))).toEqual([]);
+  });
+});

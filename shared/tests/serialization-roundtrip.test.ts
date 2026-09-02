@@ -1,6 +1,6 @@
 import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
-import { parseResolveRequest } from "../src/index.ts";
+import { parseResolveRequest, parseWorkflowDefinitionDto } from "../src/index.ts";
 // The registry is internal to the package; only its JSON form is published.
 import { contractSchemas } from "../src/json-schema.ts";
 
@@ -71,6 +71,7 @@ const representativeInputs: Record<string, unknown> = {
   },
   WorkflowStateDto: {
     workflowId: "workflow-1",
+    stateVersion: 7,
     executionInstanceId: "instance-1",
     currentStageId: "stage-1",
     entryRoleId: "role-1",
@@ -81,9 +82,28 @@ const representativeInputs: Record<string, unknown> = {
   },
   TransitionCandidateDto: {
     toStageId: "stage-2",
+    transitionKind: "advance",
+    stateVersion: 7,
     requiredRoleId: "role-1",
     requiredTaskTypeId: "task-type-1",
     blocked: false,
+  },
+  WorkflowDefinitionDto: {
+    entryRoleId: "role-1",
+    entryStageId: "stage-1",
+    terminalStageId: "stage-1",
+    stages: [
+      {
+        stageId: "stage-1",
+        displayName: "Initial stage",
+        description: "The initial workflow stage.",
+        requiredRoleId: "role-1",
+        requiredTaskTypeId: "task-type-1",
+        requiredArtifactRefs: ["artifact-1"],
+        requiredCapabilityRefs: ["capability-1"],
+      },
+    ],
+    transitions: [],
   },
   VersionInfo: { contractVersion: "0.1.0" },
   CoreErrorDto: {
@@ -132,5 +152,24 @@ describe("contract serialization", () => {
     expect(Object.keys(omittedAfterJson)).toEqual(["scope"]);
     expect(Object.keys(explicitAfterJson)).toEqual(["scope"]);
     expect(explicitAfterJson).toEqual(omittedAfterJson);
+  });
+
+  it("accepts a definition whose workflow identifier matches its asset", () => {
+    expect(
+      parseWorkflowDefinitionDto({
+        workflowId: "workflow-1",
+        entryRoleId: "role-1",
+        entryStageId: "stage-1",
+        terminalStageId: "stage-1",
+        stages: [
+          {
+            stageId: "stage-1",
+            displayName: "Initial stage",
+            description: "The initial workflow stage.",
+          },
+        ],
+        transitions: [],
+      }).workflowId,
+    ).toBe("workflow-1");
   });
 });
