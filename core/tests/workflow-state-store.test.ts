@@ -174,6 +174,11 @@ describe("filesystem workflow state store", () => {
     // composed form and hand back a string that no longer equals what was written.
     ["a decomposed character", "instance-café"],
     ["a name past the filename byte limit", `instance-${"a".repeat(255)}`],
+    // Sigma and final sigma both case-fold to the same letter, so a lowercase-and-NFC rule
+    // would admit both and let them name one file. The safe alphabet admits neither.
+    ["a letter outside the safe alphabet", "instance-σ"],
+    ["the letter it case-folds with", "instance-ς"],
+    ["an interior space", "instance-build 1"],
   ])("refuses %s as an instance id", async (_name, value) => {
     const directory = await temporaryDirectory();
     const store = await createStore({
@@ -232,23 +237,6 @@ describe("filesystem workflow state store", () => {
     const third = await store.get(first.workflowId, first.executionInstanceId);
     expect(third.ok).toBe(true);
   }, 5000);
-
-  it("addresses an instance id holding an interior space and rejects a trailing one", async () => {
-    const directory = await temporaryDirectory();
-    const store = await createStore({
-      stateDirectory: directory,
-      now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      newInstanceSuffix: () => "build 1",
-    });
-    const created = unwrap(await store.create(seed()));
-    expect(created.executionInstanceId).toBe("instance-build 1");
-    expect(await readdir(join(directory, "workflows"))).toEqual(["instance-build 1.json"]);
-    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
-
-    const trailing = await store.get("review-flow" as WorkflowId, "instance-one " as ExecutionInstanceId);
-    expect(trailing.ok).toBe(false);
-    if (!trailing.ok) expect(trailing.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
-  });
 
   it("cleans the temporary file when atomic rename fails", async () => {
     const directory = await temporaryDirectory();

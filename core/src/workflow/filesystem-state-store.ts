@@ -6,7 +6,7 @@ import {
   stat,
   rename as renameFile,
 } from "node:fs/promises";
-import { isAbsolute, join, parse, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   tryParseWorkflowStateDto,
 } from "@aacl/shared";
@@ -91,21 +91,26 @@ export const composeExecutionInstanceId = (suffix: string): ExecutionInstanceId 
   `instance-${suffix}` as ExecutionInstanceId;
 
 /**
+ * The characters a state file name may be built from.
+ *
+ * An explicit alphabet rather than a set of rejections. The supported filesystems include
+ * case-insensitive ones, and their folding is Unicode's, not ASCII's — sigma and final sigma
+ * both fold to the same letter, so a lowercase-and-NFC rule still lets two distinct identifiers
+ * name one file. Every rule of that kind admits the next pair; an alphabet with no case pairs
+ * and no normalisation forms admits none.
+ */
+const SAFE_INSTANCE_ID = /^[a-z0-9-]+$/;
+
+/**
  * Whether an identifier can address a state file here.
  *
  * The contract guarantees only a non-empty string and leaves the character set to whoever maps
  * it onto a filename, so the shape is this store's to decide — which is why `create` composes
- * the identifier rather than accepting one.
- *
- * Lowercase is required rather than applied. The supported filesystems include
- * case-insensitive ones, so two identifiers differing only by case would name one file; folding
- * the case here would instead map two distinct identifiers onto one, losing the uniqueness the
- * contract asks of the value. Rejecting is what keeps the mapping injective.
+ * the identifier rather than accepting one. `portableFileName` still runs because the alphabet
+ * alone permits a reserved device name and any length.
  */
 const validExecutionInstanceId = (value: ExecutionInstanceId): boolean =>
-  value === value.toLowerCase()
-  && value.normalize("NFC") === value
-  && portableFileName(value, STATE_FILE_EXTENSION);
+  SAFE_INSTANCE_ID.test(value) && portableFileName(value, STATE_FILE_EXTENSION);
 
 const filePathFor = (
   workflowsDirectory: string,
@@ -125,26 +130,32 @@ const invalidParsedState = (details: readonly { readonly path: readonly string[]
   }))),
 });
 
-const inspectDirectoryComponents = async (directory: string): Promise<AssetResult<undefined>> => {
-  const root = parse(directory).root;
-  let current = root;
-  for (const segment of directory.slice(root.length).split(/[\\/]/).filter((item) => item !== "")) {
-    current = join(current, segment);
-    try {
-      const info = await lstat(current);
-      if (info.isSymbolicLink() || !info.isDirectory()) {
-        return {
-          ok: false,
-          failure: stateFailure("invalid_request", "The workflow state path is not a regular directory.", ["stateDirectory"], "invalid_state_directory"),
-        };
-      }
-    } catch (error) {
-      if (errorCode(error) === "ENOENT") return { ok: true, value: undefined };
-      return {
-        ok: false,
-        failure: stateFailure("unavailable", "The workflow state path could not be inspected.", ["stateDirectory"], "unavailable"),
-      };
-    }
+/**
+ * Prepare the state directory and the workflows directory beneath it.
+ *
+ * Only those two are checked for being real directories. They are what this store creates, so
+ * insisting on them is enforceable; the ancestors above the configured root belong to whoever
+ * configured it. Walking every ancestor from the filesystem root rejected paths the platform
+ * itself hands out — a system directory reached through an OS-provided symlink is ordinary,
+ * not a defect — and it had to split the path on both separators to do so, which mangles a
+ * POSIX directory whose name legitimately contains a backslash.
+ */
+const ensureRegularDirectory = async (directory: string): Promise<AssetResult<undefined>> => {
+  let info;
+  try {
+    info = await lstat(directory);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return { ok: true, value: undefined };
+    return {
+      ok: false,
+      failure: stateFailure("unavailable", "The workflow state path could not be inspected.", ["stateDirectory"], "unavailable"),
+    };
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    return {
+      ok: false,
+      failure: stateFailure("invalid_request", "The workflow state path is not a regular directory.", ["stateDirectory"], "invalid_state_directory"),
+    };
   }
   return { ok: true, value: undefined };
 };
@@ -158,23 +169,18 @@ const ensureDirectoryTree = async (stateDirectory: string, workflowsDirectory: s
   }
   try {
     for (const directory of [stateDirectory, workflowsDirectory]) {
-      const inspected = await inspectDirectoryComponents(directory);
+      const inspected = await ensureRegularDirectory(directory);
       if (!inspected.ok) return inspected;
     }
     await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
     await mkdir(workflowsDirectory, { recursive: true, mode: 0o700 });
     for (const directory of [stateDirectory, workflowsDirectory]) {
-      const root = parse(directory).root;
-      let current = root;
-      for (const segment of directory.slice(root.length).split(/[\\/]/).filter((item) => item !== "")) {
-        current = join(current, segment);
-        const info = await lstat(current);
+      const info = await lstat(directory);
       if (info.isSymbolicLink() || !info.isDirectory()) {
-          return {
-            ok: false,
-            failure: stateFailure("invalid_request", "The workflow state path is not a regular directory.", ["stateDirectory"], "invalid_state_directory"),
-          };
-        }
+        return {
+          ok: false,
+          failure: stateFailure("invalid_request", "The workflow state path is not a regular directory.", ["stateDirectory"], "invalid_state_directory"),
+        };
       }
     }
   } catch (error) {
