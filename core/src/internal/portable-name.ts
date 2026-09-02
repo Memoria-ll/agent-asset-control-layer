@@ -31,14 +31,23 @@ export const portableSegment = (segment: string): boolean => {
   return stem !== undefined && !WINDOWS_RESERVED_NAMES.has(stem.toUpperCase());
 };
 
+/** What ext4, APFS and NTFS all allow for one filename. */
+const MAX_FILENAME_BYTES = 255;
+
 /**
  * Whether a name that must stand alone as one filename is portable.
  *
  * Beyond `portableSegment` this rejects emptiness and every separator, because the caller maps
  * the value straight onto a filename rather than splitting it into segments first.
+ *
+ * `extension` is the suffix the caller will append. The limit is a byte count, not a character
+ * count, so a name well under 255 characters can still overflow once it carries non-ASCII —
+ * checking it here keeps the failure a rejected name rather than an ENAMETOOLONG surfacing as a
+ * storage error.
  */
-export const portableFileName = (value: string): boolean => {
+export const portableFileName = (value: string, extension = ""): boolean => {
   if (value.length === 0) return false;
   if (value.includes("\\") || value.includes("/") || value.includes(":") || value.includes("\0")) return false;
+  if (Buffer.byteLength(`${value}${extension}`, "utf8") > MAX_FILENAME_BYTES) return false;
   return portableSegment(value);
 };

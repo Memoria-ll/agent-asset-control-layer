@@ -70,7 +70,7 @@ describe("workflow loader and state integration", () => {
     const stateStore = unwrap(await createWorkflowStateStore({
       stateDirectory: join(directory, "state"),
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId,
+      newInstanceSuffix: () => "one",
     }));
     const seed = initializeWorkflowState(loaded.definition, {
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],

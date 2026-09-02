@@ -31,7 +31,11 @@ import { strictDecode } from "../internal/text.ts";
 export type WorkflowStateStoreOptions = {
   readonly stateDirectory: string;
   readonly now?: () => Timestamp;
-  readonly generateExecutionInstanceId?: () => ExecutionInstanceId;
+  /**
+   * The random part of a new execution instance id. The store composes the identifier itself,
+   * so a caller cannot hand it a value that is contract-valid yet unusable as a filename.
+   */
+  readonly newInstanceSuffix?: () => string;
   readonly rename?: Rename;
 };
 
@@ -80,20 +84,35 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
   return remainder !== "" && !isAbsolute(remainder) && remainder !== ".." && !remainder.startsWith(`..${"/"}`) && !remainder.startsWith(`..${"\\"}`);
 };
 
+const STATE_FILE_EXTENSION = ".json";
+
+/** The shape this store issues. A caller supplies only the random part. */
+export const composeExecutionInstanceId = (suffix: string): ExecutionInstanceId =>
+  `instance-${suffix}` as ExecutionInstanceId;
+
 /**
+ * Whether an identifier can address a state file here.
+ *
  * The contract guarantees only a non-empty string and leaves the character set to whoever maps
- * it onto a filename, so this store constrains filesystem portability and nothing else. The
- * `instance-` shape the default generator produces is that generator's convention, and a host
- * that injects its own generator is entitled to a different one.
+ * it onto a filename, so the shape is this store's to decide — which is why `create` composes
+ * the identifier rather than accepting one.
+ *
+ * Lowercase is required rather than applied. The supported filesystems include
+ * case-insensitive ones, so two identifiers differing only by case would name one file; folding
+ * the case here would instead map two distinct identifiers onto one, losing the uniqueness the
+ * contract asks of the value. Rejecting is what keeps the mapping injective.
  */
-const validExecutionInstanceId = (value: ExecutionInstanceId): boolean => portableFileName(value);
+const validExecutionInstanceId = (value: ExecutionInstanceId): boolean =>
+  value === value.toLowerCase()
+  && value.normalize("NFC") === value
+  && portableFileName(value, STATE_FILE_EXTENSION);
 
 const filePathFor = (
   workflowsDirectory: string,
   executionInstanceId: ExecutionInstanceId,
 ): string | undefined => {
   if (!validExecutionInstanceId(executionInstanceId)) return undefined;
-  const target = resolve(join(workflowsDirectory, `${executionInstanceId}.json`));
+  const target = resolve(join(workflowsDirectory, `${executionInstanceId}${STATE_FILE_EXTENSION}`));
   return isContainedPath(workflowsDirectory, target) ? target : undefined;
 };
 
@@ -221,7 +240,7 @@ export const createWorkflowStateStore = async (
   if (!prepared.ok) return prepared;
 
   const now = options.now ?? (() => new Date().toISOString() as Timestamp);
-  const generateExecutionInstanceId = options.generateExecutionInstanceId ?? (() => `instance-${randomUUID()}` as ExecutionInstanceId);
+  const newInstanceSuffix = options.newInstanceSuffix ?? randomUUID;
   const rename = options.rename ?? renameFile;
 
   const inWriteChain = async <Value>(operation: () => Promise<Value>): Promise<Value> => {
@@ -285,7 +304,7 @@ export const createWorkflowStateStore = async (
     // file already exists on every attempt. This runs inside the per-directory write chain, so
     // retrying forever would wedge every later create and compare-and-swap for that directory.
     for (let attempt = 0; attempt < COLLISION_ATTEMPT_LIMIT; attempt += 1) {
-      const executionInstanceId = generateExecutionInstanceId();
+      const executionInstanceId = composeExecutionInstanceId(newInstanceSuffix());
       const targetPath = filePathFor(workflowsDirectory, executionInstanceId);
       if (targetPath === undefined) {
         return { ok: false, failure: stateFailure("invalid_request", "The generated execution instance id is not a valid state file name.", ["workflowState", "executionInstanceId"], "invalid_execution_instance_id") };

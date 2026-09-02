@@ -44,7 +44,7 @@ const mutation = (state: { readonly workflowId: WorkflowId; readonly executionIn
   linkedSnapshotIds: ["snapshot-2" as SnapshotId],
 });
 
-const createStore = async (options: { readonly stateDirectory: string; readonly now?: () => Timestamp; readonly generateExecutionInstanceId?: () => ExecutionInstanceId; readonly rename?: (from: string, to: string) => Promise<void> }): Promise<WorkflowStateStore> =>
+const createStore = async (options: { readonly stateDirectory: string; readonly now?: () => Timestamp; readonly newInstanceSuffix?: () => string; readonly rename?: (from: string, to: string) => Promise<void> }): Promise<WorkflowStateStore> =>
   unwrap(await createWorkflowStateStore(options));
 
 describe("filesystem workflow state store", () => {
@@ -55,7 +55,7 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({
       stateDirectory: directory,
       now: () => times[nowCalls++] as Timestamp,
-      generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId,
+      newInstanceSuffix: () => "one",
     });
     const created = unwrap(await store.create(seed()));
     const target = join(directory, "workflows", "instance-one.json");
@@ -77,12 +77,12 @@ describe("filesystem workflow state store", () => {
   it("serializes factories sharing a lexical state directory and handles an id collision without overwrite", async () => {
     const directory = await temporaryDirectory();
     let sequence = 0;
-    const first = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, generateExecutionInstanceId: () => "instance-existing" as ExecutionInstanceId });
+    const first = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "existing" });
     const original = unwrap(await first.create(seed()));
     const second = await createStore({
       stateDirectory: directory,
       now: () => "2026-09-01T10:00:01Z" as Timestamp,
-      generateExecutionInstanceId: () => (sequence++ === 0 ? "instance-existing" : "instance-new") as ExecutionInstanceId,
+      newInstanceSuffix: () => (sequence++ === 0 ? "existing" : "new"),
     });
     const created = unwrap(await second.create(seed("second-flow" as WorkflowId)));
     expect(created.executionInstanceId).toBe("instance-new");
@@ -92,7 +92,7 @@ describe("filesystem workflow state store", () => {
 
   it("allows only one concurrent stale CAS and leaves the loser links untouched", async () => {
     const directory = await temporaryDirectory();
-    const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId });
+    const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "one" });
     const created = unwrap(await store.create(seed()));
     const results = await Promise.all([
       store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "winner-a")),
@@ -112,7 +112,7 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({
       stateDirectory: directory,
       now: () => (++nowCalls, "2026-09-01T10:00:00Z" as Timestamp),
-      generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId,
+      newInstanceSuffix: () => "one",
       rename: async (from, to) => { renameCalls++; await (await import("node:fs/promises")).rename(from, to); },
     });
     const created = unwrap(await store.create(seed()));
@@ -127,7 +127,7 @@ describe("filesystem workflow state store", () => {
 
   it("rejects path escapes, identity mismatches, symlinks, and non-files", async () => {
     const directory = await temporaryDirectory();
-    const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId });
+    const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "one" });
     const created = unwrap(await store.create(seed()));
     const wrongWorkflow = await store.get("other-flow" as WorkflowId, created.executionInstanceId);
     expect(wrongWorkflow.ok).toBe(false);
@@ -149,44 +149,42 @@ describe("filesystem workflow state store", () => {
     if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
   });
 
-  // Windows resolves the superscript forms to the same devices as the ASCII ones, so they are
-  // rejected as instance ids rather than reaching a rename that fails for a different reason.
-  it.each(["CON", "NUL", "COM1", "COM¹", "COM³", "LPT¹", "LPT³"])(
-    "rejects the reserved device name %s as an instance id",
-    async (reserved) => {
-      const directory = await temporaryDirectory();
-      const store = await createStore({
-        stateDirectory: directory,
-        now: () => "2026-09-01T10:00:00Z" as Timestamp,
-        generateExecutionInstanceId: () => reserved as ExecutionInstanceId,
-      });
-
-      const created = await store.create(seed());
-      expect(created.ok).toBe(false);
-      if (!created.ok) expect(created.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
-
-      const read = await store.get("review-flow" as WorkflowId, reserved as ExecutionInstanceId);
-      expect(read.ok).toBe(false);
-      if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
-    },
-  );
-
-  it("addresses an instance id the default generator would not have produced", async () => {
+  it("composes the identifier itself so a caller supplies only the random part", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({
       stateDirectory: directory,
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      generateExecutionInstanceId: () => "build-1" as ExecutionInstanceId,
+      newInstanceSuffix: () => "9f2c",
     });
     const created = unwrap(await store.create(seed()));
 
-    expect(created.executionInstanceId).toBe("build-1");
-    expect(await readdir(join(directory, "workflows"))).toEqual(["build-1.json"]);
+    expect(created.executionInstanceId).toBe("instance-9f2c");
+    expect(await readdir(join(directory, "workflows"))).toEqual(["instance-9f2c.json"]);
     expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
+  });
 
-    const escape = await store.get("review-flow" as WorkflowId, "../escape" as ExecutionInstanceId);
-    expect(escape.ok).toBe(false);
-    if (!escape.ok) expect(escape.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
+  // An identifier reaching `get` comes from the caller, so every filename rule still guards that
+  // path even though `create` can no longer produce a value that breaks one.
+  it.each([
+    ["a path escape", "../escape"],
+    ["a reserved device name", "CON"],
+    ["a superscript device name", "com¹"],
+    ["an uppercase letter", "instance-Build"],
+    // "cafe" + U+0301 combining acute, i.e. NFD. A case-preserving filesystem may store the
+    // composed form and hand back a string that no longer equals what was written.
+    ["a decomposed character", "instance-café"],
+    ["a name past the filename byte limit", `instance-${"a".repeat(255)}`],
+  ])("refuses %s as an instance id", async (_name, value) => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      now: () => "2026-09-01T10:00:00Z" as Timestamp,
+      newInstanceSuffix: () => "one",
+    });
+
+    const read = await store.get("review-flow" as WorkflowId, value as ExecutionInstanceId);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
   });
 
   it("refuses a state file holding malformed UTF-8 instead of substituting it", async () => {
@@ -194,7 +192,7 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({
       stateDirectory: directory,
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId,
+      newInstanceSuffix: () => "one",
     });
     const created = unwrap(await store.create(seed()));
     const target = join(directory, "workflows", "instance-one.json");
@@ -218,7 +216,7 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({
       stateDirectory: directory,
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      generateExecutionInstanceId: () => "instance-fixed" as ExecutionInstanceId,
+      newInstanceSuffix: () => "fixed",
     });
     const first = unwrap(await store.create(seed()));
     expect(first.executionInstanceId).toBe("instance-fixed");
@@ -240,7 +238,7 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({
       stateDirectory: directory,
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      generateExecutionInstanceId: () => "instance-build 1" as ExecutionInstanceId,
+      newInstanceSuffix: () => "build 1",
     });
     const created = unwrap(await store.create(seed()));
     expect(created.executionInstanceId).toBe("instance-build 1");
@@ -257,7 +255,7 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({
       stateDirectory: directory,
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
-      generateExecutionInstanceId: () => "instance-one" as ExecutionInstanceId,
+      newInstanceSuffix: () => "one",
       rename: async () => { throw new Error("rename failed"); },
     });
     const result = await store.create(seed());
