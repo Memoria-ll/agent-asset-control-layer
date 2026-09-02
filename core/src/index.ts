@@ -106,3 +106,12 @@ export type {
   MetadataCatalogLoadResult,
   MetadataCatalogSource,
 } from "./catalog/filesystem-catalog.ts";
+
+export { loadWorkflowDefinition } from "./workflow/filesystem-definition-loader.ts";
+export type { WorkflowDefinitionLoadResult } from "./workflow/filesystem-definition-loader.ts";
+
+export { createWorkflowStateStore } from "./workflow/filesystem-state-store.ts";
+export type {
+  WorkflowStateStore,
+  WorkflowStateStoreOptions,
+} from "./workflow/filesystem-state-store.ts";

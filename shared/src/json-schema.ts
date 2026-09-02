@@ -6,7 +6,11 @@ import { ResolveRequest, ResolveResponse } from "./resolution.ts";
 import { ResolvedContextDto } from "./resolved-context.ts";
 import { RoleDto, TaskTypeDto } from "./roles.ts";
 import { AgentExecutionDto, SessionDto } from "./sessions.ts";
-import { TransitionCandidateDto, WorkflowStateDto } from "./workflow.ts";
+import {
+  TransitionCandidateDto,
+  WorkflowDefinitionDto,
+  WorkflowStateDto,
+} from "./workflow.ts";
 
 /**
  * Every type that crosses the network / IPC boundary, in one place.
@@ -22,6 +26,7 @@ export const contractSchemas: Readonly<Record<string, z.core.$ZodType>> = {
   ResolvedContextDto,
   SessionDto,
   AgentExecutionDto,
+  WorkflowDefinitionDto,
   WorkflowStateDto,
   TransitionCandidateDto,
   VersionInfo,

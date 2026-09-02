@@ -91,10 +91,18 @@ export type {
 } from "./sessions.ts";
 
 export type {
+  WorkflowDefinitionDto,
+  WorkflowStageDto,
+  WorkflowTransitionDto,
+  WorkflowDefinitionDtoInput,
+  WorkflowStageDtoInput,
+  WorkflowTransitionDtoInput,
   WorkflowStateDto,
   TransitionCandidateDto,
   WorkflowStateDtoInput,
   TransitionCandidateDtoInput,
+  TransitionKind,
+  WorkflowStateVersion,
 } from "./workflow.ts";
 
 export type {
@@ -147,6 +155,7 @@ export { ASSET_TYPES, LOADING_TIERS } from "./resolved-context.ts";
 export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
 export { CORE_ERROR_CODES } from "./errors.ts";
 export { COMPATIBILITY_STATUSES } from "./contract-version.ts";
+export { TRANSITION_KINDS } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Boundary validation. One named entry point per DTO: `parse*` throws,
@@ -178,6 +187,8 @@ export {
 } from "./sessions.ts";
 
 export {
+  parseWorkflowDefinitionDto,
+  tryParseWorkflowDefinitionDto,
   parseWorkflowStateDto,
   tryParseWorkflowStateDto,
   parseTransitionCandidateDto,
