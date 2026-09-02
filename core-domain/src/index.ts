@@ -44,6 +44,15 @@ export type { ExecutionTargetCatalogDocument } from "./catalog-document.ts";
 export { toResolutionContext } from "./resolution-context.ts";
 export type { ResolutionContext } from "./resolution-context.ts";
 
+export { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
+export type {
+  AssetOperationKind,
+  AssetTypeContract,
+  AssetTypeContractRegistry,
+  AssetTypeExecutionProfile,
+  AssetTypeMergePolicy,
+} from "./asset-type-contracts.ts";
+
 export {
   resolveScope,
   toResolutionReasonDto,
