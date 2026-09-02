@@ -1,0 +1,301 @@
+import { describe, expect, it } from "vitest";
+import { parseResolveRequest } from "@aacl/shared";
+import type { AssetId, AssetRevision, AssetType } from "@aacl/shared";
+import {
+  DEFAULT_ASSET_TYPE_CONTRACTS,
+  parseAssetDocument,
+  resolveScope,
+  validateAsset,
+} from "../src/index.ts";
+import type {
+  AssetCandidate,
+  AssetTypeContractRegistry,
+  AssetTypeExecutionProfile,
+  CanonicalAsset,
+  ResolutionAxis,
+  ResolutionMerge,
+  ResolutionOperation,
+  ResolutionSource,
+  ResolutionResult,
+} from "../src/index.ts";
+
+type GlobOptions = {
+  readonly eager?: boolean;
+  readonly import?: string;
+  readonly query?: string;
+};
+
+declare global {
+  interface ImportMeta {
+    glob<T>(pattern: string, options?: GlobOptions): Record<string, T>;
+  }
+}
+
+type ResolutionDirectives = {
+  readonly mandatory: boolean;
+  readonly explicitPriority?: number;
+  readonly operation: ResolutionOperation;
+  readonly mergeMode: ResolutionMerge["mergeMode"];
+  readonly mergeGroup?: string;
+};
+
+type FixtureMetadata = {
+  readonly revision?: string;
+  readonly source?: ResolutionSource;
+};
+
+const expectOk = <Value>(result: { readonly ok: boolean; readonly value?: Value; readonly failure?: { readonly message: string } }): Value => {
+  expect(result.ok).toBe(true);
+  if (!result.ok || result.value === undefined) throw new Error(result.failure?.message ?? "Expected a successful result.");
+  return result.value;
+};
+
+const assetDocument = (id: string, type: AssetType, fields = ""): string => `---
+id: ${id}
+type: ${type}
+tier: core
+${fields}---
+`;
+
+const candidateFromCanonicalAsset = (
+  asset: CanonicalAsset,
+  directives: ResolutionDirectives,
+  fixture: FixtureMetadata = {},
+): AssetCandidate => {
+  const selectors: Partial<Record<ResolutionAxis, readonly string[]>> = {};
+  if (asset.scope.project !== undefined) selectors.projectId = asset.scope.project;
+  if (asset.scope.workflow !== undefined) selectors.workflowId = asset.scope.workflow;
+  if (asset.scope.stage !== undefined) selectors.stageId = asset.scope.stage;
+  if (asset.scope["task-type"] !== undefined) selectors.taskTypeId = asset.scope["task-type"];
+  if (asset.scope.role !== undefined) selectors.roleId = asset.scope.role;
+  if (asset.scope.provider !== undefined) selectors.providerId = asset.scope.provider;
+  if (asset.scope.runtime !== undefined) selectors.runtimeId = asset.scope.runtime;
+  if (asset.scope.model !== undefined) selectors.modelId = asset.scope.model;
+  if (asset.scope.directory !== undefined) selectors.directory = asset.scope.directory;
+
+  const merge = directives.mergeMode === "exclusive"
+    ? { mergeMode: "exclusive" as const, mergeGroup: directives.mergeGroup as string }
+    : directives.mergeGroup === undefined
+      ? { mergeMode: "additive" as const }
+      : { mergeMode: "additive" as const, mergeGroup: directives.mergeGroup };
+
+  return {
+    assetId: asset.id,
+    revision: (fixture.revision ?? `revision-${asset.id}`) as AssetRevision,
+    assetType: asset.type,
+    loadingTier: asset.tier,
+    source: fixture.source ?? { layer: "global", sourceId: `source-${asset.id}` },
+    rule: {
+      selectors,
+      mandatory: directives.mandatory,
+      operation: directives.operation,
+      ...(directives.explicitPriority === undefined ? {} : { explicitPriority: directives.explicitPriority }),
+      requires: asset.requires,
+      ...merge,
+    },
+  };
+};
+
+const candidateFromDocument = (
+  document: string,
+  directives: ResolutionDirectives,
+  fixture: FixtureMetadata = {},
+): AssetCandidate => {
+  const parsed = expectOk(parseAssetDocument(document));
+  const asset = expectOk(validateAsset(parsed));
+  return candidateFromCanonicalAsset(asset, directives, fixture);
+};
+
+const add = (mergeGroup?: string): ResolutionDirectives => ({
+  mandatory: false,
+  operation: { kind: "add" },
+  mergeMode: "additive",
+  ...(mergeGroup === undefined ? {} : { mergeGroup }),
+});
+
+const override = (targetAssetId: string, mergeGroup: string): ResolutionDirectives => ({
+  mandatory: false,
+  operation: { kind: "override", targetAssetId: targetAssetId as AssetId },
+  mergeMode: "additive",
+  mergeGroup,
+});
+
+const disable = (targetAssetId: string): ResolutionDirectives => ({
+  mandatory: false,
+  operation: { kind: "disable", targetAssetId: targetAssetId as AssetId },
+  mergeMode: "additive",
+});
+
+const exclusive = (mergeGroup: string): ResolutionDirectives => ({
+  mandatory: false,
+  operation: { kind: "add" },
+  mergeMode: "exclusive",
+  mergeGroup,
+});
+
+const resolve = (
+  candidates: readonly AssetCandidate[],
+  contracts?: AssetTypeContractRegistry,
+) => resolveScope({
+  scope: parseResolveRequest({ scope: {} }).scope,
+  snapshot: { candidates },
+  ...(contracts === undefined ? {} : { contracts }),
+});
+
+const resultValue = (
+  candidates: readonly AssetCandidate[],
+  contracts?: AssetTypeContractRegistry,
+): ResolutionResult => expectOk(resolve(candidates, contracts));
+
+const reason = (result: ResolutionResult, assetId: string) => {
+  const evaluation = result.evaluations.find((item) => item.candidate.assetId === assetId);
+  if (evaluation === undefined) throw new Error(`Evaluation for ${assetId} was not found.`);
+  return evaluation.reason;
+};
+
+describe("asset type contracts", () => {
+  it("rejects an override between different asset types before changing the target", () => {
+    const target = candidateFromDocument(assetDocument("skill-target", "skill"), add("shared-group"));
+    const issuer = candidateFromDocument(assetDocument("rule-issuer", "rule"), override("skill-target", "shared-group"));
+    const result = resultValue([issuer, target]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "rule-issuer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "skill-target")).toMatchObject({ kind: "included" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["rule-issuer", "skill-target"] }]);
+  });
+
+  it("rejects a disable between different asset types before changing the target", () => {
+    const target = candidateFromDocument(assetDocument("guardrail-target", "guardrail"), add());
+    const issuer = candidateFromDocument(assetDocument("rule-issuer", "rule"), disable("guardrail-target"));
+    const result = resultValue([issuer, target]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "rule-issuer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "guardrail-target")).toMatchObject({ kind: "included" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["guardrail-target", "rule-issuer"] }]);
+  });
+
+  it("rejects a cross-type same-ID override overlay", () => {
+    const base = candidateFromDocument(assetDocument("overlay", "rule"), add("overlay-group"), {
+      revision: "global-revision",
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("overlay", "skill"), override("overlay", "overlay-group"), {
+      revision: "project-revision",
+      source: { layer: "project", sourceId: "project-source" },
+    });
+    const result = resultValue([base, overlay]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "overlay")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["overlay"] }]);
+  });
+
+  it("rejects a cross-type same-ID disable overlay", () => {
+    const base = candidateFromDocument(assetDocument("overlay", "rule"), add(), {
+      revision: "global-revision",
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("overlay", "skill"), disable("overlay"), {
+      revision: "project-revision",
+      source: { layer: "project", sourceId: "project-source" },
+    });
+    const result = resultValue([base, overlay]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "overlay")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["overlay"] }]);
+  });
+
+  it("rejects an exclusive group spanning different asset types", () => {
+    const rule = candidateFromDocument(assetDocument("rule-candidate", "rule"), exclusive("cross-type"));
+    const skill = candidateFromDocument(assetDocument("skill-candidate", "skill"), exclusive("cross-type"));
+    const result = resultValue([rule, skill]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "rule-candidate")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "skill-candidate")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["rule-candidate", "skill-candidate"] }]);
+  });
+
+  it.each(["role", "task-type", "policy", "guardrail"] as const)("rejects exclusive merge for additive-only type %s", (assetType) => {
+    const candidate = candidateFromDocument(assetDocument(`exclusive-${assetType}`, assetType), exclusive("additive-only"));
+    const result = resolve([candidate]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      const detail = result.failure.details?.find((item) => item.path.at(-1) === "mergeMode");
+      expect(detail?.path.slice(-2)).toEqual(["rule", "mergeMode"]);
+      expect(detail?.code).toBe("merge_mode_not_allowed");
+    }
+  });
+
+  it("resolves one candidate for every asset type through the default registry", () => {
+    const assetTypes: readonly AssetType[] = ["rule", "knowledge", "skill", "workflow", "role", "task-type", "policy", "guardrail"];
+    const candidates = assetTypes.map((assetType) => candidateFromDocument(assetDocument(`asset-${assetType}`, assetType), add()));
+    const result = resultValue(candidates);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toEqual([]);
+    expect(result.evaluations).toHaveLength(assetTypes.length);
+    expect(result.evaluations.every((item) => item.reason.kind === "included")).toBe(true);
+  });
+
+  it("applies an injected registry that removes override from rule", () => {
+    const contracts: AssetTypeContractRegistry = {
+      ...DEFAULT_ASSET_TYPE_CONTRACTS,
+      rule: {
+        ...DEFAULT_ASSET_TYPE_CONTRACTS.rule,
+        allowedOperationKinds: ["add", "disable"],
+      },
+    };
+    const candidate = candidateFromDocument(assetDocument("rule-issuer", "rule"), override("missing-target", "injected"));
+    const result = resolve([candidate], contracts);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      const detail = result.failure.details?.find((item) => item.path.at(-1) === "kind");
+      expect(detail?.path.slice(-2)).toEqual(["operation", "kind"]);
+      expect(detail?.code).toBe("operation_not_allowed");
+    }
+  });
+
+  it("derives the execution profile reverse mapping from the default registry", () => {
+    const actual: Record<AssetTypeExecutionProfile, AssetType[]> = {
+      "instruction-body": [],
+      "runtime-callable": [],
+      "workflow-definition": [],
+      "catalog-definition": [],
+      "policy-input": [],
+      "guardrail-input": [],
+    };
+    for (const [assetType, contract] of Object.entries(DEFAULT_ASSET_TYPE_CONTRACTS)) {
+      actual[contract.executionProfile].push(assetType as AssetType);
+    }
+
+    expect(actual).toEqual({
+      "instruction-body": ["rule", "knowledge"],
+      "runtime-callable": ["skill"],
+      "workflow-definition": ["workflow"],
+      "catalog-definition": ["role", "task-type"],
+      "policy-input": ["policy"],
+      "guardrail-input": ["guardrail"],
+    });
+  });
+
+  it("keeps asset type branching out of the shared resolver source", () => {
+    const sourceFiles = import.meta.glob<string>("../src/scope-resolver.ts", {
+      eager: true,
+      import: "default",
+      query: "?raw",
+    });
+    const source = sourceFiles["../src/scope-resolver.ts"];
+    if (source === undefined) throw new Error("scope-resolver.ts was not found");
+
+    expect(source, "This prohibition also applies to comment text; use wording that avoids the forbidden patterns.").not.toMatch(/assetType\s*[!=]==?\s*"/);
+    expect(source, "This prohibition also applies to comment text; use wording that avoids the forbidden patterns.").not.toMatch(/switch\s*\([^)]*assetType/);
+  });
+});

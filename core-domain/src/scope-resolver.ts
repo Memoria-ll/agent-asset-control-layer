@@ -9,6 +9,8 @@ import type {
   ResolutionReason,
   ResolutionScopeInput,
 } from "@aacl/shared";
+import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
+import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import {
   normalizeResolutionDirectory,
@@ -161,11 +163,16 @@ export type ResolutionConflict =
       readonly kind: "dependency_failure";
       readonly failedRequirement: AssetId;
       readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "asset_type_conflict";
+      readonly involvedAssetIds: readonly AssetId[];
     };
 
 export type ResolveScopeInput = {
   readonly scope: ResolutionScopeInput;
   readonly snapshot: ResolutionSnapshot;
+  readonly contracts?: AssetTypeContractRegistry;
 };
 
 export type ResolutionEvaluation = {
@@ -498,14 +505,19 @@ const validateStringList = (
   return true;
 };
 
-const validateCandidate = (candidate: NormalizedCandidate): readonly CoreErrorDetail[] => {
+const validateCandidate = (
+  candidate: NormalizedCandidate,
+  contracts: AssetTypeContractRegistry,
+): readonly CoreErrorDetail[] => {
   const details: CoreErrorDetail[] = [];
   const value = candidate.candidate as unknown as Record<string, unknown>;
   const path = candidatePath(candidate.candidate);
   if (!isRecord(value)) return [detail(path, "invalid_value", "The candidate must be an object.")];
   if (!isNonEmptyString(value.assetId)) details.push(detail([...path, "assetId"], "empty_identifier", "The asset id must not be empty."));
   if (!isNonEmptyString(value.revision)) details.push(detail([...path, "revision"], "empty_identifier", "The revision must not be empty."));
-  if (!isNonEmptyString(value.assetType) || !ASSET_TYPES.includes(value.assetType as AssetType)) {
+  const assetTypeIsKnown =
+    isNonEmptyString(value.assetType) && ASSET_TYPES.includes(value.assetType as AssetType);
+  if (!assetTypeIsKnown) {
     details.push(detail([...path, "assetType"], "invalid_value", "The asset type is invalid."));
   }
   if (!isNonEmptyString(value.loadingTier) || !LOADING_TIERS.includes(value.loadingTier as LoadingTier)) {
@@ -565,6 +577,27 @@ const validateCandidate = (candidate: NormalizedCandidate): readonly CoreErrorDe
     details.push(detail([...path, "rule", "mergeGroup"], "invalid_merge_group", "An exclusive merge group is required."));
   } else if (rule.mergeMode === "additive" && rule.mergeGroup !== undefined && !isNonEmptyString(rule.mergeGroup)) {
     details.push(detail([...path, "rule", "mergeGroup"], "invalid_merge_group", "The merge group must not be empty."));
+  }
+  // Skipped for an unknown asset type: the membership failure above is already
+  // recorded, and a contract lookup on an unknown key has nothing to read.
+  if (assetTypeIsKnown) {
+    const contract: AssetTypeContract = contracts[value.assetType as AssetType];
+    const operation = rule.operation;
+    if (isRecord(operation) && isNonEmptyString(operation.kind) &&
+        !contract.allowedOperationKinds.includes(operation.kind as AssetOperationKind)) {
+      details.push(detail(
+        [...path, "rule", "operation", "kind"],
+        "operation_not_allowed",
+        "The asset type does not allow this operation.",
+      ));
+    }
+    if (rule.mergeMode === "exclusive" && !contract.mergePolicy.allowsExclusive) {
+      details.push(detail(
+        [...path, "rule", "mergeMode"],
+        "merge_mode_not_allowed",
+        "The asset type does not allow an exclusive merge.",
+      ));
+    }
   }
   return details;
 };
@@ -651,6 +684,7 @@ const conflictExplanation = (conflict: ResolutionConflict): string => {
     case "duplicate_identity": return "Candidates with the same asset identity have different meanings.";
     case "dependency_cycle": return "Asset requirements contain a cycle.";
     case "dependency_failure": return "A mandatory asset requirement could not be satisfied.";
+    case "asset_type_conflict": return "Candidates of different asset types cannot be combined.";
   }
 };
 
@@ -705,6 +739,7 @@ const resolveScopeFixedPoint = (
   if (!isRecord(input) || !isRecord(input.snapshot) || !Array.isArray(input.snapshot.candidates)) {
     return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
   }
+  const contracts = input.contracts ?? DEFAULT_ASSET_TYPE_CONTRACTS;
 
   const conflicts = new Map<string, ResolutionConflict>();
   const addConflict = (conflict: ResolutionConflict): void => {
@@ -730,7 +765,7 @@ const resolveScopeFixedPoint = (
   // invalid-directory evaluation, and it must not be dereferenced below.
   for (const rawCandidate of input.snapshot.candidates) {
     const candidate = rawCandidate as AssetCandidate;
-    const structuralDetails = validateCandidate({ candidate });
+    const structuralDetails = validateCandidate({ candidate }, contracts);
     if (structuralDetails.length > 0) {
       validationDetails.push(...structuralDetails);
       continue;
@@ -822,6 +857,18 @@ const resolveScopeFixedPoint = (
     exclusiveGroups.set(state.candidate.rule.mergeGroup, group);
   }
   for (const [mergeGroup, group] of exclusiveGroups) {
+    // A type contract violation is settled before mandatory adjudication: whether an
+    // operation is expressible at all precedes whether an expressible one is allowed.
+    const groupTypes = new Set(group.map((state) => state.candidate.assetType));
+    if (groupTypes.size > 1) {
+      const conflict: ResolutionConflict = {
+        kind: "asset_type_conflict",
+        involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+      };
+      addConflict(conflict);
+      for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
+      continue;
+    }
     const mandatory = group.filter((state) => state.candidate.rule.mandatory);
     if (mandatory.length > 1) {
       const conflict: ResolutionConflict = {
@@ -1217,6 +1264,21 @@ const resolveScopeFixedPoint = (
         failures.push({
           issuer,
           conflict: makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]),
+        });
+        continue;
+      }
+      // Same ordering reason as the exclusive group check: a cross-type relation is
+      // not expressible, so it is settled before mandatory protection is consulted.
+      if (targets.some((target) => target.candidate.assetType !== issuer.candidate.assetType)) {
+        failures.push({
+          issuer,
+          conflict: {
+            kind: "asset_type_conflict",
+            involvedAssetIds: canonicalIds([
+              issuer.candidate.assetId,
+              ...targets.map((target) => target.candidate.assetId),
+            ]),
+          },
         });
         continue;
       }
