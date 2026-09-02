@@ -31,6 +31,8 @@ describe("Project contracts", () => {
       projectId: "project-a",
       projectRoot: "/work/project",
     });
+    expect(() => parseProjectInfoDto({ projectId: "PROJECT-A", projectRoot: "/work/project" })).toThrow();
+    expect(() => parseProjectInfoDto({ projectId: `project-${"a".repeat(121)}`, projectRoot: "/work/project" })).toThrow();
     expect(parseProjectDiscoveryRequest({ workspacePath: "/work/project/packages/a" })).toEqual({
       workspacePath: "/work/project/packages/a",
     });
@@ -67,6 +69,38 @@ describe("Project contracts", () => {
     ] as const;
 
     for (const value of values) expect(parseProjectDiscoveryDto(value)).toEqual(value);
+    expect(parseProjectDiscoveryDto({
+      status: "invalid",
+      workspacePath: "/work/project",
+      projectRoot: "/work/project",
+      failure: { code: "unavailable", message: "The marker could not be read." },
+    })).toMatchObject({ status: "invalid" });
+    expect(() => parseProjectDiscoveryDto({
+      status: "invalid",
+      workspacePath: "/work/project",
+      projectRoot: "/work/project",
+      failure: { code: "internal", message: "Unexpected failure." },
+    })).toThrow();
+    expect(() => parseProjectDiscoveryDto({
+      status: "initialized",
+      workspacePath: "/work/project/packages/a",
+      projectRoot: "/work/project",
+      projectId: "PROJECT-A",
+    })).toThrow();
+    expect(() => parseProjectDiscoveryDto({
+      status: "mismatch",
+      workspacePath: "/work/project",
+      projectRoot: "/work/project",
+      markerProjectId: "PROJECT-B",
+      registryProjectId: "project-a",
+    })).toThrow();
+    expect(() => parseProjectDiscoveryDto({
+      status: "mismatch",
+      workspacePath: "/work/project",
+      projectRoot: "/work/project",
+      markerProjectId: "project-b",
+      registryProjectId: "PROJECT-A",
+    })).toThrow();
     expect(tryParseProjectDiscoveryDto({
       status: "uninitialized",
       workspacePath: "/work/unmanaged",

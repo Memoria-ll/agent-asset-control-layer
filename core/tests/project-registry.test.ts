@@ -120,6 +120,30 @@ describe("Project Registry reconciliation", () => {
     expect(result.failure.details?.[0]?.code).toBe("invalid_registry");
   });
 
+  it("rejects a mismatch entry whose marker and registry IDs are equal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "project-registry.json");
+    await mkdir(projectRoot);
+    await writeFile(registryPath, JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId: "project-same",
+        state: "mismatch",
+        markerProjectId: "project-same",
+      }],
+    }), "utf8");
+
+    const result = await createProjectRegistry(registryPath).reconcile();
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected invalid registry");
+    expect(result.failure.details?.[0]?.code).toBe("invalid_registry");
+  });
+
   it("rejects a FIFO Registry without opening it for reading", async () => {
     if (process.platform === "win32") return;
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
@@ -233,6 +257,42 @@ describe("Project Registry reconciliation", () => {
     ]));
     expect(document.entries).toHaveLength(2);
   });
+
+  it("does not persist after the Registry lock is compromised", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const firstWorkspace = join(root, "first");
+    const secondWorkspace = join(root, "second");
+    await mkdir(firstWorkspace);
+    await mkdir(secondWorkspace);
+    const firstProjectId = createProjectMarkerDto("project-first").projectId;
+    const secondProjectId = createProjectMarkerDto("project-second").projectId;
+
+    const initial = await createProjectRegistry(registryPath).observe(firstWorkspace, firstWorkspace, firstProjectId);
+    expect(initial).toEqual({ ok: true, value: { status: "bound" } });
+
+    const result = await createProjectRegistry(registryPath, {
+      lock: { timeoutMs: 5_000, pollMs: 5, staleMs: 2_000, updateMs: 1_000 },
+      beforeRename: async () => {
+        await rm(`${registryPath}.lock`, { recursive: true, force: true });
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_500));
+      },
+    }).observe(secondWorkspace, secondWorkspace, secondProjectId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected a compromised lock failure");
+    expect(result.failure.details?.[0]?.code).toBe("lock_unavailable");
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as {
+      entries: Array<{ workspacePath: string; projectId: string; state: string }>;
+    };
+    expect(document.entries).toEqual([{
+      workspacePath: firstWorkspace,
+      projectRoot: firstWorkspace,
+      projectId: "project-first",
+      state: "bound",
+    }]);
+  }, 10_000);
 
   it("reconciles the durable registry before Core starts listening", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));

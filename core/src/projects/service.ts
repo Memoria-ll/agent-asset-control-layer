@@ -33,14 +33,20 @@ export type ProjectServiceOptions = {
 type MarkerRead =
   | { readonly status: "missing" }
   | { readonly status: "valid"; readonly marker: ProjectMarkerDto }
-  | { readonly status: "invalid"; readonly failure: CoreFailure };
+  | { readonly status: "invalid"; readonly failure: DiscoveryFailure };
 
-const projectFailure = (
-  code: "invalid_request" | "conflict" | "unavailable" | "internal",
+type FailureWithCode<Code extends CoreFailure["code"]> = Omit<CoreFailure, "code"> & {
+  readonly code: Code;
+};
+
+type DiscoveryFailure = FailureWithCode<"invalid_request" | "unavailable">;
+
+const projectFailure = <Code extends "invalid_request" | "conflict" | "unavailable" | "internal">(
+  code: Code,
   message: string,
   path: readonly string[],
   detailCode: string,
-): CoreFailure => coreFailure(code, message, [{ path: [...path], code: detailCode, message }]);
+): FailureWithCode<Code> => coreFailure(code, message, [{ path: [...path], code: detailCode, message }]) as FailureWithCode<Code>;
 
 const errorCode = (error: unknown): string | undefined => {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -50,7 +56,7 @@ const errorCode = (error: unknown): string | undefined => {
 const invalidDiscovery = (
   workspacePath: string,
   projectRoot: string,
-  failure: CoreFailure,
+  failure: DiscoveryFailure,
 ): ProjectDiscoveryDto => ({
   status: "invalid",
   workspacePath,

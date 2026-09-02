@@ -10,6 +10,8 @@ export type FileLockOptions = {
   readonly updateMs?: number;
 };
 
+export type FileLockGuard = () => void;
+
 export const DEFAULT_FILE_LOCK_OPTIONS: Required<FileLockOptions> = {
   timeoutMs: 30_000,
   pollMs: 20,
@@ -40,7 +42,7 @@ const delay = (milliseconds: number): Promise<void> =>
  */
 export const withFileLock = async <T>(
   lockPath: string,
-  operation: () => Promise<T>,
+  operation: (assertOwned: FileLockGuard) => Promise<T>,
   options: FileLockOptions = {},
 ): Promise<T> => {
   const normalizedPath = resolve(lockPath);
@@ -68,9 +70,14 @@ export const withFileLock = async <T>(
     }
   }
 
+  const assertOwned: FileLockGuard = () => {
+    if (compromised !== undefined) throw compromised;
+  };
+
   let operationCompleted = false;
   try {
-    const result = await operation();
+    assertOwned();
+    const result = await operation(assertOwned);
     operationCompleted = true;
     return result;
   } finally {

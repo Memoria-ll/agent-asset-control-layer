@@ -1,7 +1,7 @@
 import * as z from "zod/mini";
-import { CoreErrorDto, tryParseWith, type ParseOutcome } from "./errors.ts";
+import { CoreErrorDetail, tryParseWith, type ParseOutcome } from "./errors.ts";
 import { ProjectId } from "./identifiers.ts";
-import { DirectoryPath } from "./primitives.ts";
+import { DirectoryPath, NonEmptyString } from "./primitives.ts";
 
 export const PROJECT_MARKER_SCHEMA_VERSION = 1;
 export const PROJECT_MARKER_ID_MAX_LENGTH = 128;
@@ -33,7 +33,7 @@ export type ProjectInitRequest = z.infer<typeof ProjectInitRequest>;
 export type ProjectInitRequestInput = z.input<typeof ProjectInitRequest>;
 
 export const ProjectInfoDto = z.strictObject({
-  projectId: ProjectId,
+  projectId: ProjectMarkerId,
   projectRoot: DirectoryPath,
 });
 export type ProjectInfoDto = z.infer<typeof ProjectInfoDto>;
@@ -57,6 +57,12 @@ const discoveryBase = {
   workspacePath: DirectoryPath,
 };
 
+const ProjectDiscoveryFailureDto = z.strictObject({
+  code: z.enum(["invalid_request", "unavailable"]),
+  message: NonEmptyString,
+  details: z.optional(z.array(CoreErrorDetail).check(z.minLength(1))),
+});
+
 /**
  * Discovery stops at the nearest `.aacl` directory. A malformed nearest marker is
  * reported instead of falling through to a parent Project.
@@ -65,7 +71,7 @@ export const ProjectDiscoveryDto = z.discriminatedUnion("status", [
   z.strictObject({
     ...discoveryBase,
     status: z.literal("initialized"),
-    projectId: ProjectId,
+    projectId: ProjectMarkerId,
     projectRoot: DirectoryPath,
   }),
   z.strictObject({
@@ -76,14 +82,14 @@ export const ProjectDiscoveryDto = z.discriminatedUnion("status", [
     ...discoveryBase,
     status: z.literal("invalid"),
     projectRoot: DirectoryPath,
-    failure: CoreErrorDto,
+    failure: ProjectDiscoveryFailureDto,
   }),
   z.strictObject({
     ...discoveryBase,
     status: z.literal("mismatch"),
     projectRoot: DirectoryPath,
-    markerProjectId: ProjectId,
-    registryProjectId: ProjectId,
+    markerProjectId: ProjectMarkerId,
+    registryProjectId: ProjectMarkerId,
   }),
 ]);
 export type ProjectDiscoveryDto = z.infer<typeof ProjectDiscoveryDto>;

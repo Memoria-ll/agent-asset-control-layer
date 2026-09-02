@@ -17,11 +17,14 @@ export const runProjectCli = async (
   io: CliIo,
   registryPath = defaultProjectRegistryPath(),
 ): Promise<number> => {
-  if (args[0] !== "init" || args.length > 2) {
+  const normalizedArgs = args[1] === "--"
+    ? [args[0], ...args.slice(2)]
+    : args;
+  if (normalizedArgs[0] !== "init" || normalizedArgs.length > 2) {
     io.stderr("Usage: pnpm project:init -- [project-root]");
     return 2;
   }
-  const projectRoot = resolve(cwd, args[1] ?? ".");
+  const projectRoot = resolve(cwd, normalizedArgs[1] ?? ".");
   const service = createProjectService({
     registry: createProjectRegistry(registryPath),
   });

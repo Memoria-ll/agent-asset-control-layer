@@ -34,8 +34,10 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `{ "schemaVersion": 1, "projectId": "project-<suffix>" }` の strict object で、`projectId` は
   `^project-[a-z0-9-]+$` に一致し全長128文字以内とする。Core は `[a-z0-9-]` の suffix から ID を
   組み立てる。Git repository root は参照せず、init に渡された directory を Project root とする。
-- `pnpm project:init -- [project-root]` が明示 init の入口。配布形態の確定前なので executable 名は
-  持たない。未初期化 workspace の discovery は filesystem を変更せず `uninitialized` を返す。
+- `pnpm project:init -- [project-root]` が明示 init の入口で、root script は Core の Node entrypoint を
+  元の cwd から直接起動する。CLI は pnpm の `--` separator を引数境界として 1 回だけ正規化する。
+  配布形態の確定前なので executable 名は持たない。未初期化 workspace の discovery は filesystem を
+  変更せず `uninitialized` を返す。
 - discovery は workspace から filesystem root まで親を辿り、最寄りの `.aacl` で停止する。
   その directory または Marker が不正なら `invalid` を返し、上位 Project へ抜けない。この探索で
   候補は 1 件に定まるため `ambiguous` は契約に持たない。
@@ -49,9 +51,16 @@ local-first Core、およびその Workbench となる VS Code Extension。
   読み直して `bound` または `mismatch` を確定する。
 - Registry の read-modify-write 全体は同じ JSON の lock directory による cross-process lock で保護する。
   lock は heartbeat と stale reclaim、compromise 検出を備え、クラッシュ後も別プロセスが安全に回復する。
+  Registry の atomic persist は temp file 書込み後、rename 直前にも ownership と compromise を同期検査し、
+  検査を通過したときだけ commit する。
   lock を取得できない、または Registry が壊れている場合、Core は listen せず fail-closed で終了し、
   起動結果は `settings` / `project-registry` / `listen` の stage で分類する。Registry と Marker は
   regular file を確認してから読み取る。
+- `ProjectInfoDto` と `ProjectDiscoveryDto` の Marker 由来 ID 欄は Marker 固有の schema
+  （`^project-[a-z0-9-]+$`、全長128文字以内）を共有する。`invalid` discovery の nested failure code は
+  実際の探索経路に対応する `invalid_request` または `unavailable` とする。Registry の `mismatch` entry は
+  異なる `projectId` と `markerProjectId` の組合せで表現し、同一 ID の durable entry は
+  `invalid_registry` に分類する。
 - Project Init / discovery / Marker は `shared` の公開 DTO。VS Code Extension は transport-neutral な
   `ProjectClient` 境界から同じ操作を使う。HTTP route は #12 の範囲で追加する。
 

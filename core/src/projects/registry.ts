@@ -4,8 +4,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { tryParseProjectMarkerDto } from "@aacl/shared";
 import type { ProjectId } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "@aacl/core-domain";
-import { writeAtomically } from "../internal/atomic-write.ts";
-import { withFileLock, type FileLockOptions } from "../internal/file-lock.ts";
+import { writeAtomically, type BeforeRename } from "../internal/atomic-write.ts";
+import { withFileLock, type FileLockGuard, type FileLockOptions } from "../internal/file-lock.ts";
 import { readRegularUtf8 } from "../internal/regular-file.ts";
 
 export const PROJECT_REGISTRY_SCHEMA_VERSION = 1;
@@ -46,6 +46,7 @@ export type ProjectRegistry = {
 export type ProjectRegistryOptions = {
   readonly lock?: FileLockOptions;
   readonly beforeWrite?: () => Promise<void>;
+  readonly beforeRename?: () => Promise<void>;
 };
 
 const registryFailure = (
@@ -85,7 +86,7 @@ const isEntry = (value: unknown): value is RegistryEntry => {
     && keys.every((key, index) => key === expectedKeys[index]);
   if (!base) return false;
   if (entry.state === "mismatch") {
-    return isProjectId(entry.markerProjectId);
+    return isProjectId(entry.markerProjectId) && entry.markerProjectId !== entry.projectId;
   }
   return entry.markerProjectId === undefined;
 };
@@ -128,6 +129,8 @@ const writeRegistry = async (
   registryPath: string,
   document: RegistryDocument,
   mode?: number,
+  beforeRename?: BeforeRename,
+  assertBeforeRename?: FileLockGuard,
 ): Promise<AssetResult<undefined>> => {
   try {
     await mkdir(dirname(registryPath), { recursive: true, mode: 0o700 });
@@ -136,6 +139,8 @@ const writeRegistry = async (
       `${JSON.stringify(document, null, 2)}\n`,
       rename,
       mode ?? 0o600,
+      beforeRename,
+      assertBeforeRename,
     );
     return written
       ? { ok: true, value: undefined }
@@ -193,7 +198,7 @@ export const defaultProjectRegistryPath = (homeDirectory = homedir()): string =>
 const withRegistryLock = async <T>(
   registryPath: string,
   lockOptions: FileLockOptions | undefined,
-  operation: () => Promise<AssetResult<T>>,
+  operation: (assertOwned: FileLockGuard) => Promise<AssetResult<T>>,
 ): Promise<AssetResult<T>> => {
   try {
     return await withFileLock(`${registryPath}.lock`, operation, lockOptions);
@@ -207,21 +212,22 @@ export const createProjectRegistry = (
   options: ProjectRegistryOptions = {},
 ): ProjectRegistry => {
   const normalizedRegistryPath = resolve(registryPath);
-  const runLocked = <T>(operation: () => Promise<AssetResult<T>>): Promise<AssetResult<T>> =>
+  const runLocked = <T>(operation: (assertOwned: FileLockGuard) => Promise<AssetResult<T>>): Promise<AssetResult<T>> =>
     serialized<AssetResult<T>>(
       normalizedRegistryPath,
       () => withRegistryLock<T>(normalizedRegistryPath, options.lock, operation),
     );
   const persistRegistry = async (
+    assertOwned: FileLockGuard,
     document: RegistryDocument,
     mode?: number,
   ): Promise<AssetResult<undefined>> => {
     await options.beforeWrite?.();
-    return writeRegistry(normalizedRegistryPath, document, mode);
+    return writeRegistry(normalizedRegistryPath, document, mode, options.beforeRename, assertOwned);
   };
 
   return {
-    prepare: (workspacePath, projectRoot, proposedProjectId) => runLocked<ProjectId>(async (): Promise<AssetResult<ProjectId>> => {
+    prepare: (workspacePath, projectRoot, proposedProjectId) => runLocked<ProjectId>(async (assertOwned): Promise<AssetResult<ProjectId>> => {
       if (!isProjectId(proposedProjectId)) {
         return registryFailure("internal", "The proposed Project ID is invalid.", "invalid_project_id");
       }
@@ -244,14 +250,14 @@ export const createProjectRegistry = (
       const entries = existing === undefined
         ? [...loaded.value.document.entries, entry]
         : loaded.value.document.entries.map((candidate) => candidate.workspacePath === normalizedWorkspace ? entry : candidate);
-      const saved = await persistRegistry({
+      const saved = await persistRegistry(assertOwned, {
         schemaVersion: 1,
         entries,
       }, loaded.value.mode);
       return saved.ok ? { ok: true, value: proposedProjectId } : saved;
     }),
 
-    observe: (workspacePath, projectRoot, markerProjectId) => runLocked<RegistryObservation>(async (): Promise<AssetResult<RegistryObservation>> => {
+    observe: (workspacePath, projectRoot, markerProjectId) => runLocked<RegistryObservation>(async (assertOwned): Promise<AssetResult<RegistryObservation>> => {
       if (!isProjectId(markerProjectId)) {
         return registryFailure("invalid_request", "The Project Marker ID is invalid.", "invalid_project_id");
       }
@@ -281,11 +287,11 @@ export const createProjectRegistry = (
       const entries = existing === undefined
         ? [...loaded.value.document.entries, replacement]
         : loaded.value.document.entries.map((entry) => entry.workspacePath === normalizedWorkspace ? replacement : entry);
-      const saved = await persistRegistry({ schemaVersion: 1, entries }, loaded.value.mode);
+      const saved = await persistRegistry(assertOwned, { schemaVersion: 1, entries }, loaded.value.mode);
       return saved.ok ? { ok: true, value: observation } : saved;
     }),
 
-    reconcile: () => runLocked<undefined>(async (): Promise<AssetResult<undefined>> => {
+    reconcile: () => runLocked<undefined>(async (assertOwned): Promise<AssetResult<undefined>> => {
       const loaded = await readRegistry(normalizedRegistryPath);
       if (!loaded.ok) return loaded;
       if (loaded.value.document.entries.length === 0 && loaded.value.mode === undefined) {
@@ -314,7 +320,7 @@ export const createProjectRegistry = (
       }
       const next: RegistryDocument = { schemaVersion: 1, entries };
       if (JSON.stringify(next) === JSON.stringify(loaded.value.document)) return { ok: true, value: undefined };
-      return persistRegistry(next, loaded.value.mode);
+      return persistRegistry(assertOwned, next, loaded.value.mode);
     }),
   };
 };

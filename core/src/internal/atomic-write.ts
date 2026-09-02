@@ -4,6 +4,8 @@ import type { FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export type Rename = (from: string, to: string) => Promise<void>;
+export type BeforeRename = () => void | Promise<void>;
+export type RenameGuard = () => void;
 
 const cleanupTemp = async (temporaryPath: string | undefined): Promise<void> => {
   if (temporaryPath === undefined) return;
@@ -18,9 +20,9 @@ const cleanupTemp = async (temporaryPath: string | undefined): Promise<void> => 
 /**
  * Replace `targetPath` with `document` in one step, or leave it untouched.
  *
- * Only the rename is injectable. Widening this to the whole write would move the atomic
- * sequence into the test's substitute, so the exclusive create, the close and the cleanup
- * below would no longer be the code any test observes.
+ * Only the final rename and its immediate precondition are injectable. Widening this to the
+ * whole write would move the atomic sequence into the test's substitute, so the exclusive
+ * create, the close and the cleanup below would no longer be the code any test observes.
  *
  * Failure comes back as `false` rather than as a `CoreFailure`: the message and the detail
  * path name what the caller was storing, and a shared helper cannot say "the asset" for one
@@ -31,6 +33,8 @@ export const writeAtomically = async (
   document: string,
   rename: Rename,
   mode?: number,
+  beforeRename?: BeforeRename,
+  assertBeforeRename?: RenameGuard,
 ): Promise<boolean> => {
   const parent = dirname(targetPath);
   const temporaryPath = join(parent, `.aacl.${randomUUID()}.tmp`);
@@ -45,6 +49,8 @@ export const writeAtomically = async (
     if (mode !== undefined) await handle.chmod(mode);
     await handle.close();
     handle = undefined;
+    await beforeRename?.();
+    assertBeforeRename?.();
     await rename(temporaryPath, targetPath);
     activeTemporaryPath = undefined;
     return true;
