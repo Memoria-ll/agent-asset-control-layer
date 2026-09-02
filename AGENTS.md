@@ -36,11 +36,13 @@ local-first Core、およびその Workbench となる VS Code Extension。
   組み立てる。Git repository root は参照せず、init に渡された directory を Project root とする。
 - `pnpm project:init -- [project-root]` が明示 init の入口で、root script は Core の Node entrypoint を
   元の cwd から直接起動する。CLI は pnpm の `--` separator を引数境界として 1 回だけ正規化する。
-  配布形態の確定前なので executable 名は持たない。未初期化 workspace の discovery は filesystem を
-  変更せず `uninitialized` を返す。
+  path の省略時と相対 path は pnpm が設定する `INIT_CWD`（直接 Node 実行時は `process.cwd()`）を
+  基準に解決し、絶対 path はそのまま受理する。配布形態の確定前なので executable 名は持たない。
+  未初期化 workspace の discovery は filesystem を変更せず `uninitialized` を返す。
 - discovery は workspace から filesystem root まで親を辿り、最寄りの `.aacl` で停止する。
   その directory または Marker が不正なら `invalid` を返し、上位 Project へ抜けない。この探索で
-  候補は 1 件に定まるため `ambiguous` は契約に持たない。
+  候補は 1 件に定まるため `ambiguous` は契約に持たない。workspace の stat が `ENOENT` または
+  `ENOTDIR` の場合は `invalid_request`、その他の stat 障害は `unavailable` とする。
 - Registry は `~/.aacl-state/project-registry.json` の JSON 索引で、Project root path ごとに
   `pending` / `bound` / `mismatch` を保持する。Marker が同じ `project-id` を持つ別 path は同一
   Project として追加 binding できる。異なる ID は既存 binding を上書きせず `mismatch` にする。
@@ -53,9 +55,16 @@ local-first Core、およびその Workbench となる VS Code Extension。
   lock は heartbeat と stale reclaim、compromise 検出を備え、クラッシュ後も別プロセスが安全に回復する。
   Registry の atomic persist は temp file 書込み後、rename 直前にも ownership と compromise を同期検査し、
   検査を通過したときだけ commit する。
-  lock を取得できない、または Registry が壊れている場合、Core は listen せず fail-closed で終了し、
-  起動結果は `settings` / `project-registry` / `listen` の stage で分類する。Registry と Marker は
-  regular file を確認してから読み取る。
+  Marker reconciliation は Registry 文書の読込み後に lock 下で開始する各 entry の照合を専用 child process で行い、
+  monotonic clock による5秒の全体 deadline を持つ。deadline 超過時は child の stream を閉じて handle を `unref` し、SIGKILL を送り、
+  親は child の終了を待たず Registry を変更せず `degraded/timeout` を返す。child の起動・終了・JSON framing の
+  失敗は `unavailable` observation として扱う。Core は
+  `core.project_registry_reconcile_degraded` を warning で記録して listen と health を開始する。Registry JSON の
+  破損、read/write、lock 取得の失敗は `project-registry` stage の startup failure として listen を開始せず、
+  起動結果は `settings` / `project-registry` / `listen` の stage で分類する。Registry と Marker は regular file を
+  確認してから読み取る。SIGINT / SIGTERM の handler は `startCore` の await 前に登録し、起動中の停止要求を
+  保持する。停止要求後は reconcile の child timeout と cleanup を完了してから listen 済みの Core を close し、
+  `core.listening` と startup failure event を記録しない。
 - `ProjectInfoDto` と `ProjectDiscoveryDto` の Marker 由来 ID 欄は Marker 固有の schema
   （`^project-[a-z0-9-]+$`、全長128文字以内）を共有する。`invalid` discovery の nested failure code は
   実際の探索経路に対応する `invalid_request` または `unavailable` とする。Registry の `mismatch` entry は

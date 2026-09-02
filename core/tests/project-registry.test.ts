@@ -1,8 +1,9 @@
-import { execFileSync, spawn } from "node:child_process";
+import { ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProjectMarkerDto } from "@aacl/shared";
 import { createProjectRegistry } from "../src/projects/registry.ts";
 import { createJsonLogger } from "../src/logging/logger.ts";
@@ -79,7 +80,7 @@ const waitForRegistryExit = (child: ReturnType<typeof spawn>): Promise<void> => 
 });
 
 describe("Project Registry reconciliation", () => {
-  it("binds a pending entry when its marker exists at Core startup", async () => {
+  it("uses the default marker observer child to bind a pending entry", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
     scratch.push(root);
     const projectRoot = join(root, "project");
@@ -102,7 +103,7 @@ describe("Project Registry reconciliation", () => {
 
     const result = await createProjectRegistry(registryPath).reconcile();
 
-    expect(result).toEqual({ ok: true, value: undefined });
+    expect(result).toEqual({ ok: true, value: { status: "complete" } });
     const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
     expect(document.entries[0].state).toBe("bound");
   });
@@ -257,6 +258,177 @@ describe("Project Registry reconciliation", () => {
     ]));
     expect(document.entries).toHaveLength(2);
   });
+
+  it("returns degraded without partial persist when a FIFO-stalled observer child reaches its deadline", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const firstRoot = join(root, "first");
+    const stalledRoot = join(root, "stalled");
+    await mkdir(join(firstRoot, ".aacl"), { recursive: true });
+    await writeFile(join(firstRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "project-first",
+    }), "utf8");
+    await mkdir(join(stalledRoot, ".aacl"), { recursive: true });
+    execFileSync("mkfifo", [join(stalledRoot, ".aacl", "stall.fifo")]);
+    const firstProjectId = createProjectMarkerDto("project-first").projectId;
+    const stalledProjectId = createProjectMarkerDto("project-stalled").projectId;
+    const document = JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        {
+          workspacePath: firstRoot,
+          projectRoot: firstRoot,
+          projectId: firstProjectId,
+          state: "pending",
+        },
+        {
+          workspacePath: stalledRoot,
+          projectRoot: stalledRoot,
+          projectId: stalledProjectId,
+          state: "bound",
+        },
+      ],
+    });
+    await writeFile(registryPath, document, "utf8");
+
+    const startedAt = Date.now();
+    const registry = createProjectRegistry(registryPath, {
+      markerReconciliationTimeoutMs: 500,
+      markerObservationWorkerPath: fileURLToPath(new URL("./fixtures/marker-observer-stall.ts", import.meta.url)),
+    });
+    const unrefSpy = vi.spyOn(ChildProcess.prototype, "unref");
+    try {
+      const result = await registry.reconcile();
+      expect(unrefSpy).toHaveBeenCalled();
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+      expect(result).toEqual({ ok: true, value: { status: "degraded", reason: "timeout" } });
+    } finally {
+      unrefSpy.mockRestore();
+    }
+    expect(await readFile(registryPath, "utf8")).toBe(document);
+    const observerPid = Number(await readFile(join(stalledRoot, ".aacl", "observer.pid"), "utf8"));
+    expect(Number.isInteger(observerPid)).toBe(true);
+    let observerAlive = true;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        process.kill(observerPid, 0);
+      } catch {
+        observerAlive = false;
+        break;
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+    expect(observerAlive).toBe(false);
+
+    const followUp = await createProjectRegistry(registryPath).observe(
+      firstRoot,
+      firstRoot,
+      firstProjectId,
+    );
+    expect(followUp).toEqual({ ok: true, value: { status: "bound" } });
+  }, 5_000);
+
+  it("classifies a marker observer child startup failure as unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const projectRoot = join(root, "project");
+    await mkdir(projectRoot);
+    const projectId = createProjectMarkerDto("project-child-failure").projectId;
+    const document = JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId,
+        state: "bound",
+      }],
+    });
+    await writeFile(registryPath, document, "utf8");
+
+    const result = await createProjectRegistry(registryPath, {
+      markerReconciliationTimeoutMs: 250,
+      markerObservationWorkerPath: join(root, "missing-marker-observer.ts"),
+    }).reconcile();
+
+    expect(result).toEqual({ ok: true, value: { status: "complete" } });
+    expect(await readFile(registryPath, "utf8")).toBe(document);
+  });
+
+  it("classifies malformed marker observer output as unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const projectRoot = join(root, "project");
+    await mkdir(projectRoot);
+    const projectId = createProjectMarkerDto("project-invalid-child").projectId;
+    const document = JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId,
+        state: "bound",
+      }],
+    });
+    await writeFile(registryPath, document, "utf8");
+
+    const result = await createProjectRegistry(registryPath, {
+      markerReconciliationTimeoutMs: 250,
+      markerObservationWorkerPath: fileURLToPath(new URL("./fixtures/marker-observer-invalid.ts", import.meta.url)),
+    }).reconcile();
+
+    expect(result).toEqual({ ok: true, value: { status: "complete" } });
+    expect(await readFile(registryPath, "utf8")).toBe(document);
+  });
+
+  it("warns and starts Core when reconciliation reaches its deadline", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "project-registry.json");
+    await mkdir(join(projectRoot, ".aacl"), { recursive: true });
+    execFileSync("mkfifo", [join(projectRoot, ".aacl", "stall.fifo")]);
+    const projectId = createProjectMarkerDto("project-stalled").projectId;
+    await writeFile(registryPath, JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId,
+        state: "bound",
+      }],
+    }), "utf8");
+    const logLines: string[] = [];
+
+    const outcome = await startCore({
+      env: { AACL_CORE_PORT: "0" },
+      logger: createJsonLogger((line) => logLines.push(line), () => new Date("2026-01-01T00:00:00.000Z")),
+      projectRegistryPath: registryPath,
+      projectRegistryOptions: {
+        markerReconciliationTimeoutMs: 250,
+        markerObservationWorkerPath: fileURLToPath(new URL("./fixtures/marker-observer-stall.ts", import.meta.url)),
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error(outcome.failure.message);
+    try {
+      expect(JSON.parse(logLines[0] ?? "null")).toMatchObject({
+        level: "warn",
+        event: "core.project_registry_reconcile_degraded",
+        reason: "timeout",
+      });
+      const response = await fetch(`http://${outcome.address.host}:${outcome.address.port}/health`);
+      expect(response.status).toBe(200);
+    } finally {
+      await outcome.close();
+    }
+  }, 5_000);
 
   it("does not persist after the Registry lock is compromised", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));

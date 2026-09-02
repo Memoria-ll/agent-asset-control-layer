@@ -72,6 +72,35 @@ describe("Project CLI", () => {
     await expect(readFile(join(projectRoot, ".aacl", "project.json"), "utf8")).resolves.toContain("project-");
   });
 
+  it("resolves omitted and relative roots from a nested caller cwd", async () => {
+    const repositoryRoot = resolve(process.cwd(), "..");
+    const caller = await mkdtemp(join(repositoryRoot, ".aacl-cli-nested-caller-"));
+    scratch.push(caller);
+    const relativeRoot = join(caller, "relative-project");
+    const homeDirectory = join(caller, "home");
+    await mkdir(relativeRoot);
+    await mkdir(homeDirectory);
+
+    const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+    const env = {
+      ...process.env,
+      HOME: homeDirectory,
+      USERPROFILE: homeDirectory,
+      COREPACK_HOME: process.env.COREPACK_HOME ?? join(homedir(), ".cache", "node", "corepack"),
+    };
+    const omitted = await runProcess(command, ["project:init", "--"], caller, env);
+    expect(omitted.code).toBe(0);
+    const omittedLine = omitted.stdout.trim().split(/\r?\n/).reverse().find((line) => line.startsWith("{"));
+    expect(parseProjectInfoDto(JSON.parse(omittedLine ?? "null"))).toMatchObject({ projectRoot: caller });
+    await expect(readFile(join(caller, ".aacl", "project.json"), "utf8")).resolves.toContain("project-");
+
+    const relative = await runProcess(command, ["project:init", "--", "relative-project"], caller, env);
+    expect(relative.code).toBe(0);
+    const relativeLine = relative.stdout.trim().split(/\r?\n/).reverse().find((line) => line.startsWith("{"));
+    expect(parseProjectInfoDto(JSON.parse(relativeLine ?? "null"))).toMatchObject({ projectRoot: relativeRoot });
+    await expect(readFile(join(relativeRoot, ".aacl", "project.json"), "utf8")).resolves.toContain("project-");
+  });
+
   it("reports usage without touching the filesystem", async () => {
     const lines: string[] = [];
     const exitCode = await runProjectCli([], "/", {

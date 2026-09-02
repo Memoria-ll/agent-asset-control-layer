@@ -28,7 +28,10 @@ export type ProjectServiceOptions = {
   /** The service composes the `project-` prefix and accepts only the random suffix. */
   readonly newProjectSuffix?: () => string;
   readonly afterMarkerWritten?: () => Promise<void>;
+  readonly statPath?: StatPath;
 };
+
+type StatPath = (path: string) => Promise<{ readonly isDirectory: () => boolean }>;
 
 type MarkerRead =
   | { readonly status: "missing" }
@@ -222,7 +225,7 @@ const projectIdFrom = (suffix: string): AssetResult<ProjectId> => {
   }
 };
 
-const inspectWorkspace = async (workspacePath: string): Promise<AssetResult<string>> => {
+const inspectWorkspace = async (workspacePath: string, statPath: StatPath): Promise<AssetResult<string>> => {
   if (!isAbsolute(workspacePath) || workspacePath.trim() === "") {
     return {
       ok: false,
@@ -231,20 +234,27 @@ const inspectWorkspace = async (workspacePath: string): Promise<AssetResult<stri
   }
   const normalized = resolve(workspacePath);
   try {
-    const info = await stat(normalized);
+    const info = await statPath(normalized);
     return info.isDirectory()
       ? { ok: true, value: normalized }
       : { ok: false, failure: projectFailure("invalid_request", "The workspace path is not a directory.", ["workspacePath"], "invalid_workspace_path") };
-  } catch {
-    return {
-      ok: false,
-      failure: projectFailure("invalid_request", "The workspace path could not be opened as a directory.", ["workspacePath"], "invalid_workspace_path"),
-    };
+  } catch (error) {
+    const code = errorCode(error);
+    return code === "ENOENT" || code === "ENOTDIR"
+      ? {
+          ok: false,
+          failure: projectFailure("invalid_request", "The workspace path could not be opened as a directory.", ["workspacePath"], "invalid_workspace_path"),
+        }
+      : {
+          ok: false,
+          failure: projectFailure("unavailable", "The workspace could not be inspected.", ["workspacePath"], "unavailable"),
+        };
   }
 };
 
 export const createProjectService = (options: ProjectServiceOptions): ProjectService => {
   const newProjectSuffix = options.newProjectSuffix ?? randomUUID;
+  const statPath = options.statPath ?? stat;
 
   const bind = async (
     workspacePath: string,
@@ -271,7 +281,7 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
   };
 
   const discover = async (workspacePath: string): Promise<AssetResult<ProjectDiscoveryDto>> => {
-    const inspected = await inspectWorkspace(workspacePath);
+    const inspected = await inspectWorkspace(workspacePath, statPath);
     if (!inspected.ok) return inspected;
     const normalizedWorkspace = inspected.value;
     let current = normalizedWorkspace;
@@ -307,7 +317,7 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
   return {
     discover,
     initialize: async (projectRoot) => {
-      const inspected = await inspectWorkspace(projectRoot);
+      const inspected = await inspectWorkspace(projectRoot, statPath);
       if (!inspected.ok) return inspected;
       const normalizedRoot = inspected.value;
       return serialized(normalizedRoot, async () => {

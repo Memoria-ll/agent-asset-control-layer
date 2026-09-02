@@ -43,7 +43,7 @@ const isMain = process.argv[1] !== undefined
 if (isMain) {
   const exitCode = await runProjectCli(
     process.argv.slice(2),
-    process.cwd(),
+    process.env.INIT_CWD ?? process.cwd(),
     {
       stdout: (line) => process.stdout.write(`${line}\n`),
       stderr: (line) => process.stderr.write(`${line}\n`),

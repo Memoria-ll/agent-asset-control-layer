@@ -113,6 +113,39 @@ describe("Project initialization and discovery", () => {
     await expect(readFile(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("classifies missing and non-directory workspace paths as invalid requests", async () => {
+    const { root, service } = await setup();
+    const missing = await service.discover(join(root, "missing"));
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("Expected a missing workspace failure");
+    expect(missing.failure.code).toBe("invalid_request");
+    expect(missing.failure.details?.[0]?.code).toBe("invalid_workspace_path");
+
+    const filePath = join(root, "workspace-file");
+    await writeFile(filePath, "not a directory\n", "utf8");
+    const nested = await service.discover(join(filePath, "child"));
+    expect(nested.ok).toBe(false);
+    if (nested.ok) throw new Error("Expected a non-directory workspace failure");
+    expect(nested.failure.code).toBe("invalid_request");
+    expect(nested.failure.details?.[0]?.code).toBe("invalid_workspace_path");
+  });
+
+  it("classifies an injected workspace stat failure as unavailable", async () => {
+    const { projectRoot, registryPath } = await setup();
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      statPath: async () => { throw error; },
+    });
+
+    const result = await service.discover(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected an unavailable workspace failure");
+    expect(result.failure.code).toBe("unavailable");
+    expect(result.failure.details?.[0]?.code).toBe("unavailable");
+  });
+
   it("stops at the nearest invalid marker instead of falling through to a parent", async () => {
     const { projectRoot, service } = await setup();
     await service.initialize(projectRoot);

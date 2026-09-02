@@ -1,14 +1,21 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
-import { lstat, mkdir, rename } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { tryParseProjectMarkerDto } from "@aacl/shared";
 import type { ProjectId } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "@aacl/core-domain";
 import { writeAtomically, type BeforeRename } from "../internal/atomic-write.ts";
 import { withFileLock, type FileLockGuard, type FileLockOptions } from "../internal/file-lock.ts";
 import { readRegularUtf8 } from "../internal/regular-file.ts";
+import type { MarkerObservation } from "./marker-observer.ts";
+
+export type { MarkerObservation } from "./marker-observer.ts";
 
 export const PROJECT_REGISTRY_SCHEMA_VERSION = 1;
+export const PROJECT_REGISTRY_MARKER_RECONCILIATION_TIMEOUT_MS = 5_000;
 
 type RegistryState = "pending" | "bound" | "mismatch";
 
@@ -29,6 +36,10 @@ export type RegistryObservation =
   | { readonly status: "bound" }
   | { readonly status: "mismatch"; readonly registryProjectId: ProjectId };
 
+export type RegistryReconcileOutcome =
+  | { readonly status: "complete" }
+  | { readonly status: "degraded"; readonly reason: "timeout" };
+
 export type ProjectRegistry = {
   readonly prepare: (
     workspacePath: string,
@@ -40,13 +51,15 @@ export type ProjectRegistry = {
     projectRoot: string,
     markerProjectId: ProjectId,
   ) => Promise<AssetResult<RegistryObservation>>;
-  readonly reconcile: () => Promise<AssetResult<undefined>>;
+  readonly reconcile: () => Promise<AssetResult<RegistryReconcileOutcome>>;
 };
 
 export type ProjectRegistryOptions = {
   readonly lock?: FileLockOptions;
   readonly beforeWrite?: () => Promise<void>;
   readonly beforeRename?: () => Promise<void>;
+  readonly markerObservationWorkerPath?: string;
+  readonly markerReconciliationTimeoutMs?: number;
 };
 
 const registryFailure = (
@@ -57,11 +70,6 @@ const registryFailure = (
   ok: false,
   failure: coreFailure(code, message, [{ path: ["projectRegistry"], code: detailCode, message }]),
 });
-
-const errorCode = (error: unknown): string | undefined => {
-  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  return typeof error.code === "string" ? error.code : undefined;
-};
 
 const isProjectId = (value: unknown): value is ProjectId =>
   typeof value === "string"
@@ -164,36 +172,140 @@ const serialized = async <T>(registryPath: string, operation: () => Promise<T>):
   }
 };
 
-type MarkerObservation =
-  | { readonly status: "missing" }
-  | { readonly status: "valid"; readonly projectId: ProjectId }
-  | { readonly status: "invalid" }
-  | { readonly status: "unavailable" };
-
-const markerAt = async (projectRoot: string): Promise<MarkerObservation> => {
-  const projectDirectory = join(projectRoot, ".aacl");
-  const markerPath = join(projectDirectory, "project.json");
-  try {
-    const directoryInfo = await lstat(projectDirectory);
-    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) return { status: "invalid" };
-  } catch (error) {
-    return errorCode(error) === "ENOENT" ? { status: "missing" } : { status: "unavailable" };
-  }
-
-  const read = await readRegularUtf8(markerPath);
-  if (read.status === "missing") return { status: "missing" };
-  if (read.status === "not_regular") return { status: "invalid" };
-  if (read.status === "unavailable") return { status: "unavailable" };
-  try {
-    const parsed = tryParseProjectMarkerDto(JSON.parse(read.contents) as unknown);
-    return parsed.ok ? { status: "valid", projectId: parsed.value.projectId } : { status: "invalid" };
-  } catch {
-    return { status: "invalid" };
-  }
-};
-
 export const defaultProjectRegistryPath = (homeDirectory = homedir()): string =>
   join(homeDirectory, ".aacl-state", "project-registry.json");
+
+const defaultMarkerObservationWorkerPath = fileURLToPath(
+  new URL("./marker-observer-child.ts", import.meta.url),
+);
+
+const parseMarkerObservation = (value: unknown): MarkerObservation | undefined => {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.status === "missing" || candidate.status === "invalid" || candidate.status === "unavailable") {
+    return { status: candidate.status };
+  }
+  if (candidate.status === "valid" && isProjectId(candidate.projectId)) {
+    return { status: "valid", projectId: candidate.projectId };
+  }
+  return undefined;
+};
+
+const observeMarkerInChild = (
+  workerPath: string,
+  projectRoot: string,
+  timeoutMs: number,
+): Promise<MarkerObservation | undefined> => {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.resolve(undefined);
+  return new Promise<MarkerObservation | undefined>((resolveObservation) => {
+    let child: ChildProcess | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let output = "";
+    let observation: MarkerObservation | undefined;
+    let protocolFailure = false;
+
+    const clearTimer = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+
+    const cleanupStreams = (): void => {
+      child?.stdout?.removeListener("data", onStdout);
+      child?.stderr?.removeListener("data", onStderr);
+      child?.stdout?.removeListener("error", onStreamError);
+      child?.stderr?.removeListener("error", onStreamError);
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+    };
+
+    const cleanupChild = (): void => {
+      clearTimer();
+      cleanupStreams();
+      child?.removeListener("error", onChildError);
+      child?.removeListener("close", onChildClose);
+    };
+
+    const settle = (result: MarkerObservation | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearTimer();
+      resolveObservation(result);
+    };
+
+    const consumeOutput = (final: boolean): void => {
+      const lines = output.split("\n");
+      output = final ? "" : (lines.pop() ?? "");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) continue;
+        let value: unknown;
+        try {
+          value = JSON.parse(trimmed) as unknown;
+        } catch {
+          protocolFailure = true;
+          continue;
+        }
+        const parsed = parseMarkerObservation(value);
+        if (parsed === undefined || observation !== undefined) {
+          protocolFailure = true;
+        } else {
+          observation = parsed;
+        }
+      }
+    };
+
+    const onStdout = (chunk: string): void => {
+      output += chunk;
+      consumeOutput(false);
+    };
+    const onStderr = (): void => undefined;
+    const onStreamError = (): void => undefined;
+    const onChildError = (): void => {
+      settle({ status: "unavailable" });
+    };
+    const onChildClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (!settled) {
+        consumeOutput(true);
+        settle(code === 0 && signal === null && !protocolFailure
+          ? (observation ?? { status: "unavailable" })
+          : { status: "unavailable" });
+      }
+      cleanupChild();
+    };
+
+    try {
+      child = spawn(process.execPath, [resolve(workerPath), projectRoot], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      settle({ status: "unavailable" });
+      return;
+    }
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
+    child.once("error", onChildError);
+    child.once("close", onChildClose);
+    timer = setTimeout(() => {
+      if (settled) return;
+      settle(undefined);
+      cleanupStreams();
+      child?.unref();
+      try {
+        if (child?.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      } catch {
+        // The timeout result is already determined; process termination cannot change it.
+      }
+    }, timeoutMs);
+  });
+};
 
 const withRegistryLock = async <T>(
   registryPath: string,
@@ -212,6 +324,11 @@ export const createProjectRegistry = (
   options: ProjectRegistryOptions = {},
 ): ProjectRegistry => {
   const normalizedRegistryPath = resolve(registryPath);
+  const markerObservationWorkerPath = resolve(
+    options.markerObservationWorkerPath ?? defaultMarkerObservationWorkerPath,
+  );
+  const markerReconciliationTimeoutMs = options.markerReconciliationTimeoutMs
+    ?? PROJECT_REGISTRY_MARKER_RECONCILIATION_TIMEOUT_MS;
   const runLocked = <T>(operation: (assertOwned: FileLockGuard) => Promise<AssetResult<T>>): Promise<AssetResult<T>> =>
     serialized<AssetResult<T>>(
       normalizedRegistryPath,
@@ -291,15 +408,20 @@ export const createProjectRegistry = (
       return saved.ok ? { ok: true, value: observation } : saved;
     }),
 
-    reconcile: () => runLocked<undefined>(async (assertOwned): Promise<AssetResult<undefined>> => {
+    reconcile: () => runLocked<RegistryReconcileOutcome>(async (assertOwned): Promise<AssetResult<RegistryReconcileOutcome>> => {
       const loaded = await readRegistry(normalizedRegistryPath);
       if (!loaded.ok) return loaded;
       if (loaded.value.document.entries.length === 0 && loaded.value.mode === undefined) {
-        return { ok: true, value: undefined };
+        return { ok: true, value: { status: "complete" } };
       }
       const entries: RegistryEntry[] = [];
+      const deadline = performance.now() + Math.max(0, markerReconciliationTimeoutMs);
       for (const entry of loaded.value.document.entries) {
-        const observed = await markerAt(entry.projectRoot);
+        const remaining = deadline - performance.now();
+        const observed = await observeMarkerInChild(markerObservationWorkerPath, entry.projectRoot, remaining);
+        if (observed === undefined) {
+          return { ok: true, value: { status: "degraded", reason: "timeout" } };
+        }
         if (observed.status === "missing") {
           if (entry.state === "pending") entries.push(entry);
           continue;
@@ -319,8 +441,11 @@ export const createProjectRegistry = (
             });
       }
       const next: RegistryDocument = { schemaVersion: 1, entries };
-      if (JSON.stringify(next) === JSON.stringify(loaded.value.document)) return { ok: true, value: undefined };
-      return persistRegistry(assertOwned, next, loaded.value.mode);
+      if (JSON.stringify(next) === JSON.stringify(loaded.value.document)) {
+        return { ok: true, value: { status: "complete" } };
+      }
+      const saved = await persistRegistry(assertOwned, next, loaded.value.mode);
+      return saved.ok ? { ok: true, value: { status: "complete" } } : saved;
     }),
   };
 };

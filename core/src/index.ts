@@ -6,6 +6,7 @@ import { resolveCoreSettings, type CoreEnv } from "./config/settings.ts";
 import {
   createProjectRegistry,
   defaultProjectRegistryPath,
+  type ProjectRegistryOptions,
 } from "./projects/registry.ts";
 
 export type StartFailureStage = "settings" | "project-registry" | "listen";
@@ -30,15 +31,22 @@ export const startCore = async (options: {
   readonly env: CoreEnv;
   readonly logger: Logger;
   readonly projectRegistryPath?: string;
+  readonly projectRegistryOptions?: ProjectRegistryOptions;
 }): Promise<StartOutcome> => {
   const settings = resolveCoreSettings(options.env);
   if (!settings.ok) return { ok: false, stage: "settings", failure: settings.failure };
 
   const registry = createProjectRegistry(
     options.projectRegistryPath ?? defaultProjectRegistryPath(),
+    options.projectRegistryOptions,
   );
   const reconciled = await registry.reconcile();
   if (!reconciled.ok) return { ok: false, stage: "project-registry", failure: reconciled.failure };
+  if (reconciled.value.status === "degraded") {
+    options.logger.log("warn", "core.project_registry_reconcile_degraded", {
+      reason: reconciled.value.reason,
+    });
+  }
 
   const server = createServer(createRequestListener({ logger: options.logger }));
   const listenResult = await new Promise<StartOutcome>((resolve) => {
