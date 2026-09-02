@@ -45,4 +45,65 @@ describe("contract JSON Schemas", () => {
       ).toEqual(z.toJSONSchema(schema, { io: "output" }));
     }
   });
+
+  it("publishes the workflow definition and nested object constraints", () => {
+    const definition = contractJsonSchemas().WorkflowDefinitionDto as any;
+    const stage = definition.properties.stages.items;
+    const transition = definition.properties.transitions.items;
+
+    expect(definition.additionalProperties).toBe(false);
+    expect(definition.required).toEqual([
+      "entryRoleId",
+      "entryStageId",
+      "terminalStageId",
+      "stages",
+      "transitions",
+    ]);
+    expect(definition.properties.workflowId).toBeDefined();
+    expect(stage.additionalProperties).toBe(false);
+    expect(stage.required).toEqual(["stageId", "displayName", "description"]);
+    expect(stage.properties.requiredArtifactRefs.minItems).toBe(1);
+    expect(stage.properties.requiredCapabilityRefs.minItems).toBe(1);
+    expect(transition.additionalProperties).toBe(false);
+    expect(transition.required).toEqual(["fromStageId", "toStageId", "transitionKind"]);
+    expect(transition.properties.transitionKind.enum).toEqual([
+      "advance",
+      "retry",
+      "reject",
+      "return",
+    ]);
+    expect(transition.properties.requiredArtifactRefs.minItems).toBe(1);
+    expect(transition.properties.requiredCapabilityRefs.minItems).toBe(1);
+  });
+
+  it("publishes workflow state and candidate required keys", () => {
+    const schemas = contractJsonSchemas() as any;
+    expect(schemas.WorkflowStateDto.required).toEqual([
+      "workflowId",
+      "executionInstanceId",
+      "stateVersion",
+      "currentStageId",
+      "entryRoleId",
+      "currentRoleId",
+      "linkedAgentExecutionIds",
+      "linkedSnapshotIds",
+      "updatedAt",
+    ]);
+    expect(schemas.WorkflowStateDto.properties.stateVersion.minimum).toBe(0);
+    expect(schemas.TransitionCandidateDto.oneOf).toHaveLength(2);
+    const blocked = schemas.TransitionCandidateDto.oneOf.find(
+      (arm: any) => arm.properties.blocked.const === true,
+    );
+    const unblocked = schemas.TransitionCandidateDto.oneOf.find(
+      (arm: any) => arm.properties.blocked.const === false,
+    );
+    for (const arm of schemas.TransitionCandidateDto.oneOf) {
+      expect(arm.required).toEqual(
+        expect.arrayContaining(["toStageId", "transitionKind", "stateVersion", "blocked"]),
+      );
+    }
+    expect(blocked.required).toContain("blockedReasons");
+    expect(blocked.properties.blockedReasons.minItems).toBe(1);
+    expect(unblocked.properties.blockedReasons).toBeUndefined();
+  });
 });

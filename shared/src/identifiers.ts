@@ -48,6 +48,15 @@ export type AgentExecutionId = z.infer<typeof AgentExecutionId>;
 export const WorkflowId = brandedId<"WorkflowId">();
 export type WorkflowId = z.infer<typeof WorkflowId>;
 
+/**
+ * One execution of a workflow definition. Core issues the value, and it is unique across every
+ * definition — not merely within the one it belongs to. `WorkflowStateDto` still carries
+ * `workflowId` beside it, but that field detects a state addressed under the wrong definition
+ * rather than making the identifier unique (#50).
+ *
+ * A schema cannot check uniqueness of an opaque value, so this is stated here: a producer that
+ * issues its own identifiers owes it, and a store may key state on the value alone.
+ */
 export const ExecutionInstanceId = brandedId<"ExecutionInstanceId">();
 export type ExecutionInstanceId = z.infer<typeof ExecutionInstanceId>;
 

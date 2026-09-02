@@ -7,6 +7,7 @@ import {
   CORE_ERROR_CODES,
   LOADING_TIERS,
   RESOLUTION_REASON_KINDS,
+  TRANSITION_KINDS,
 } from "../src/index.ts";
 // The schemas these arrays build are internal; the test reaches them through the
 // modules that own them, the way no consumer needs to.
@@ -14,6 +15,7 @@ import { CoreErrorCode } from "../src/errors.ts";
 import { CompatibilityStatus } from "../src/contract-version.ts";
 import { AssetType, LoadingTier } from "../src/resolved-context.ts";
 import { AvailabilityStatus, ResolutionReasonKind } from "../src/status.ts";
+import { TransitionKind } from "../src/workflow.ts";
 
 describe("frozen contract enum values", () => {
   it.each([
@@ -23,6 +25,7 @@ describe("frozen contract enum values", () => {
     ["LOADING_TIERS", LOADING_TIERS, ["core", "discoverable", "on-demand"]],
     ["CORE_ERROR_CODES", CORE_ERROR_CODES, ["invalid_request", "not_found", "conflict", "unavailable", "incompatible_contract", "internal"]],
     ["COMPATIBILITY_STATUSES", COMPATIBILITY_STATUSES, ["compatible", "incompatible"]],
+    ["TRANSITION_KINDS", TRANSITION_KINDS, ["advance", "retry", "reject", "return"]],
   ])("keeps %s stable", (_name, members, expected) => {
     expect(
       [...members],
@@ -43,6 +46,7 @@ describe("frozen contract enum values", () => {
     ["LoadingTier", LoadingTier, LOADING_TIERS],
     ["CoreErrorCode", CoreErrorCode, CORE_ERROR_CODES],
     ["CompatibilityStatus", CompatibilityStatus, COMPATIBILITY_STATUSES],
+    ["TransitionKind", TransitionKind, TRANSITION_KINDS],
   ])("accepts exactly the published members of %s", (_name, schema, members) => {
     for (const member of members) {
       expect(z.safeParse(schema, member).success, member).toBe(true);

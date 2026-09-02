@@ -45,6 +45,22 @@ export { toResolutionContext } from "./resolution-context.ts";
 export type { ResolutionContext } from "./resolution-context.ts";
 
 export {
+  applyWorkflowTransition,
+  initializeWorkflowState,
+  parseWorkflowDefinitionAsset,
+  possibleWorkflowTransitions,
+  validateWorkflowDefinition,
+} from "./workflow.ts";
+export type {
+  ResolvedWorkflowDefinition,
+  WorkflowEvaluationInput,
+  WorkflowStateLinks,
+  WorkflowStateMutation,
+  WorkflowStateSeed,
+  WorkflowTransitionSelection,
+} from "./workflow.ts";
+
+export {
   agentExecutionScope,
   toAgentExecutionDto,
   validateAgentExecutionReferences,
