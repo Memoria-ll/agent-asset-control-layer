@@ -234,6 +234,38 @@ local-first Core、およびその Workbench となる VS Code Extension。
   catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
   「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
   （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
+- **9軸の scope には語彙が2つあり、8個が改名・1個が同名。** on-disk 側は
+  `core-domain/src/assets.ts` の `ASSET_SCOPE_AXES`（`project` / `workflow` / `stage` /
+  `task-type` / `role` / `provider` / `runtime` / `model` / `directory`）、resolver 側は
+  `core-domain/src/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
+  `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
+  string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
+  `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
+- **scope resolver の operation は、merge と dependency closure の両方を生き残った issuer だけが適用できる。**
+  exclusive loser と unavailable issuer は target を変更せず、issuer が別 operation の target になって
+  最終的に生き残れない場合も同じ扱いにする。相反する operation の下位 issuer は
+  `operation_conflict` を evaluation と aggregate `conflicts` の両方へ残す。同一 `AssetId` の
+  異なる source layer 間で issuer が自分の ID を明示 target にする override / disable は
+  pair 単位の overlay relation として duplicate identity 判定より先に扱い、複数の lower layer
+  target にはそれぞれ適用する。dependency closure は merge 後・dependency 前の状態から
+  operation 後に再評価し、operation issuer の cycle は conflict として残す (#71)。operation
+  discovery は pre-operation reason を変更せず、unavailable issuer を除いた残りを安定するまで
+  再評価する。operation 後に eligible へ戻った issuer も discovery 対象へ加え、同一パスで
+  複数の operation cycle をすべて conflict として残す。operation cycle graph は最終 dependency
+  closure で available と判定された issuer の action だけから構成し、provisional action だけで
+  cycle を確定しない。依存失敗の分類は scope mismatch の候補ではなく matched candidate を
+  先に判定する。dependency closure は再帰せず canonical SCC と反復処理で評価し、operation
+  cycle を除いた最終状態で依存を再評価する。operation の依存 feedback が安定しない場合は、
+  operation を無視した included issuer を返さず conflict として残す。
+- **mandatory candidate の dependency failure が cycle と別の failure を同時に含む場合は、両方の conflict を残す。**
+  primary cause の選択で `dependency_cycle` を隠さない (#71)
+- **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
+  `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
+  意味が異なる candidate を入力順へ委ねない (#71)
+- **scope resolver は全 candidate の構造検証を完了し、全 structurally-valid candidate の同一 asset identity（`assetId` + `revision`）に payload（`assetType` / `loadingTier`）の整合性を適用してから、invalid-directory partition と identity map を行う。**
+  構造不正な runtime snapshot の要素を resolver 内で dereference せず、同じ operation tie に
+  参加する全 issuer を conflict evaluation と一致させる。`assetType` と `loadingTier` は
+  `ASSET_TYPES` と `LOADING_TIERS` の membership を runtime で検証する。
 - **workflow instance と agent execution の link は双方向で、その鏡像はすでに契約にある** —
   `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding`
   （`shared/src/sessions.ts`）が互いを指し、producer 側は `core-domain/src/agent-execution.ts` の
@@ -249,6 +281,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
 
 ### Invariants / identity keys
 
+- **`AssetRevision` は `sha256:${sha256Hex(serializeCanonicalAsset(asset))}`
+  （`core/src/assets/filesystem-store.ts` の `makeAssetRevision`）で、
+  `serializeCanonicalAsset` は frontmatter と body の両方を含む
+  （`core-domain/src/assets.ts`、戻り値は `${lines.join("\n")}\n${asset.body}`）。
+  したがって「同 revision ⇒ 同 body」が成り立つ。** Resolver の
+  exact-duplicate fold（同一 id・同一 revision の candidate を1件へ畳み、layer → sourceId 順で
+  代表を選ぶ）が安全なのはこの性質のためで、revision を mtime や uuid に変えると
+  **body 内容の暗黙の後勝ちに化ける**。revision の作り方を変えるときは resolver の
+  dedup を同じ変更で見直すこと (#3)
 - **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
   instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
   名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
