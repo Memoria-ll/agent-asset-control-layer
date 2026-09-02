@@ -246,17 +246,18 @@ local-first Core、およびその Workbench となる VS Code Extension。
   operation 後に再評価し、operation issuer の cycle は conflict として残す (#71)。operation
   discovery は pre-operation reason を変更せず、unavailable issuer を除いた残りを安定するまで
   再評価する。operation 後に eligible へ戻った issuer も discovery 対象へ加え、同一パスで
-  複数の operation cycle をすべて conflict として残す。依存失敗の分類は scope mismatch の
-  候補ではなく matched candidate を先に判定する。dependency closure は再帰せず canonical
-  SCC と反復処理で評価し、operation cycle を除いた最終状態で依存を再評価する。operation
-  の依存 feedback が安定しない場合は、operation を無視した included issuer を返さず conflict
-  として残す。
+  複数の operation cycle をすべて conflict として残す。operation cycle graph は最終 dependency
+  closure で available と判定された issuer の action だけから構成し、provisional action だけで
+  cycle を確定しない。依存失敗の分類は scope mismatch の候補ではなく matched candidate を
+  先に判定する。dependency closure は再帰せず canonical SCC と反復処理で評価し、operation
+  cycle を除いた最終状態で依存を再評価する。operation の依存 feedback が安定しない場合は、
+  operation を無視した included issuer を返さず conflict として残す。
 - **mandatory candidate の dependency failure が cycle と別の failure を同時に含む場合は、両方の conflict を残す。**
   primary cause の選択で `dependency_cycle` を隠さない (#71)
 - **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
   `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
   意味が異なる candidate を入力順へ委ねない (#71)
-- **scope resolver は candidate の構造を検証してから directory exclusion と identity map を行う。**
+- **scope resolver は全 candidate の構造検証を完了し、全 structurally-valid candidate の同一 asset identity（`assetId` + `revision`）に payload（`assetType` / `loadingTier`）の整合性を適用してから、invalid-directory partition と identity map を行う。**
   構造不正な runtime snapshot の要素を resolver 内で dereference せず、同じ operation tie に
   参加する全 issuer を conflict evaluation と一致させる。`assetType` と `loadingTier` は
   `ASSET_TYPES` と `LOADING_TIERS` の membership を runtime で検証する。
