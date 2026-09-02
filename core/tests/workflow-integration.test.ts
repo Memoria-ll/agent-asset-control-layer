@@ -72,10 +72,10 @@ describe("workflow loader and state integration", () => {
       now: () => "2026-09-01T10:00:00Z" as Timestamp,
       newInstanceSuffix: () => "one",
     }));
-    const seed = initializeWorkflowState(loaded.definition, {
+    const seed = unwrap(initializeWorkflowState(loaded.definition, {
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
       linkedSnapshotIds: ["snapshot-1" as SnapshotId],
-    });
+    }, { roleId: "reviewer" as RoleId, availableCapabilityRefs: [], availableArtifactRefs: [] }));
     const created = unwrap(await stateStore.create(seed));
     const path = join(directory, "state", "workflows", "instance-one.json");
     const beforeBytes = await readFile(path, "utf8");

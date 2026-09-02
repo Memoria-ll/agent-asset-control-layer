@@ -369,7 +369,7 @@ const validateDefinitionSemantics = (
     )));
   }
 
-  const badCycle = findBadCycle(definition.stages, definition.transitions);
+  const badCycle = findBadCycle(definition.stages, traversableTransitions);
   if (badCycle !== undefined) {
     return workflowFailure("The workflow definition is invalid.", [detail(
       ["definition", "transitions"],
@@ -540,18 +540,42 @@ export type WorkflowStateLinks = {
   readonly linkedSnapshotIds: readonly SnapshotId[];
 };
 
-/** Create the initial state fields owned by the domain. */
+/**
+ * Create the initial state fields owned by the domain.
+ *
+ * Starting is the entry stage's other doorway, so it is checked exactly as a transition into
+ * that stage would be: the same requirement predicate against the same input, and
+ * `currentRoleId` derived by the same rule a transition uses. Without this a definition could
+ * declare a task type, capability or artifact on its entry stage and have a run begin there
+ * with none of them, while the identical stage reached by an edge stays blocked.
+ */
 export const initializeWorkflowState = (
   definition: ResolvedWorkflowDefinition,
   links: WorkflowStateLinks,
-): WorkflowStateSeed => {
+  input: WorkflowEvaluationInput,
+): AssetResult<WorkflowStateSeed> => {
+  const entryStage = stageIndex(definition).get(definition.entryStageId);
+  if (entryStage === undefined) return stateMismatch();
+
+  const reasons = missingStageRequirements(entryStage, input, availableRefs(input), {});
+  if (reasons.length > 0) {
+    return workflowFailure("The workflow cannot start at its entry stage.", [detail(
+      ["definition", "entryStageId"],
+      "entry_requirements_unmet",
+      reasons.join(" "),
+    )]);
+  }
+
   return {
-    workflowId: definition.workflowId,
-    currentStageId: definition.entryStageId,
-    entryRoleId: definition.entryRoleId,
-    currentRoleId: definition.entryRoleId,
-    linkedAgentExecutionIds: [...links.linkedAgentExecutionIds],
-    linkedSnapshotIds: [...links.linkedSnapshotIds],
+    ok: true,
+    value: {
+      workflowId: definition.workflowId,
+      currentStageId: definition.entryStageId,
+      entryRoleId: definition.entryRoleId,
+      currentRoleId: entryStage.requiredRoleId ?? definition.entryRoleId,
+      linkedAgentExecutionIds: [...links.linkedAgentExecutionIds],
+      linkedSnapshotIds: [...links.linkedSnapshotIds],
+    },
   };
 };
 
@@ -603,19 +627,24 @@ const stageIndex = (definition: ResolvedWorkflowDefinition): Map<StageId, Workfl
  * The stage a state is sitting on, or undefined when the state does not belong to this
  * definition.
  *
- * `entryRoleId` is part of belonging, not decoration: initialization copies it off the
- * definition, so a state carrying a different one was never produced from this definition.
- * Admitting it lets every later mutation carry the false role forward, since a transition
- * copies the field rather than re-deriving it.
+ * Belonging is every field the definition determines, not the identifier alone. Initialization
+ * and a transition both derive `entryRoleId` and `currentRoleId` from the definition, so a state
+ * disagreeing on either was never produced from it. Admitting one matters because a transition
+ * copies both fields forward rather than re-deriving them, carrying the false value for the rest
+ * of the run.
  */
 const getCurrentStage = (
   definition: ResolvedWorkflowDefinition,
   state: WorkflowStateDto,
   stages: Map<StageId, WorkflowStageDto>,
-): WorkflowStageDto | undefined =>
-  state.workflowId === definition.workflowId && state.entryRoleId === definition.entryRoleId
-    ? stages.get(state.currentStageId)
-    : undefined;
+): WorkflowStageDto | undefined => {
+  if (state.workflowId !== definition.workflowId) return undefined;
+  if (state.entryRoleId !== definition.entryRoleId) return undefined;
+  const stage = stages.get(state.currentStageId);
+  if (stage === undefined) return undefined;
+  if (stage.requiredRoleId !== undefined && state.currentRoleId !== stage.requiredRoleId) return undefined;
+  return stage;
+};
 
 /**
  * What the caller has on hand, indexed once per evaluation.
@@ -634,13 +663,21 @@ const availableRefs = (input: WorkflowEvaluationInput): AvailableRefs => ({
   artifacts: new Set(input.availableArtifactRefs),
 });
 
-const missingRequirements = (
+/**
+ * What a stage demands of whoever is about to occupy it.
+ *
+ * A stage is entered two ways — by starting the workflow on it, and by a transition into it —
+ * and both owe the same check. `extra` carries the requirements the transition itself declares
+ * on top of the stage's; starting declares none.
+ */
+const missingStageRequirements = (
   target: WorkflowStageDto,
-  transition: WorkflowTransitionDto,
   input: WorkflowEvaluationInput,
-  state: WorkflowStateDto,
-  definition: ResolvedWorkflowDefinition,
   available: AvailableRefs,
+  extra: {
+    readonly requiredCapabilityRefs?: readonly string[] | undefined;
+    readonly requiredArtifactRefs?: readonly string[] | undefined;
+  },
 ): string[] => {
   const reasons: string[] = [];
   if (target.requiredRoleId !== undefined && input.roleId !== target.requiredRoleId) {
@@ -652,7 +689,7 @@ const missingRequirements = (
 
   const capabilities = available.capabilities;
   const seenCapabilities = new Set<string>();
-  for (const ref of [...(target.requiredCapabilityRefs ?? []), ...(transition.requiredCapabilityRefs ?? [])]) {
+  for (const ref of [...(target.requiredCapabilityRefs ?? []), ...(extra.requiredCapabilityRefs ?? [])]) {
     if (seenCapabilities.has(ref)) continue;
     seenCapabilities.add(ref);
     if (!capabilities.has(ref)) reasons.push(`Required capability "${ref}" is not available.`);
@@ -660,11 +697,23 @@ const missingRequirements = (
 
   const artifacts = available.artifacts;
   const seenArtifacts = new Set<string>();
-  for (const ref of [...(target.requiredArtifactRefs ?? []), ...(transition.requiredArtifactRefs ?? [])]) {
+  for (const ref of [...(target.requiredArtifactRefs ?? []), ...(extra.requiredArtifactRefs ?? [])]) {
     if (seenArtifacts.has(ref)) continue;
     seenArtifacts.add(ref);
     if (!artifacts.has(ref)) reasons.push(`Required artifact "${ref}" is not available.`);
   }
+  return reasons;
+};
+
+const missingRequirements = (
+  target: WorkflowStageDto,
+  transition: WorkflowTransitionDto,
+  input: WorkflowEvaluationInput,
+  state: WorkflowStateDto,
+  definition: ResolvedWorkflowDefinition,
+  available: AvailableRefs,
+): string[] => {
+  const reasons = missingStageRequirements(target, input, available, transition);
 
   if (
     state.currentStageId === definition.terminalStageId &&

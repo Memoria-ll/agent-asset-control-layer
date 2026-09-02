@@ -386,12 +386,68 @@ ${JSON.stringify(basicDefinitionBody)}
     expect(detailCodes(over)).toEqual(["too_big"]);
   });
 
-  it("initializes state fields from the definition and caller links", () => {
-    const value = definition();
-    const seed = initializeWorkflowState(value, {
+  it("blocks a start that does not meet the entry stage's own requirements", () => {
+    const value = definition({
+      ...basicDefinitionBody,
+      stages: [
+        { ...basicDefinitionBody.stages[0], requiredCapabilityRefs: ["fs-write"] },
+        basicDefinitionBody.stages[1],
+      ],
+    });
+    const links = {
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
       linkedSnapshotIds: ["snapshot-1" as SnapshotId],
-    });
+    };
+    const supplied = { roleId: "reviewer" as RoleId, taskTypeId: "drafting" as TaskTypeId };
+
+    expect(detailCodes(initializeWorkflowState(value, links, {
+      ...supplied,
+      availableCapabilityRefs: [],
+      availableArtifactRefs: [],
+    }))).toEqual(["entry_requirements_unmet"]);
+    expect(unwrap(initializeWorkflowState(value, links, {
+      ...supplied,
+      availableCapabilityRefs: ["fs-write"],
+      availableArtifactRefs: [],
+    })).currentStageId).toBe("draft");
+  });
+
+  it("refuses a state whose current role is not the current stage's", () => {
+    const value = definition();
+    const foreign = parseWorkflowStateDto({ ...stateFor(value), currentRoleId: "author" });
+    const input = { availableCapabilityRefs: [], availableArtifactRefs: [] };
+
+    expect(detailCodes(possibleWorkflowTransitions(value, foreign, input)))
+      .toEqual(["state_definition_mismatch"]);
+  });
+
+  it("accepts a cycle closed only by an edge out of the terminal stage", () => {
+    // Both stages are reachable and both reach the terminal, so validation gets as far as cycle
+    // detection. The edge closing the loop leaves the terminal stage as an advance, which no run
+    // can take, so the cycle it appears to form is not one the executable graph has.
+    const deadBackEdge = parseWorkflowDefinitionAsset(workflowAsset({
+      entryRoleId: "reviewer",
+      entryStageId: "draft",
+      terminalStageId: "done",
+      stages: [
+        { stageId: "draft", displayName: "Draft", description: "Draft", requiredRoleId: "reviewer" },
+        { stageId: "done", displayName: "Done", description: "Done" },
+      ],
+      transitions: [
+        { fromStageId: "draft", toStageId: "done", transitionKind: "advance" },
+        { fromStageId: "done", toStageId: "draft", transitionKind: "advance" },
+      ],
+    }), catalog());
+
+    expect(unwrap(deadBackEdge).stages).toHaveLength(2);
+  });
+
+  it("initializes state fields from the definition and caller links", () => {
+    const value = definition();
+    const seed = unwrap(initializeWorkflowState(value, {
+      linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
+      linkedSnapshotIds: ["snapshot-1" as SnapshotId],
+    }, { roleId: "reviewer" as RoleId, taskTypeId: "drafting" as TaskTypeId, availableCapabilityRefs: [], availableArtifactRefs: [] }));
     expect(seed).toEqual({
       workflowId: "review-flow",
       currentStageId: "draft",
