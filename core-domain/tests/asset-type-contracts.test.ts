@@ -208,6 +208,34 @@ describe("asset type contracts", () => {
     expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["overlay"] }]);
   });
 
+  it("rejects a cross-type disable the issuer also requires", () => {
+    const target = candidateFromDocument(assetDocument("skill-target", "skill"), add());
+    const issuer = candidateFromDocument(
+      assetDocument("rule-issuer", "rule", "requires: [skill-target]\n"),
+      disable("skill-target"),
+    );
+    const result = resultValue([issuer, target]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "rule-issuer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "skill-target")).toMatchObject({ kind: "included" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["rule-issuer", "skill-target"] }]);
+  });
+
+  it("rejects a cross-type override the issuer also requires", () => {
+    const target = candidateFromDocument(assetDocument("skill-target", "skill"), add("shared-group"));
+    const issuer = candidateFromDocument(
+      assetDocument("rule-issuer", "rule", "requires: [skill-target]\n"),
+      override("skill-target", "shared-group"),
+    );
+    const result = resultValue([issuer, target]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(reason(result, "rule-issuer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "skill-target")).toMatchObject({ kind: "included" });
+    expect(result.conflicts).toEqual([{ kind: "asset_type_conflict", involvedAssetIds: ["rule-issuer", "skill-target"] }]);
+  });
+
   it("rejects an exclusive group spanning different asset types", () => {
     const rule = candidateFromDocument(assetDocument("rule-candidate", "rule"), exclusive("cross-type"));
     const skill = candidateFromDocument(assetDocument("skill-candidate", "skill"), exclusive("cross-type"));

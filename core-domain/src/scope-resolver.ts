@@ -1255,20 +1255,11 @@ const resolveScopeFixedPoint = (
       if (!plan.has(issuer) || forcedConflicts.has(issuer)) continue;
       const operation = issuer.candidate.rule.operation;
       if (operation.kind === "add") continue;
-      // A direct requirement is authoritative over a disable/override of the
-      // same target: applying that action would invalidate its issuer.  The
-      // candidate remains available, while the action is simply inapplicable.
-      if (issuer.candidate.rule.requires.includes(operation.targetAssetId)) continue;
       const targets = targetCandidatesFor(issuer, operation.targetAssetId);
-      if (targets.length === 0 || (operation.targetAssetId !== issuer.candidate.assetId && targets.length !== 1)) {
-        failures.push({
-          issuer,
-          conflict: makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]),
-        });
-        continue;
-      }
       // Same ordering reason as the exclusive group check: a cross-type relation is
-      // not expressible, so it is settled before mandatory protection is consulted.
+      // not expressible, so it is settled ahead of every rule that presumes an
+      // expressible one — the direct requirement below and mandatory protection
+      // alike.  The relation conflicts even where the action would never be applied.
       if (targets.some((target) => target.candidate.assetType !== issuer.candidate.assetType)) {
         failures.push({
           issuer,
@@ -1279,6 +1270,17 @@ const resolveScopeFixedPoint = (
               ...targets.map((target) => target.candidate.assetId),
             ]),
           },
+        });
+        continue;
+      }
+      // A direct requirement is authoritative over a disable/override of the
+      // same target: applying that action would invalidate its issuer.  The
+      // candidate remains available, while the action is simply inapplicable.
+      if (issuer.candidate.rule.requires.includes(operation.targetAssetId)) continue;
+      if (targets.length === 0 || (operation.targetAssetId !== issuer.candidate.assetId && targets.length !== 1)) {
+        failures.push({
+          issuer,
+          conflict: makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]),
         });
         continue;
       }
