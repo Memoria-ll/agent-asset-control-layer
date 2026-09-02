@@ -106,4 +106,26 @@ describe("contract JSON Schemas", () => {
     expect(blocked.properties.blockedReasons.minItems).toBe(1);
     expect(unblocked.properties.blockedReasons).toBeUndefined();
   });
+
+  it("publishes the Project boundary and nested failure strictness", () => {
+    const schemas = contractJsonSchemas() as any;
+    expect(schemas.ProjectMarkerDto.required).toEqual(["schemaVersion", "projectId"]);
+    expect(schemas.ProjectMarkerDto.properties.schemaVersion.const).toBe(1);
+    expect(schemas.ProjectInitRequest.required).toEqual(["projectRoot"]);
+    expect(schemas.ProjectDiscoveryDto.oneOf).toHaveLength(4);
+
+    const invalid = schemas.ProjectDiscoveryDto.oneOf.find(
+      (arm: any) => arm.properties.status.const === "invalid",
+    );
+    expect(invalid.properties.failure.additionalProperties).toBe(false);
+    const mismatch = schemas.ProjectDiscoveryDto.oneOf.find(
+      (arm: any) => arm.properties.status.const === "mismatch",
+    );
+    expect(mismatch.required).toEqual(expect.arrayContaining([
+      "workspacePath",
+      "projectRoot",
+      "markerProjectId",
+      "registryProjectId",
+    ]));
+  });
 });

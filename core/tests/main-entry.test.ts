@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseVersionInfo } from "@aacl/shared";
 
@@ -56,9 +59,16 @@ const waitForExit = (child: ReturnType<typeof spawn>): Promise<void> =>
 
 describe("Core main entry", () => {
   it("starts, serves health, and stops on SIGTERM", async () => {
+    const testHome = await mkdtemp(join(tmpdir(), "aacl-main-entry-"));
     const child = spawn(process.execPath, ["src/main.ts"], {
       cwd: process.cwd(),
-      env: { ...process.env, AACL_CORE_HOST: "127.0.0.1", AACL_CORE_PORT: "0" },
+      env: {
+        ...process.env,
+        HOME: testHome,
+        USERPROFILE: testHome,
+        AACL_CORE_HOST: "127.0.0.1",
+        AACL_CORE_PORT: "0",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -82,6 +92,7 @@ describe("Core main entry", () => {
         child.kill("SIGTERM");
         await waitForExit(child);
       }
+      await rm(testHome, { recursive: true, force: true });
     }
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   parseCoreErrorDto,
   parseVersionInfo,
@@ -16,6 +18,7 @@ describe("Core HTTP surface", () => {
     const outcome = await startCore({
       env: { AACL_CORE_PORT: "0" },
       logger,
+      projectRegistryPath: join(tmpdir(), `aacl-http-test-${process.pid}-${Date.now()}.json`),
     });
 
     expect(process.listenerCount("SIGINT")).toBe(sigintListeners);

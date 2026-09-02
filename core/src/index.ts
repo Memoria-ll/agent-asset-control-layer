@@ -3,6 +3,10 @@ import { coreFailure, type CoreFailure } from "@aacl/core-domain";
 import { createRequestListener } from "./http/listener.ts";
 import type { Logger } from "./logging/logger.ts";
 import { resolveCoreSettings, type CoreEnv } from "./config/settings.ts";
+import {
+  createProjectRegistry,
+  defaultProjectRegistryPath,
+} from "./projects/registry.ts";
 
 export type StartOutcome =
   | {
@@ -23,9 +27,16 @@ const errorCodeOf = (error: unknown): string => {
 export const startCore = async (options: {
   readonly env: CoreEnv;
   readonly logger: Logger;
+  readonly projectRegistryPath?: string;
 }): Promise<StartOutcome> => {
   const settings = resolveCoreSettings(options.env);
   if (!settings.ok) return settings;
+
+  const registry = createProjectRegistry(
+    options.projectRegistryPath ?? defaultProjectRegistryPath(),
+  );
+  const reconciled = await registry.reconcile();
+  if (!reconciled.ok) return reconciled;
 
   const server = createServer(createRequestListener({ logger: options.logger }));
   const listenResult = await new Promise<StartOutcome>((resolve) => {
@@ -115,3 +126,18 @@ export type {
   WorkflowStateStore,
   WorkflowStateStoreOptions,
 } from "./workflow/filesystem-state-store.ts";
+
+export { createProjectService } from "./projects/service.ts";
+export type {
+  ProjectService,
+  ProjectServiceOptions,
+} from "./projects/service.ts";
+
+export {
+  createProjectRegistry,
+  defaultProjectRegistryPath,
+} from "./projects/registry.ts";
+export type {
+  ProjectRegistry,
+  RegistryObservation,
+} from "./projects/registry.ts";

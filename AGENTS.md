@@ -28,6 +28,26 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - バージョンは root `package.json` の `version`。`0.0.0` のため `project-stage.sh` は `dev` を返す
   （保存データの破壊的変更が許される状態）。配布を始める前に実バージョンへ更新する。
 
+### Project identity / initialization
+
+- Project identity の正は `<project-root>/.aacl/project.json`。Marker は
+  `{ "schemaVersion": 1, "projectId": "project-<suffix>" }` の strict object で、Core が
+  `[a-z0-9-]` の suffix から ID を組み立てる。Git repository root は参照せず、init に渡された
+  directory を Project root とする。
+- `pnpm project:init -- [project-root]` が明示 init の入口。配布形態の確定前なので executable 名は
+  持たない。未初期化 workspace の discovery は filesystem を変更せず `uninitialized` を返す。
+- discovery は workspace から filesystem root まで親を辿り、最寄りの `.aacl` で停止する。
+  その directory または Marker が不正なら `invalid` を返し、上位 Project へ抜けない。この探索で
+  候補は 1 件に定まるため `ambiguous` は契約に持たない。
+- Registry は `~/.aacl/project-registry.json` の durable な索引で、Project root path ごとに
+  `pending` / `bound` / `mismatch` を保持する。Marker が同じ `project-id` を持つ別 path は同一
+  Project として追加 binding できる。異なる ID は既存 binding を上書きせず `mismatch` にする。
+- init は Registry の `pending`、Marker の排他的・原子的作成、`bound` の順に進む。Core 起動時の
+  reconcile と次回 discovery は Marker を読み直し、Marker 作成後に停止した `pending` を
+  `bound` へ回復する。Registry は Marker から再構築できる索引であり identity の正にはしない。
+- Project Init / discovery / Marker は `shared` の公開 DTO。VS Code Extension は transport-neutral な
+  `ProjectClient` 境界から同じ操作を使う。HTTP route は #12 の範囲で追加する。
+
 ### package 構成と依存方向
 
 - pnpm workspaces の monorepo。package は `shared` / `core-domain` / `core` / `vscode-extension`

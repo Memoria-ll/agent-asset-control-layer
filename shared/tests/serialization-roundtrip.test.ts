@@ -124,6 +124,16 @@ const representativeInputs: Record<string, unknown> = {
   },
   RoleDto: { roleId: "role-1", displayName: "Role" },
   TaskTypeDto: { taskTypeId: "task-type-1", displayName: "Task type" },
+  ProjectMarkerDto: { schemaVersion: 1, projectId: "project-1" },
+  ProjectInitRequest: { projectRoot: "/work/project" },
+  ProjectInfoDto: { projectId: "project-1", projectRoot: "/work/project" },
+  ProjectDiscoveryRequest: { workspacePath: "/work/project/packages/a" },
+  ProjectDiscoveryDto: {
+    status: "initialized",
+    workspacePath: "/work/project/packages/a",
+    projectRoot: "/work/project",
+    projectId: "project-1",
+  },
 };
 
 describe("contract serialization", () => {

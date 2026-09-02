@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "start:core": "pnpm --filter @aacl/core start"
+    "start:core": "pnpm --filter @aacl/core start",
+    "project:init": "pnpm --filter @aacl/core project:init"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
