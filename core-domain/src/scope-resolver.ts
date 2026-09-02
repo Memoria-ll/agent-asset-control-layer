@@ -851,8 +851,7 @@ export const resolveScope = (
       // indistinguishable from a malformed one.
       const candidatesForId = stateById.get(String(requiredId)) ?? [];
       const matchedCandidatesForId = candidatesForId.filter((candidate) => candidate.matched);
-      if (invalidById.has(String(requiredId))) return "requirement_invalid";
-      if (candidatesForId.length === 0) return "missing_requirement";
+      if (candidatesForId.length === 0) return invalidById.has(String(requiredId)) ? "requirement_invalid" : "missing_requirement";
       if (matchedCandidatesForId.length === 0) return "requirement_out_of_scope";
       if (matchedCandidatesForId.every((candidate) => candidate.reason.kind === "disabled")) return "requirement_disabled";
       if (matchedCandidatesForId.every((candidate) => candidate.reason.kind === "overridden")) return "requirement_overridden";
@@ -1053,6 +1052,13 @@ export const resolveScope = (
   const blockedOperationIssuers = new Set<CandidateState>();
   const blockedOperationReasons = new Map<CandidateState, CandidateReason>();
   const revivedOperationIssuers = new Set<CandidateState>();
+  const operationCycleConflicts = new Map<CandidateState, ResolutionConflict>();
+  const applyOperationCycleConflicts = (): void => {
+    for (const [issuer, conflict] of operationCycleConflicts) {
+      addConflict(conflict);
+      issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+    }
+  };
   type OperationFailure = {
     readonly conflict: ResolutionConflict;
     readonly reason: CandidateReason;
@@ -1332,10 +1338,11 @@ export const resolveScope = (
   };
 
   for (;;) {
-    const { appliedActions, eligibleIssuers, operationFailures } = resolveOperations();
+    let { appliedActions, eligibleIssuers, operationFailures } = resolveOperations();
     applyDependencyClosure();
     applyOperationFailures(operationFailures);
     applyDependencyClosure();
+    applyOperationCycleConflicts();
     const operationCycles = findOperationCycles(appliedActions);
     if (operationCycles.length > 0) {
       const cycleConflicts = operationCycles.map((operationCycle) => {
@@ -1355,15 +1362,14 @@ export const resolveScope = (
       for (const { cycle } of cycleConflicts) {
         for (const action of cycle) blockedOperationIssuers.add(action.issuer);
       }
-      const { operationFailures: finalOperationFailures } = resolveOperations();
+      ({ appliedActions, eligibleIssuers, operationFailures } = resolveOperations());
       applyDependencyClosure();
-      applyOperationFailures(finalOperationFailures);
+      applyOperationFailures(operationFailures);
       applyDependencyClosure();
       for (const { cycle, conflict } of cycleConflicts) {
-        addConflict(conflict);
-        for (const action of cycle) action.issuer.reason = resolutionConflictReason(conflict, action.issuer.rank);
+        for (const action of cycle) operationCycleConflicts.set(action.issuer, conflict);
       }
-      break;
+      applyOperationCycleConflicts();
     }
     const newlyBlocked = findBlockedOperationIssuers(appliedActions)
       .filter((issuer) => !blockedOperationIssuers.has(issuer));
@@ -1382,6 +1388,7 @@ export const resolveScope = (
     if (newlyBlocked.length === 0 && !hasRevivedEligibleIssuer) break;
   }
 
+  let finalFeedbackConflictsApplied = false;
   for (const issuer of blockedOperationIssuers) {
     const priorReason = blockedOperationReasons.get(issuer);
     const operation = issuer.candidate.rule.operation;
@@ -1396,7 +1403,9 @@ export const resolveScope = (
     };
     addConflict(conflict);
     issuer.reason = resolutionConflictReason(conflict, issuer.rank);
+    finalFeedbackConflictsApplied = true;
   }
+  if (finalFeedbackConflictsApplied) applyDependencyClosure();
 
   const allStates = [...states, ...invalidStates].sort(compareCandidatesForOutput);
   const evaluationStates = allStates;

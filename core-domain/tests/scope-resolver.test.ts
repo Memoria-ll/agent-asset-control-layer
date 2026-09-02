@@ -865,6 +865,23 @@ scope.project: [acme]
     });
   });
 
+  it("case 15-d-2: classifies a disabled matched requirement before an invalid alternative", () => {
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-target]\n"), add());
+    const target = candidateFromDocument(assetDocument("asset-target", "scope.directory: [/workspace]\n"), add());
+    const invalidTarget = candidateFromDocument(assetDocument("asset-target", "scope.directory: [./rel]\n"), add());
+    const disable = candidateFromDocument(assetDocument("asset-disable"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const result = resultValue({ directory: "/workspace" }, [dependent, invalidTarget, disable, target]);
+
+    expect(reason(result, "asset-dependent")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_disabled",
+      failedRequirements: ["asset-target"],
+    });
+  });
+
   it("case 15-e: drops a failed operation when its issuer is disabled", () => {
     const target = candidateFromDocument(assetDocument("asset-a"), add());
     const invalidOverride = candidateFromDocument(assetDocument("asset-b"), {
@@ -991,6 +1008,38 @@ scope.project: [acme]
       cause: "requirement_invalid",
       failedRequirements: ["asset-issuer"],
     });
+  });
+
+  it("case 15-k: runs dependent closure after final operation feedback", () => {
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-d]\n"), add());
+    const a = candidateFromDocument(assetDocument("asset-a"), add());
+    const b = candidateFromDocument(assetDocument("asset-b"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId } });
+    const c = candidateFromDocument(assetDocument("asset-c"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId } });
+    const d = candidateFromDocument(assetDocument("asset-d", "requires: [asset-a]\n"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-c" as AssetId } });
+    const result = resultValue({}, [dependent, b, c, d, a]);
+
+    expect(reason(result, "asset-d")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "asset-dependent")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_invalid",
+      failedRequirements: ["asset-d"],
+    });
+  });
+
+  it("case 15-l: stabilizes unrelated operations after resolving a cycle", () => {
+    const a = candidateFromDocument(assetDocument("asset-a"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-e" as AssetId } });
+    const e = candidateFromDocument(assetDocument("asset-e"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId } });
+    const b = candidateFromDocument(assetDocument("asset-b"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-d" as AssetId } });
+    const d = candidateFromDocument(assetDocument("asset-d"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-c" as AssetId } });
+    const c = candidateFromDocument(assetDocument("asset-c"), add());
+    const result = resultValue({}, [a, e, b, d, c]);
+
+    expect(result.conflicts).toEqual([{ kind: "operation_conflict", targetAssetId: "asset-a", involvedAssetIds: ["asset-a", "asset-e"] }]);
+    expect(reason(result, "asset-a")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "asset-e")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(result, "asset-d")).toEqual({ kind: "disabled", disabledBy: "asset-b" });
+    expect(reason(result, "asset-c").kind).toBe("included");
   });
 
   it("case 16: keeps a healthy candidate included beside an unavailable candidate", () => {
