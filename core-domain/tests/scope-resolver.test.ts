@@ -4,7 +4,7 @@ import {
   parseResolvedContextDto,
   tryParseResolvedContextDto,
 } from "@aacl/shared";
-import type { AssetId, AssetRevision, ResolutionScopeInput } from "@aacl/shared";
+import type { AssetId, AssetRevision, AssetType, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
 import {
   parseAssetDocument,
   resolveScope,
@@ -124,6 +124,16 @@ const withDirectorySelectors = (candidate: AssetCandidate, directory: readonly s
   ...candidate,
   rule: { ...candidate.rule, selectors: { ...candidate.rule.selectors, directory } },
 });
+
+const permutations = <Value>(values: readonly Value[]): readonly (readonly Value[])[] => {
+  if (values.length <= 1) return [values];
+  const result: Value[][] = [];
+  values.forEach((value, index) => {
+    const rest = [...values.slice(0, index), ...values.slice(index + 1)];
+    for (const tail of permutations(rest)) result.push([value, ...tail]);
+  });
+  return result;
+};
 
 const add = (): ResolutionDirectives => ({
   mandatory: false,
@@ -732,6 +742,26 @@ scope.project: [acme]
     expect(reason(result, "asset-target").kind).toBe("included");
   });
 
+  it("case 15-b-2-a: excludes an unavailable issuer before operation cycle detection", () => {
+    const issuerA = candidateFromDocument(assetDocument("asset-a", "requires: [asset-x]\n"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId },
+    });
+    const issuerB = candidateFromDocument(assetDocument("asset-b"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-a" as AssetId },
+    });
+    const blocker = candidateFromDocument(assetDocument("asset-d"), {
+      ...add(), operation: { kind: "disable", targetAssetId: "asset-x" as AssetId },
+    });
+    const required = candidateFromDocument(assetDocument("asset-x"), add());
+    const result = resultValue({}, [issuerA, issuerB, blocker, required]);
+
+    expect(result.conflicts).toHaveLength(0);
+    expect(reason(result, "asset-a")).toEqual({ kind: "disabled", disabledBy: "asset-b" });
+    expect(reason(result, "asset-b").kind).toBe("included");
+    expect(reason(result, "asset-d").kind).toBe("included");
+    expect(reason(result, "asset-x")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
+  });
+
   it("case 15-b-3: rolls back an operation when its issuer loses a required target", () => {
     const issuer = candidateFromDocument(assetDocument("asset-issuer", "requires: [asset-target]\n"), {
       ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
@@ -781,7 +811,7 @@ scope.project: [acme]
     expect(reason(left, "asset-d")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
   });
 
-  it("case 15-b-8: re-runs dependency closure after rejecting operation cycles", () => {
+  it("case 15-b-8: diagnoses dependents from the final operation-cycle state", () => {
     const result = resultValue({}, [
       candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-a]\n"), add()),
       candidateFromDocument(assetDocument("asset-a"), { ...add(), operation: { kind: "disable", targetAssetId: "asset-b" as AssetId } }),
@@ -790,7 +820,12 @@ scope.project: [acme]
 
     expect(result.outcome).toBe("conflicted");
     expect(result.conflicts).toEqual([{ kind: "operation_conflict", targetAssetId: "asset-a", involvedAssetIds: ["asset-a", "asset-b"] }]);
-    expect(reason(result, "asset-dependent").kind).toBe("included");
+    expect(reason(result, "asset-dependent")).toEqual({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "requirement_invalid",
+      failedRequirements: ["asset-a"],
+    });
     expect(reason(result, "asset-a")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
     expect(reason(result, "asset-b")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
   });
@@ -900,7 +935,7 @@ scope.project: [acme]
     expect(reason(left, "asset-b")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
   });
 
-  it("case 15-f: keeps operation feedback resolution independent of candidate order", () => {
+  it("case 15-f: leaves a direct requirement target available to its issuer", () => {
     const makeCandidates = () => ({
       a: candidateFromDocument(assetDocument("asset-a", "requires: [asset-c]\n"), {
         ...add(), operation: { kind: "disable", targetAssetId: "asset-c" as AssetId },
@@ -920,15 +955,11 @@ scope.project: [acme]
 
     expect(left.evaluations).toEqual(right.evaluations);
     expect(left.conflicts).toEqual(right.conflicts);
-    expect(left.conflicts).toEqual([{
-      kind: "operation_conflict",
-      targetAssetId: "asset-a",
-      involvedAssetIds: ["asset-a", "asset-d"],
-    }]);
-    expect(reason(left, "asset-a").kind).toBe("included");
-    expect(reason(left, "asset-b").kind).toBe("included");
+    expect(left.conflicts).toHaveLength(0);
+    expect(reason(left, "asset-a")).toEqual({ kind: "disabled", disabledBy: "asset-d" });
+    expect(reason(left, "asset-b")).toEqual({ kind: "disabled", disabledBy: "asset-c" });
     expect(reason(left, "asset-c").kind).toBe("included");
-    expect(reason(left, "asset-d")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    expect(reason(left, "asset-d").kind).toBe("included");
   });
 
   it("case 15-g: drops an operation failure when dependency closure disables its issuer", () => {
@@ -968,6 +999,28 @@ scope.project: [acme]
 
     expect(result.evaluations).toHaveLength(count);
     expect(result.evaluations.every((item) => item.reason.kind === "included")).toBe(true);
+  });
+
+  it("case 15-h-1: traverses a long operation graph without recursion", () => {
+    const template = candidateFromDocument(assetDocument("asset-operation-template"), add());
+    const count = 10_000;
+    const candidates = Array.from({ length: count }, (_, index) => ({
+      ...template,
+      assetId: `asset-operation-${index}` as AssetId,
+      revision: `revision-operation-${index}` as AssetRevision,
+      rule: {
+        ...template.rule,
+        operation: index + 1 < count
+          ? { kind: "disable" as const, targetAssetId: `asset-operation-${index + 1}` as AssetId }
+          : { kind: "add" as const },
+      },
+    }));
+    const result = resultValue({}, candidates);
+
+    expect(result.evaluations).toHaveLength(count);
+    expect(reason(result, "asset-operation-0").kind).toBe("included");
+    expect(reason(result, "asset-operation-1")).toEqual({ kind: "disabled", disabledBy: "asset-operation-0" });
+    expect(reason(result, `asset-operation-${count - 1}`)).toEqual({ kind: "disabled", disabledBy: `asset-operation-${count - 2}` });
   });
 
   it("case 15-i: reconciles operation groups independent of candidate order", () => {
@@ -1040,6 +1093,74 @@ scope.project: [acme]
     expect(reason(result, "asset-e")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
     expect(reason(result, "asset-d")).toEqual({ kind: "disabled", disabledBy: "asset-b" });
     expect(reason(result, "asset-c").kind).toBe("included");
+  });
+
+  it("case 15-m: pins fixed-point invariants for every candidate permutation", () => {
+    const makeHealthyCandidates = () => {
+      const required = candidateFromDocument(assetDocument("asset-required"), add());
+      const target = candidateFromDocument(assetDocument("asset-target"), add());
+      const issuer = candidateFromDocument(assetDocument("asset-issuer", "requires: [asset-required]\n"), {
+        ...add(), operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+      });
+      const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-target]\n"), add());
+      return [required, target, issuer, dependent] as const;
+    };
+    const makeConflictCandidates = () => {
+      const target = candidateFromDocument(assetDocument("asset-target"), exclusive("group"));
+      const highA = candidateFromDocument(assetDocument("asset-high-a"), {
+        ...add(), explicitPriority: 10, mergeGroup: "group",
+        operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+      });
+      const highB = candidateFromDocument(assetDocument("asset-high-b"), {
+        ...add(), explicitPriority: 10, mergeGroup: "group",
+        operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+      });
+      const lowDisable = candidateFromDocument(assetDocument("asset-low"), {
+        ...add(), explicitPriority: 1,
+        operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+      });
+      return [target, highA, highB, lowDisable] as const;
+    };
+    const assertInvariants = (result: ResolutionResult): void => {
+      for (const item of result.evaluations) {
+        if (item.reason.kind === "included") {
+          for (const requiredId of item.candidate.rule.requires) {
+            expect(result.evaluations.filter((candidate) =>
+              candidate.candidate.assetId === requiredId && candidate.reason.kind === "included")).toHaveLength(1);
+          }
+        }
+        if (item.reason.kind === "excluded" && item.reason.cause === "resolution_conflict") {
+          expect(result.conflicts).toContainEqual(item.reason.conflict);
+        }
+      }
+      for (const conflict of result.conflicts) {
+        if (conflict.kind === "dependency_cycle" || conflict.kind === "dependency_failure") continue;
+        expect(result.evaluations.some((item) =>
+          item.reason.kind === "excluded" &&
+          item.reason.cause === "resolution_conflict" &&
+          item.reason.conflict.kind === conflict.kind &&
+          item.reason.conflict.involvedAssetIds.join("\u0000") === conflict.involvedAssetIds.join("\u0000"))).toBe(true);
+      }
+    };
+
+    const healthy = makeHealthyCandidates();
+    const healthyBaseline = resultValue({}, healthy);
+    for (const candidates of permutations(healthy)) {
+      const result = resultValue({}, candidates);
+      expect(result).toEqual(healthyBaseline);
+      expect(reason(result, "asset-issuer").kind).toBe("included");
+      expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-issuer" });
+      assertInvariants(result);
+    }
+
+    const conflict = makeConflictCandidates();
+    const conflictBaseline = resultValue({}, conflict);
+    for (const candidates of permutations(conflict)) {
+      const result = resultValue({}, candidates);
+      expect(result).toEqual(conflictBaseline);
+      expect(result.outcome).toBe("conflicted");
+      assertInvariants(result);
+    }
   });
 
   it("case 16: keeps a healthy candidate included beside an unavailable candidate", () => {
@@ -1162,6 +1283,25 @@ scope.project: [acme]
     expect(reason(result, "asset-healthy").kind).toBe("included");
     for (const selector of ["/", "/workspace", "/workspace/src"] as const) {
       expect(reason(resultValue({ directory: selector }, [candidateFromDocument(assetDocument("asset-valid", `scope.directory: [${selector}]\n`), add())]), "asset-valid").kind).toBe("included");
+    }
+  });
+
+  it("case 17.5-a: checks identity payload consistency before invalid-directory partition", () => {
+    const valid = candidateFromDocument(assetDocument("asset-payload"), add(), { revision: "shared-revision" });
+    const invalidDirectory = withDirectorySelectors(valid, ["./relative"]);
+    const contradictory = {
+      ...invalidDirectory,
+      assetType: "skill" as AssetType,
+      loadingTier: "on-demand" as LoadingTier,
+    };
+
+    for (const candidates of [[valid, contradictory], [contradictory, valid]] as const) {
+      const result = resolve({}, candidates);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.failure.code).toBe("invalid_request");
+        expect(result.failure.details?.some((item) => item.path.includes("asset-payload") && item.code === "invalid_value")).toBe(true);
+      }
     }
   });
 
