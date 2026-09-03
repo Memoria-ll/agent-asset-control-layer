@@ -4,12 +4,6 @@
 
 ## Invariants / identity keys
 
-- **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
-  instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
-  名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
-  `instance_workflow_mismatch` を返す。schema は opaque 値の一意性を検査できないので、
-  独自に発番する producer 側がこの一意性を負う (#7)
-
 - **State store は execution instance id を「受け取らず」「組み立てる」。** 注入口は乱数部分だけ
   (`newInstanceSuffix`) で、`instance-<suffix>` の合成と検査は store が持つ。契約が文字集合を
   縛らないため、id を丸ごと受け取る形は「契約上妥当だがファイル名として使えない値」を

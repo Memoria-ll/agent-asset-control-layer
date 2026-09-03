@@ -12,6 +12,3 @@
 - **`Array.isArray` は union から `readonly string[]` を除去しない。** `AssetFieldValue`
   （`string | readonly string[]`）を絞るのに使うと、false 分岐に配列が残って scalar 側が
   `string` にならない。`typeof value === "string"` で判別する (#5)
-
-- **`AgentExecutionRecord.providerId` は、指定された Runtime / Model 定義の `providerId` と一致する必要がある。**
-  各 ID の存在確認だけでは、別 Provider に属する実行先の組合せを通してしまう (#66)

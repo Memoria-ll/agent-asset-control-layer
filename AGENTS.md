@@ -209,6 +209,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - 観察中: `core/src/config` / `http` / `logging` は独立して変更された実績がない
   （3 つとも変更 1 回、しかも同一コミット）。**次に `http` へエンドポイントを足すとき、
   `config` と `logging` が同時に動くかで、この 3 分割が変更の単位と合っているかを判定する。**
+- 観察中: Ledger の内訳は root 25 件 / 箱 19 件で、**箱をまたぐ事実の方が多い**。
+  19 箱のうち 12 箱がエントリ 0 件。この比率が「箱の切りすぎ」なのか「このドメインでは
+  箱をまたぐ結合が本質的に多い」のかで取るべき手が逆になるため、#108 で測る。
 
 ### レイヤ / seam mapping
 
@@ -400,6 +403,9 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   「list に出た asset の `relativePath` を、そのまま save に渡し直せるとは限らない」。
   read-modify-write する消費側はこの非対称を前提にすること (#58)
 
+- **`AgentExecutionRecord.providerId` は、指定された Runtime / Model 定義の `providerId` と一致する必要がある。**
+  各 ID の存在確認だけでは、別 Provider に属する実行先の組合せを通してしまう (#66)
+
 ### Invariants / identity keys
 
 - **`AssetRevision` は `sha256:${sha256Hex(serializeCanonicalAsset(asset))}`
@@ -425,3 +431,16 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
   `metadata.*` は `isLowerKebabToken` を満たす任意キーを受理する開いた名前空間で、許可値集合が
   まだ存在しないため。保存欄が決まってから有効化する (#87) (#75)
+
+- **解決結果で「context に載るか」を表す信号は `CandidateReason.kind` 1 つしかない。**
+  `resolveScope` は候補ごとに reason を 1 個返し、消費側は `kind === "included"` で絞る。
+  したがって **degraded は `kind: "included"` のまま degradation 欄を載せて返す** —
+  `kind: "unavailable"` にすると optional 依存の欠落が候補を黙って context から消し、
+  「degraded は載るが能力が落ちた状態」を表現できなくなる。`availability: "unavailable"` を
+  作るのは required capability の hard failure だけ (#9)
+
+- **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
+  instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
+  名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
+  `instance_workflow_mismatch` を返す。schema は opaque 値の一意性を検査できないので、
+  独自に発番する producer 側がこの一意性を負う (#7)

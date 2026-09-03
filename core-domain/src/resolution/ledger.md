@@ -81,10 +81,3 @@
   選択では、rank cycle で空になっても全 action が `disable` なら conflict にせず output 順で
   coalesce する — 相反しない disable を conflict にすると target が有効なまま残る。
   `exclusive_tie` の explanation は同順位と cycle の両方を指す文言にする (#76)
-
-- **解決結果で「context に載るか」を表す信号は `CandidateReason.kind` 1 つしかない。**
-  `resolveScope` は候補ごとに reason を 1 個返し、消費側は `kind === "included"` で絞る。
-  したがって **degraded は `kind: "included"` のまま degradation 欄を載せて返す** —
-  `kind: "unavailable"` にすると optional 依存の欠落が候補を黙って context から消し、
-  「degraded は載るが能力が落ちた状態」を表現できなくなる。`availability: "unavailable"` を
-  作るのは required capability の hard failure だけ (#9)
