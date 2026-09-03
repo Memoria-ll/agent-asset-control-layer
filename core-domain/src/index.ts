@@ -44,6 +44,38 @@ export type { ExecutionTargetCatalogDocument } from "./catalog-document.ts";
 export { toResolutionContext } from "./resolution-context.ts";
 export type { ResolutionContext } from "./resolution-context.ts";
 
+export { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
+export type {
+  AssetOperationKind,
+  AssetTypeContract,
+  AssetTypeContractRegistry,
+  AssetTypeExecutionProfile,
+  AssetTypeMergePolicy,
+} from "./asset-type-contracts.ts";
+
+export {
+  resolveScope,
+  toResolutionReasonDto,
+  toResolutionConflictDto,
+  toResolutionConflictDetails,
+} from "./scope-resolver.ts";
+export type { ResolutionAxis } from "./resolution-context.ts";
+export type {
+  ResolutionSourceLayer,
+  ResolutionSource,
+  ResolutionOperation,
+  ResolutionMerge,
+  ResolutionRule,
+  AssetCandidate,
+  ResolutionSnapshot,
+  ResolveScopeInput,
+  ResolutionRank,
+  CandidateReason,
+  ResolutionConflict,
+  ResolutionEvaluation,
+  ResolutionResult,
+} from "./scope-resolver.ts";
+
 export {
   applyWorkflowTransition,
   initializeWorkflowState,

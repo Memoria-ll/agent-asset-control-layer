@@ -1,6 +1,7 @@
 import { ASSET_TYPES, LOADING_TIERS } from "@aacl/shared";
 import type { AssetId, AssetType, LoadingTier } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "./failures.ts";
+import { codeUnitCompare } from "./ordering.ts";
 
 const ASSET_SCOPE_AXES = [
   "project",
@@ -204,9 +205,6 @@ const isStringList = (value: AssetFieldValue): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
 const hasDuplicates = (values: readonly string[]): boolean => new Set(values).size !== values.length;
-
-const codeUnitCompare = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
 
 const sortedValues = <Value extends string>(values: readonly Value[]): readonly Value[] =>
   [...values].sort(codeUnitCompare);

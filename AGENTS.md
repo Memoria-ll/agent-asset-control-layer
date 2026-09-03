@@ -234,6 +234,38 @@ local-first Core、およびその Workbench となる VS Code Extension。
   catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
   「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
   （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
+- **9軸の scope には語彙が2つあり、8個が改名・1個が同名。** on-disk 側は
+  `core-domain/src/assets.ts` の `ASSET_SCOPE_AXES`（`project` / `workflow` / `stage` /
+  `task-type` / `role` / `provider` / `runtime` / `model` / `directory`）、resolver 側は
+  `core-domain/src/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
+  `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
+  string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
+  `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
+- **scope resolver の operation は、merge と dependency closure の両方を生き残った issuer だけが適用できる。**
+  exclusive loser と unavailable issuer は target を変更せず、issuer が別 operation の target になって
+  最終的に生き残れない場合も同じ扱いにする。相反する operation の下位 issuer は
+  `operation_conflict` を evaluation と aggregate `conflicts` の両方へ残す。同一 `AssetId` の
+  異なる source layer 間で issuer が自分の ID を明示 target にする override / disable は
+  pair 単位の overlay relation として duplicate identity 判定より先に扱い、複数の lower layer
+  target にはそれぞれ適用する。dependency closure は merge 後・dependency 前の状態から
+  operation 後に再評価し、operation issuer の cycle は conflict として残す (#71)。operation
+  discovery は pre-operation reason を変更せず、unavailable issuer を除いた残りを安定するまで
+  再評価する。operation 後に eligible へ戻った issuer も discovery 対象へ加え、同一パスで
+  複数の operation cycle をすべて conflict として残す。operation cycle graph は最終 dependency
+  closure で available と判定された issuer の action だけから構成し、provisional action だけで
+  cycle を確定しない。依存失敗の分類は scope mismatch の候補ではなく matched candidate を
+  先に判定する。dependency closure は再帰せず canonical SCC と反復処理で評価し、operation
+  cycle を除いた最終状態で依存を再評価する。operation の依存 feedback が安定しない場合は、
+  operation を無視した included issuer を返さず conflict として残す。
+- **mandatory candidate の dependency failure が cycle と別の failure を同時に含む場合は、両方の conflict を残す。**
+  primary cause の選択で `dependency_cycle` を隠さない (#71)
+- **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
+  `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
+  意味が異なる candidate を入力順へ委ねない (#71)
+- **scope resolver は全 candidate の構造検証を完了し、全 structurally-valid candidate の同一 asset identity（`assetId` + `revision`）に payload（`assetType` / `loadingTier`）の整合性を適用してから、invalid-directory partition と identity map を行う。**
+  構造不正な runtime snapshot の要素を resolver 内で dereference せず、同じ operation tie に
+  参加する全 issuer を conflict evaluation と一致させる。`assetType` と `loadingTier` は
+  `ASSET_TYPES` と `LOADING_TIERS` の membership を runtime で検証する。
 - **workflow instance と agent execution の link は双方向で、その鏡像はすでに契約にある** —
   `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding`
   （`shared/src/sessions.ts`）が互いを指し、producer 側は `core-domain/src/agent-execution.ts` の
@@ -246,9 +278,47 @@ local-first Core、およびその Workbench となる VS Code Extension。
   （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
   registry に登録しただけでは検査されないので、nested の `additionalProperties` は
   個別 assertion で pin する (#7)
+- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
+  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
+  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
+  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
+  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
 
 ### Invariants / identity keys
 
+- **`AssetRevision` は `sha256:${sha256Hex(serializeCanonicalAsset(asset))}`
+  （`core/src/assets/filesystem-store.ts` の `makeAssetRevision`）で、
+  `serializeCanonicalAsset` は frontmatter と body の両方を含む
+  （`core-domain/src/assets.ts`、戻り値は `${lines.join("\n")}\n${asset.body}`）。
+  したがって「同 revision ⇒ 同 body」が成り立つ。** Resolver の
+  exact-duplicate fold（同一 id・同一 revision の candidate を1件へ畳み、layer → sourceId 順で
+  代表を選ぶ）が安全なのはこの性質のためで、revision を mtime や uuid に変えると
+  **body 内容の暗黙の後勝ちに化ける**。revision の作り方を変えるときは resolver の
+  dedup を同じ変更で見直すこと (#3)
+- **Asset Type 契約違反の落とし方は「候補 1 枚で判定できるか」で決まる。** 1 枚で判定できる違反
+  （その Type が許さない operation / exclusive merge）は `validateCandidate` に置き
+  `invalid_request` で snapshot 全体を失敗させる。2 候補以上を突き合わせて初めて判る違反
+  （cross-Type の override / disable / exclusive group）は候補単位の reason +
+  `asset_type_conflict` にし、target は変更しない。この境界は既存の構造検証と意味的衝突の
+  分かれ方と同じで、**新しい Type 規則を足すときも同じ問いで置き場所を決める** (#75)
+- **cross-Type の判定は「関係が表現可能か」なので、突き合わせる候補を絞り込む前に置く。**
+  operation の cross-Type 判定は `matchedById` が持つ target id の全候補に対して行い、
+  そこから適用可能な target へ絞る。要求関係 (`requires`)・mandatory 保護・target 個数・
+  適用可能性（exclusive merge に負けた候補など）はいずれも「関係が表現可能である」ことを
+  前提にした規則なので、絞り込み後に判定すると cross-Type 関係が
+  `operation_conflict` や無検出に化ける (#75)
+- **Type 固有の意味論は `core-domain/src/asset-type-contracts.ts` の
+  `Record<AssetType, AssetTypeContract>` にだけ置く。** 網羅はコンパイル時の義務であり
+  runtime 検査を持たない。contract 自身は `assetType` 欄を持たない — Record のキーが唯一の
+  型表明で、キーと中身が食い違う registry を書けなくするため。`ASSET_TYPES` に値を足すと
+  この Record がビルドを落とす。共通 pipeline 側の type 分岐禁止は
+  `core-domain/tests/asset-type-contracts.test.ts` の source scan が機械判定する
+  （**走査対象は `scope-resolver.ts` 1 ファイルのみ** — `workflow.ts` や `catalog.ts` には
+  正当な type 比較がある） (#75)
+- **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
+  検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
+  `metadata.*` は `isLowerKebabToken` を満たす任意キーを受理する開いた名前空間で、許可値集合が
+  まだ存在しないため。保存欄が決まってから有効化する (#87) (#75)
 - **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
   instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
   名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
@@ -267,3 +337,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
   実ディレクトリであることを要求できるが、設定されたルートより上の祖先は運用者のもの。
   ルートから全祖先を辿る検査は OS 提供の symlink (macOS の `/var`) を弾き、そのために
   パスを両セパレータで分割する必要が生じて、backslash を含む POSIX ディレクトリ名を壊す (#7)
+- **exclusive winner は「他のどの候補にも負けない候補が一意ならそれ、いなければ conflict」で
+  選ぶ。候補を段階的に脱落させる形にしない。** directory 特則（両者が directory 一致なら
+  priority → 最深 path → specificity）と一般 key（specificity → 軸 precedence → depth →
+  source layer）は混在集合に対して非推移で、先に脱落させると **自分では勝てない候補を足す
+  だけで勝者が変わる** — `/repo`+role+model が `/repo/src/deep` に深さで脱落し、勝てるはず
+  だった相手の role+model が勝つ。directory 軸に一致したかは `scopePrecedence` が directory の
+  rank を含むかで判定する。`directoryDepth > 0` では root 一致 (depth 0) と directory selector
+  無しを区別できない (#76)
+- **`selectUnbeaten` の空集合は「勝者不在」であって「相反」ではない。** operation の issuer
+  選択では、rank cycle で空になっても全 action が `disable` なら conflict にせず output 順で
+  coalesce する — 相反しない disable を conflict にすると target が有効なまま残る。
+  `exclusive_tie` の explanation は同順位と cycle の両方を指す文言にする (#76)
