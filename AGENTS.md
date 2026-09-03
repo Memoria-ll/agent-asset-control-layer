@@ -345,3 +345,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
   だった相手の role+model が勝つ。directory 軸に一致したかは `scopePrecedence` が directory の
   rank を含むかで判定する。`directoryDepth > 0` では root 一致 (depth 0) と directory selector
   無しを区別できない (#76)
+- **`selectUnbeaten` の空集合は「勝者不在」であって「相反」ではない。** operation の issuer
+  選択では、rank cycle で空になっても全 action が `disable` なら conflict にせず output 順で
+  coalesce する — 相反しない disable を conflict にすると target が有効なまま残る。
+  `exclusive_tie` の explanation は同順位と cycle の両方を指す文言にする (#76)

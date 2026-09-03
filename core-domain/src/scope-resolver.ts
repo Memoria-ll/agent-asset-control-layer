@@ -721,7 +721,8 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
 
 const conflictExplanation = (conflict: ResolutionConflict): string => {
   switch (conflict.kind) {
-    case "exclusive_tie": return "Exclusive candidates have the same resolution rank.";
+    // Covers a cycle as well as an equal rank: neither leaves a candidate that beats all others.
+    case "exclusive_tie": return "Exclusive candidates have no single highest-ranked candidate.";
     case "mandatory_conflict": return "Mandatory candidates cannot be resolved together.";
     case "operation_conflict": return "Conflicting operations target the same asset.";
     case "duplicate_identity": return "Candidates with the same asset identity have different meanings.";
@@ -1376,22 +1377,19 @@ const resolveScopeFixedPoint = (
         return codeUnitCompare(left.kind, right.kind);
       });
       const best = selectUnbeaten(actions.map((action) => ({ action, rank: action.issuer.rank! }))).map(({ action }) => action);
-      if (best.length === 0) {
-        const conflict = makeOperationConflict(target.candidate.assetId, [target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]);
-        operationConflicts.push({ conflict, issuers: actions.map((action) => action.issuer) });
-        for (const action of actions) addIssuerConflict(action.issuer, conflict);
-        continue;
-      }
-      const allDisable = best.every((action) => action.kind === "disable");
-      if (best.length > 1 && !allDisable) {
+      // A precedence cycle leaves no unbeaten action, but issuers that all disable are not
+      // contradictory: coalesce them on output order rather than leaving the target enabled.
+      const contenders = best.length === 0 ? actions : best;
+      const allDisable = contenders.every((action) => action.kind === "disable");
+      if (contenders.length > 1 && !allDisable) {
         const conflict = makeOperationConflict(target.candidate.assetId, [target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]);
         operationConflicts.push({ conflict, issuers: actions.map((action) => action.issuer) });
         for (const action of actions) addIssuerConflict(action.issuer, conflict);
         continue;
       }
       const winner = allDisable
-        ? best.slice().sort((left, right) => compareCandidatesForOutput(left.issuer, right.issuer))[0]!
-        : best[0]!;
+        ? contenders.slice().sort((left, right) => compareCandidatesForOutput(left.issuer, right.issuer))[0]!
+        : contenders[0]!;
       selectedActions.push(winner);
       chosenByTarget.set(target, winner);
       for (const action of actions) {

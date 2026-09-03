@@ -780,6 +780,25 @@ scope.project: [acme]
     }
   });
 
+  it("case 34: coalesces all-disable issuers that form the X/Y/Z precedence cycle", () => {
+    const target = candidateFromDocument(assetDocument("asset-cycle-target"), add());
+    const disableOf = (assetId: string, scope: string) => candidateFromDocument(assetDocument(assetId, scope), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-cycle-target" as AssetId },
+    });
+    const x = disableOf("asset-cycle-x", "scope.directory: [/repo/src/deep]\n");
+    const y = disableOf("asset-cycle-y", "scope.role: [reviewer]\nscope.directory: [/repo]\n");
+    const z = disableOf("asset-cycle-z", "scope.role: [reviewer]\nscope.model: [model-a]\n");
+
+    for (const candidates of permutations([target, x, y, z])) {
+      const result = resultValue({ roleId: "reviewer", modelId: "model-a", directory: "/repo/src/deep" }, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-cycle-target")).toEqual({ kind: "disabled", disabledBy: "asset-cycle-y" });
+    }
+  });
+
   it("case 8: preserves a mandatory target and reports a mandatory disable conflict", () => {
     const base = candidateFromDocument(assetDocument("asset-base"), { ...add(), mandatory: true });
     const disable = candidateFromDocument(assetDocument("asset-disable", "scope.project: [acme]\n"), {
