@@ -6,6 +6,7 @@ import {
 } from "@aacl/shared";
 import type { AssetId, AssetRevision, AssetType, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
 import {
+  buildCapabilityCatalog,
   parseAssetDocument,
   resolveScope,
   toResolutionConflictDetails,
@@ -13,12 +14,15 @@ import {
   toResolutionReasonDto,
   validateAsset,
 } from "../src/index.ts";
-import { buildCapabilityCatalog } from "../src/capabilities.ts";
-import type { CapabilityDependency, CapabilityFeatureId, CapabilityId, CapabilityOffer, CapabilityResolutionContext } from "../src/capabilities.ts";
 import type {
   AssetCandidate,
   CandidateReason,
   CanonicalAsset,
+  CapabilityDependency,
+  CapabilityFeatureId,
+  CapabilityId,
+  CapabilityOffer,
+  CapabilityResolutionContext,
   ResolutionAxis,
   ResolutionEvaluation,
   ResolutionMerge,

@@ -12,13 +12,13 @@ import type {
   AssetTypeContractRegistry,
   AssetTypeExecutionProfile,
   CanonicalAsset,
+  CapabilityId,
   ResolutionAxis,
   ResolutionMerge,
   ResolutionOperation,
   ResolutionSource,
   ResolutionResult,
 } from "../src/index.ts";
-import type { CapabilityId } from "../src/capabilities.ts";
 
 type GlobOptions = {
   readonly eager?: boolean;

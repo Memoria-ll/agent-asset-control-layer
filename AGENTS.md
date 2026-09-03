@@ -106,10 +106,13 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `core` の内部 domain model と `shared` の公開 DTO は分離してよい。
 - **`core-domain` の公開面は `core-domain/src/index.ts` の re-export が正。** consumer は
   `@aacl/core-domain` からしか解決しないため、module に `export` を足しただけの型・関数は
-  consumer から到達できない。package 内のテストは module を直接 import できる（`shared` と
-  同じ扱い）ので、**テストが緑でも re-export の欠落は見えない**。公開 API を足す変更は同じ
-  変更で `index.ts` に re-export を足し、その API を使うテストは `../src/index.ts` から
-  import して欠落を落とす。module の `export` は package 内の module 間で使うためにも張る
+  consumer から到達できない。TypeScript は module 直 import を通すので、**テストが緑でも
+  re-export の欠落は見えない**。公開 API を足す変更は同じ変更で `index.ts` に re-export を
+  足す。**`core-domain/tests/**` が公開 API を引くのは `../src/index.ts` からに限る** —
+  module を直接引いてよいのは index に載せない内部だけで、現状その該当は 0 件（`grep -n
+  'from "\.\./src/[a-z-]*\.ts"' core-domain/tests/*.ts` の非 index 行が 0 であることで確認
+  できる）。これが consumer の到達可能性をテストで担保する唯一の手段になる。
+  module の `export` は package 内の module 間で使うためにも張る
   （`ordering.ts` の `codeUnitCompare` のように index に載せないものがある）ので、
   `export` を落とすのは同一ファイル内でしか使わないものだけ (#94)
 
