@@ -1349,13 +1349,23 @@ const resolveScopeFixedPoint = (
             );
           });
       });
-      // Every state of a component reaches every other, so an unsatisfied capability
-      // anywhere in it is unsatisfied for all of them.  The per-edge propagation below
-      // walks only the edges leaving the component, which is why the union is taken here
-      // — the same reach that makes a non-cycle requirement failure propagate.
+      // Every state of a component reaches every other, so a capability the component
+      // cannot satisfy is unsatisfied for all of its members — whether the requirement
+      // sits on a member itself or on something a single member requires from outside.
+      // Both arrive here, so each member carries the whole set rather than only the part
+      // its own edges happen to touch.  Components this one depends on are materialized
+      // first and already closed over their own reach, so this single pass is the fixed
+      // point; a member's own external edges are re-walked below only for the per-edge
+      // requirement diagnostics, which are not shared across the component.
       const componentFailedCapabilities = component.flatMap((state) => {
-        const outcome = dependencyNodes.get(state)!.capabilityOutcome;
-        return outcome?.ok === false ? [...outcome.failedCapabilities] : [];
+        const node = dependencyNodes.get(state)!;
+        const own = node.capabilityOutcome?.ok === false ? [...node.capabilityOutcome.failedCapabilities] : [];
+        const required = node.edges.flatMap((edge) => {
+          if (componentStates.has(edge.target)) return [];
+          const outcome = outcomes.get(edge.target);
+          return outcome === undefined || outcome.ok ? [] : [...(outcome.failedCapabilities ?? [])];
+        });
+        return [...own, ...required];
       });
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
@@ -1392,7 +1402,6 @@ const resolveScopeFixedPoint = (
           if (outcome.nonCycleFailedRequirements.length > 0 || (outcome.failedCapabilities?.length ?? 0) > 0) {
             nonCycleFailedRequirements.push(edge.requiredId);
           }
-          if (outcome.failedCapabilities !== undefined) failedCapabilities.push(...outcome.failedCapabilities);
         }
         failures.sort((left, right) => codeUnitCompare(left.id, right.id));
         nonCycleFailedRequirements.sort(codeUnitCompare);

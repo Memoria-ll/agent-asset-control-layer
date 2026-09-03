@@ -303,12 +303,15 @@ local-first Core、およびその Workbench となる VS Code Extension。
   — `CoreFailure` ではなく例外になるので、consumer からは resolver のクラッシュに見える。
   scope 外の候補も検証対象で、scope が決めるのは「どれが適用されるか」であって
   「どれが妥当か」ではない (#9)
-- **`dependencyOutcomes` の伝播は component 内部エッジを飛ばすので、状態ごとの失敗種別を
-  足したら component 単位の union も同じ変更で足す。** conflict は mandatory 候補についてしか
-  materialize されないため、union を忘れると SCC 内の非 mandatory 候補が持つ失敗は
-  mandatory 候補へ伝わらず、**診断そのものが結果から消える**（cycle と dependency_failure だけが
-  残り、原因の capability 名が出ない）。requirement 失敗側は `componentHasNonCycleFailure` が、
-  capability 側は `componentFailedCapabilities` がこの役目を持つ (#9)
+- **`dependencyOutcomes` で候補ごとに持たせる失敗種別は、component 単位で union してから
+  各メンバーに配る。** union の対象は 2 つあり、**両方**が要る: メンバー自身が持つ失敗と、
+  いずれか 1 メンバーが component 外へ張るエッジ経由で受け取る失敗。conflict は mandatory
+  候補についてしか materialize されず、per-edge の伝播は component 内部エッジを飛ばすため、
+  どちらか一方でも落とすと SCC 内の非 mandatory 候補側にしか無い失敗が mandatory 候補へ
+  伝わらず、**診断そのものが結果から消える**（cycle と dependency_failure だけが残り、原因の
+  capability 名が出ない）。依存先 component は先に materialize され自身の到達を閉じているので、
+  この 1 パスが不動点になる。capability 側は `componentFailedCapabilities`、requirement 側は
+  `componentHasNonCycleFailure` がこの役目を持つ (#9)
 
 ### Invariants / identity keys
 
