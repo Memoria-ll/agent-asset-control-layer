@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,6 +11,26 @@ afterEach(async () => {
 });
 
 describe("regular file reads", () => {
+  it("rejects stale content when the path is atomically replaced before the fresh identity check", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-regular-file-test-"));
+    scratch.push(root);
+    const filePath = join(root, "project.json");
+    const replacementPath = join(root, "replacement.json");
+    const oldPath = join(root, "old.json");
+    await writeFile(filePath, "stale\n", "utf8");
+    await writeFile(replacementPath, "fresh\n", "utf8");
+
+    const result = await readRegularUtf8(filePath, {
+      beforeFreshStat: async () => {
+        await rename(filePath, oldPath);
+        await rename(replacementPath, filePath);
+      },
+    });
+
+    expect(result).toEqual({ status: "not_regular" });
+    expect(await readFile(filePath, "utf8")).toBe("fresh\n");
+  });
+
   it("does not block when a regular file is replaced by a FIFO before open", async () => {
     if (process.platform === "win32") return;
     const root = await mkdtemp(join(tmpdir(), "aacl-regular-file-test-"));

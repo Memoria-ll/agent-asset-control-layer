@@ -76,8 +76,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `core.project_registry_reconcile_degraded` を warning で記録して listen と health を開始する。Registry JSON の
   破損、read/write、lock 取得の失敗は `project-registry` stage の startup failure として listen を開始せず、
   起動結果は `settings` / `project-registry` / `listen` の stage で分類する。Registry と Marker は regular file を
-  確認してから読み取る。reader は POSIX で nonblocking・no-follow open を使い、開いた descriptor の regular
-  file 判定と path の `dev` / `ino` 照合を通過してから内容を読む。SIGINT / SIGTERM の handler は `startCore` の await 前に登録し、起動中の停止要求を
+  確認してから読み取る。reader は POSIX で nonblocking・no-follow open を使い、open 後に descriptor の
+  `fstat` で regular file を確認して descriptor から内容を読み、読み取り完了後の fresh `lstat` で path の
+  regular file と `dev` / `ino` が descriptor と一致した場合だけ採用する。SIGINT / SIGTERM の handler は `startCore` の await 前に登録し、起動中の停止要求を
   保持する。停止要求後は reconcile の child timeout と cleanup を完了してから listen 済みの Core を close し、
   `core.listening` と startup failure event を記録しない。
 - `ProjectInfoDto` と `ProjectDiscoveryDto` の Marker 由来 ID 欄は Marker 固有の schema

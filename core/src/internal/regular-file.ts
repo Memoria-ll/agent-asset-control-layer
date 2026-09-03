@@ -10,6 +10,7 @@ export type RegularFileRead =
 
 export type RegularFileReadOptions = {
   readonly beforeOpen?: () => void | Promise<void>;
+  readonly beforeFreshStat?: () => void | Promise<void>;
 };
 
 const readFlags = process.platform === "win32"
@@ -43,12 +44,15 @@ export const readRegularUtf8 = async (
     handle = await open(filePath, readFlags);
     const fileInfo = await handle.stat();
     if (!fileInfo.isFile()) return { status: "not_regular" };
-    if (linkInfo.dev !== fileInfo.dev || linkInfo.ino !== fileInfo.ino) {
-      return { status: "not_regular" };
-    }
+    if (linkInfo.dev !== fileInfo.dev || linkInfo.ino !== fileInfo.ino) return { status: "not_regular" };
+    const contents = await handle.readFile("utf8");
+    await options.beforeFreshStat?.();
+    const freshPathInfo = await lstat(filePath);
+    if (freshPathInfo.isSymbolicLink() || !freshPathInfo.isFile()) return { status: "not_regular" };
+    if (freshPathInfo.dev !== fileInfo.dev || freshPathInfo.ino !== fileInfo.ino) return { status: "not_regular" };
     return {
       status: "ok",
-      contents: await handle.readFile("utf8"),
+      contents,
       mode: fileInfo.mode,
     };
   } catch (error) {
