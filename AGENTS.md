@@ -189,7 +189,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
   re-export の欠落は見えない**。公開 API を足す変更は同じ変更で `index.ts` に re-export を
   足す。**`core-domain/tests/**` が公開 API を引くのは `../src/index.ts` からに限る** —
   module を直接引いてよいのは index に載せない内部だけで、現状その該当は 0 件（`grep -n
-  'from "\.\./src/[a-z-]*\.ts"' core-domain/tests/*.ts` の非 index 行が 0 であることで確認
+  'from "\.\./src/[a-z/-]*\.ts"' core-domain/tests/*.ts` の非 index 行が 0 であることで確認
   できる）。これが consumer の到達可能性をテストで担保する唯一の手段になる。
   module の `export` は package 内の module 間で使うためにも張る
   （`ordering.ts` の `codeUnitCompare` のように index に載せないものがある）ので、
@@ -327,7 +327,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - **9軸の scope には語彙が2つあり、8個が改名・1個が同名。** on-disk 側は
   `core-domain/src/assets.ts` の `ASSET_SCOPE_AXES`（`project` / `workflow` / `stage` /
   `task-type` / `role` / `provider` / `runtime` / `model` / `directory`）、resolver 側は
-  `core-domain/src/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
+  `core-domain/src/resolution/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
   `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
   string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
   `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
@@ -418,7 +418,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
   適用可能性（exclusive merge に負けた候補など）はいずれも「関係が表現可能である」ことを
   前提にした規則なので、絞り込み後に判定すると cross-Type 関係が
   `operation_conflict` や無検出に化ける (#75)
-- **Type 固有の意味論は `core-domain/src/asset-type-contracts.ts` の
+- **Type 固有の意味論は `core-domain/src/resolution/asset-type-contracts.ts` の
   `Record<AssetType, AssetTypeContract>` にだけ置く。** 網羅はコンパイル時の義務であり
   runtime 検査を持たない。contract 自身は `assetType` 欄を持たない — Record のキーが唯一の
   型表明で、キーと中身が食い違う registry を書けなくするため。`ASSET_TYPES` に値を足すと

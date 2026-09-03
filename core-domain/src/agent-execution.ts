@@ -18,7 +18,7 @@ import type {
 import { tryParseAgentExecutionDto } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import type { MetadataCatalog } from "./catalog.ts";
-import type { ResolutionContext } from "./resolution-context.ts";
+import type { ResolutionContext } from "./resolution/resolution-context.ts";
 
 /** Internal execution metadata consumed by #8 routing and #20 lifecycle work. */
 type AgentExecutionRecordBase = {
