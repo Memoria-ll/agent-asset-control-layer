@@ -283,6 +283,10 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
   漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
   Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+- **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
+  「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
+  required をすべて hard failure にし、その候補を context から落とす。型は optional なので
+  コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
 
 ### Invariants / identity keys
 
@@ -337,3 +341,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
   実ディレクトリであることを要求できるが、設定されたルートより上の祖先は運用者のもの。
   ルートから全祖先を辿る検査は OS 提供の symlink (macOS の `/var`) を弾き、そのために
   パスを両セパレータで分割する必要が生じて、backslash を含む POSIX ディレクトリ名を壊す (#7)
+- **解決結果で「context に載るか」を表す信号は `CandidateReason.kind` 1 つしかない。**
+  `resolveScope` は候補ごとに reason を 1 個返し、消費側は `kind === "included"` で絞る。
+  したがって **degraded は `kind: "included"` のまま degradation 欄を載せて返す** —
+  `kind: "unavailable"` にすると optional 依存の欠落が候補を黙って context から消し、
+  「degraded は載るが能力が落ちた状態」を表現できなくなる。`availability: "unavailable"` を
+  作るのは required capability の hard failure だけ (#9)
