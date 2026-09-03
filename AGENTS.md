@@ -195,11 +195,34 @@ local-first Core、およびその Workbench となる VS Code Extension。
   （`ordering.ts` の `codeUnitCompare` のように index に載せないものがある）ので、
   `export` を落とすのは同一ファイル内でしか使わないものだけ (#94)
 
+### フォルダ構成
+
+- 変更が閉じる単位でフォルダを切る。**箱 = package の成果物ソースを直接持つディレクトリ**で、
+  `core/src/` 直下の機能ディレクトリ、`core-domain/src/resolution/`、
+  各 package の `src/` / `tests/` 直下がこれにあたる。
+- **ビルド・検証スクリプトのディレクトリ（`scripts/` / `core/scripts/`）は箱を持たない。**
+  `verify-workspace-packages.mjs` と `verify-node-resolution.mjs` は gate step の実装で、
+  検査対象は package 横断（package 名の集合、素の Node による解決）なので、そこで学んだ
+  事実は定義上 root にしか置けない。編集時に読むのは root の `## Ledger` と、
+  gate の構成を述べた `### 逸脱・未定` である。
+- テストツリーは分離のまま、実装が機能で割れたら同じ単位でミラーする。
+  `core/tests` / `core-domain/tests` / `shared/tests` は現状フラットなので、
+  それぞれ 1 箱として扱う。
+- `core` / `core-domain` の境界は host 能力の有無で、
+  `core-domain/tests/dependency-boundary.test.ts` が機械判定する（下記「package 構成と依存方向」）。
+- Ledger はこの単位で `ledger.md` に分割する（`## Ledger`）。
+- 観察中: `core/src/config` / `http` / `logging` は独立して変更された実績がない
+  （3 つとも変更 1 回、しかも同一コミット）。**次に `http` へエンドポイントを足すとき、
+  `config` と `logging` が同時に動くかで、この 3 分割が変更の単位と合っているかを判定する。**
+- 観察中: Ledger の内訳は root 26 件 / 箱 18 件で、**箱をまたぐ事実の方が多い**。
+  19 箱のうち 12 箱がエントリ 0 件。この比率が「箱の切りすぎ」なのか「このドメインでは
+  箱をまたぐ結合が本質的に多い」のかで取るべき手が逆になるため、#108 で測る。
+
 ### レイヤ / seam mapping
 
 - logic unit（テスト対象）: `core-domain/src/`（domain semantics と失敗語彙）、
   `core/src/` のうち `main.ts` を除くすべて（`assets/` `catalog/` `config/` `http/`
-  `internal/` `logging/` `workflow/` と composition root の `index.ts`）、`shared/src/`、
+  `internal/` `logging/` `projects/` `types/` `workflow/` と composition root の `index.ts`）、`shared/src/`、
   `vscode-extension/src/` のうち VS Code API に依存しない client / view model。
 - view-glue（テスト対象外）: `core/src/main.ts`（`process.env` / stdout / signal だけを持つ
   host glue）、`vscode-extension/src/` のうち VS Code API へ直接触れる面
@@ -231,6 +254,55 @@ local-first Core、およびその Workbench となる VS Code Extension。
 
 ## Ledger
 
+Ledger は箱ごとに分割している。**編集するファイルが属する箱の `ledger.md` と、この
+`## Ledger` の両方を読む。** 箱に閉じる事実はその箱の `ledger.md`、2つ以上の箱に
+またがる事実とリポジトリ全体の規約はここに置く。同じ事実を両方に置かない —
+守備範囲が変わったときは移す。箱を持たないディレクトリ（`scripts/` / `core/scripts/`、
+`### フォルダ構成` 参照）のファイルを編集するときは、この `## Ledger` だけを読む。
+
+**置き場は「その事実に違反しうる編集がどの箱で起きるか」で決める。** 事実が語る対象が
+この箱にあっても、義務の発火点（別の箱の宣言を更新する、caller として欄を埋める、
+src の変更に対してテストを足す）が箱の外にあるなら、それは箱をまたぐ事実なので
+ここに置く — 違反する側の編集者はその箱の `ledger.md` を読まないため、箱に置くと
+**まさに違反が起きる瞬間に見えない**。
+
+**発火点は「現時点の呼び出し箇所」ではなく「その義務を負いうる編集の場所」で数える。**
+`core/src/index.ts` から export される面の consumer 向け注意（呼び出し側が前提にすべき
+非対称、caller が埋める欄）は、箱外の呼び出しが今 0 件でも箱をまたぐ事実として
+ここに置く — 公開契約の consumer は箱の外にしか存在しえず、最初の呼び出しを書く編集が
+まさに注意を必要とする編集だからである。同様に、未着手の issue が発火点になる事実
+（「#4 が配線するとき」「保存欄が決まってから」）は、その issue が触る箱で数える。
+
+**ただし「公開 re-export されている」だけでは箱をまたがない。** 判定は 2 条件の連言で、
+**エントリが caller に宛てた注意であること**（caller が果たす義務・caller が前提にすべき
+挙動）と、**違反が黙って通りうること**（typecheck も gate も緑のまま誤った値・誤った状態に
+なる書き方が存在する）の両方が要る。箱が自分のコードをどう書くかを述べたエントリは、
+そこに出てくる型がすべて公開 re-export でも箱に残る — 読者は実装者であって caller では
+ない。逆に、**どう書いても必ず**ビルドが落ちるなら root どころか Ledger に載せる必要が
+ない（`project-ledger.md` の entry 条件）。**「一部の書き方はコンパイラが捕まえる」は
+除外理由にならない** — 捕まらない書き方が 1 つでもあれば、Ledger が守るのはその 1 つで
+ある。判定は型を読んで決めず、両方の書き方を実際にコンパイルして確かめる。
+
+- `core/src/ledger.md`
+- `core/src/assets/ledger.md`
+- `core/src/catalog/ledger.md`
+- `core/src/config/ledger.md`
+- `core/src/http/ledger.md`
+- `core/src/internal/ledger.md`
+- `core/src/logging/ledger.md`
+- `core/src/projects/ledger.md`
+- `core/src/types/ledger.md`
+- `core/src/workflow/ledger.md`
+- `core/tests/ledger.md`
+- `core-domain/src/ledger.md`
+- `core-domain/src/resolution/ledger.md`
+- `core-domain/tests/ledger.md`
+- `shared/src/ledger.md`
+- `shared/src/internal/ledger.md`
+- `shared/tests/ledger.md`
+- `vscode-extension/src/ledger.md`
+- `vscode-extension/tests/ledger.md`
+
 ### Traps
 
 - `shared` は build を持たず `exports` が `./src/index.ts` を指すため、**相対 import 指定子は
@@ -238,46 +310,27 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `ERR_MODULE_NOT_FOUND` で落ちる — vitest は自前のリゾルバを使うのでこの壊れ方を検知できない。
   Core は host 直実行なので実害がある。gate の node-resolution step がこの経路を実測する。
   型除去に依存するので `engines.node` の下限は 22.18（既定で有効になった版）(#47)
+
 - `exports` を `dist` に向けると `pnpm -r typecheck` は exit 0 のまま、`pnpm -r test` だけが
   `core` と `vscode-extension` で `Failed to resolve entry for package "@aacl/shared"` を出して
   落ちる (#46)
+
+- asset file の `type:` と `tier:` は `ASSET_TYPES` / `LOADING_TIERS` を**そのまま**正としている。
+  `shared/tests/enum-values.test.ts` が両者を逐語で pin し、その assertion message が
+  "Changing enum values requires bumping CONTRACT_VERSION." である。**on-disk の type / tier を
+  増やすと、wire DTO が何も変わらなくても `CONTRACT_VERSION` の bump を伴う破壊的変更になる** (#2)
+
 - 境界の値集合（`ASSET_TYPES` 等）の正は #2 の Canonical Asset model。#2 Scope が初期 type として
   Skill / Rule / Role / Workflow / Task Type / Policy / Guardrail / Knowledge の 8 個を挙げており、
   `ASSET_TYPES` はこれと一致している。README の製品説明はこれより広い語（templates / checklists /
   capability bindings）を含むが型の正ではない。**#2 が type を増やしたら同じ変更で `ASSET_TYPES` を
   更新する** — enum への値追加は破壊的変更 (#47)
-- asset file の `type:` と `tier:` は `ASSET_TYPES` / `LOADING_TIERS` を**そのまま**正としている。
-  `shared/tests/enum-values.test.ts` が両者を逐語で pin し、その assertion message が
-  "Changing enum values requires bumping CONTRACT_VERSION." である。**on-disk の type / tier を
-  増やすと、wire DTO が何も変わらなくても `CONTRACT_VERSION` の bump を伴う破壊的変更になる** (#2)
-- asset frontmatter の未知 top-level key は validation error になる。`mandatory` / `priority` /
-  `disable` / `override` も v1 では拒否される。**#4 がこれらの directive を導入するときは
-  asset schema version（`schema-version:`）の bump が要る** — v1 parser は未知 version を
-  `incompatible_contract` で拒否し、暗黙の migration を行わない (#2)
+
 - `core` は `@types/node` を devDependency に持ち、かつ `core/tsconfig.json` に
   `"types": ["node"]` を書く。`typeRoots` を指定しても自動発見は効かず、`node:*` の import が
   `error TS2591` になって gate の typecheck step（`must_not_match: "error TS[0-9]{4}"`）を落とす。
   `core-domain` にはどちらも置かない — それが「domain は host 能力に触れない」の型側の強制手段 (#1)
-- `node:http` のリクエストハンドラ内で throw すると `uncaughtException` になり、**その接続には
-  応答が返らずクライアントがハングする**（500 にはならない）。transport は必ず例外境界で捕まえて
-  `internal` の `CoreErrorDto` を返す。`server.on("error")` は **`listen()` と同じ同期ターン内**で
-  登録する — `setImmediate` / `setTimeout` を挟むと `EADDRINUSE` がハンドラに届かず
-  `uncaughtException` でプロセスが落ちる（`listen()` の前後は無関係で、ターンが同じかだけが効く） (#1)
-- 境界 DTO は `z.strictObject`。`z.object` でも既定の `z.toJSONSchema` は
-  `additionalProperties: false` を書くため、公開 schema を読んでも差が出ない。差を捕まえるのは
-  `io: "input"` と `io: "output"` の突き合わせだけで、`contractSchemas` から到達しない schema
-  （`CompatibilityResult` / `DegradedInfo`）はこの網の外にある (#46)
-- `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
-  でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
-  `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと
-  なので、応答しないマウント上の root が 1 つあると健全な root の処理がその完了を待たされる
-  — `list()` を呼んで `rootId` で filter する形では防げない (#58)
-- `save` の直列化キーは **`resolve()` した root ディレクトリ**で、chain は module スコープに
-  置く。`rootId` はインスタンスごとのラベルにすぎず、同じディレクトリに別の `rootId` を付けた
-  store を 2 つ作れるので、キーには使えない。これにより `expectedRevision` は
-  **同一 Core プロセス内のすべての store インスタンスにまたがって**守られる。正規化は字句的
-  なので symlink 別名と大小非区別 FS の綴り違いは別キーになる (#60)。プロセス外の writer は
-  revision 比較と rename の間に割り込めるままで、そちらは #59 (#58)
+
 - **一時ファイル + rename の atomic write は対象の inode ごと差し替えるので、保存後の mode は
   一時ファイル側のものになる。** 対象の mode を引き継ぐことと、**それを `open` の第 3 引数で
   与えること**の両方が要る。umask は与えた mode を削るだけなので、狭い mode は生成時に
@@ -285,11 +338,76 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `open` は umask 22 で `0644` を作り、`0600` への `chmod` はその後）。広げる側は書き込み後の
   `chmod` でしか実現できず、そちらは元の mode へ戻すだけなので窓にならない。rename 方式で
   既存ファイルを更新する箇所（Runtime Store など別の永続化を足すときも）すべてに効く (#58)
+
+- **`tsconfig.base.json` に `noUnusedLocals` は無い。** 使われなくなった import を消し忘れても
+  `pnpm -r typecheck` は緑のまま通る。**helper を別ファイルへ切り出す変更は、追加側と削除側を
+  別の完了項目として数え、削除側を `grep -c` で確認する** — 追加だけが着地した状態を gate は
+  捕まえない (#5)
+
+- **vitest は型を消して実行するので、`exactOptionalPropertyTypes` 違反はテストを緑にしたまま
+  `pnpm -r typecheck` だけを落とす。** テストが通ったことは型が通ったことを意味しない。
+  optional 欄を持つ値は「キーごと置かない」条件付きスプレッドで組み立てる —
+  `{ key: undefined }` も、optional 欄を持つ DTO の丸ごとスプレッドも代入できない (#5)
+
+- **branded ID どうしの変換は `as` 1 回では通らない**（2 つの brand は重ならない）。
+  `asset.id as string as RoleId` のように一度 `string` へ広げる。
+  plain string からの brand 付与（`makeAssetRevision` の `as AssetRevision`）は 1 回で通るので、
+  同じ書き方だと思って書くと落ちる (#5)
+
+- **`AgentExecutionRecord` を DTO input へ投影するときは `tryParseAgentExecutionDto` で runtime validation する。**
+  `Timestamp` の静的型は実行時の ISO datetime 検証を代替しない (#66)
+
+- **managed root を読む面は、失敗 detail の `path` をファイル位置へ書き換える** —
+  `core/src/internal/diagnostics.ts` の `withFilePath` が唯一の実装で、asset store と
+  catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
+  「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
+  （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
+
+- **9軸の scope には語彙が2つあり、8個が改名・1個が同名。** on-disk 側は
+  `core-domain/src/assets.ts` の `ASSET_SCOPE_AXES`（`project` / `workflow` / `stage` /
+  `task-type` / `role` / `provider` / `runtime` / `model` / `directory`）、resolver 側は
+  `core-domain/src/resolution/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
+  `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
+  string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
+  `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
+
+- **workflow instance と agent execution の link は双方向で、その鏡像はすでに契約にある** —
+  `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding`
+  （`shared/src/sessions.ts`）が互いを指し、producer 側は `core-domain/src/agent-execution.ts` の
+  `AgentExecutionRecord` が保持している。**Workflow State の「1 file を rename すれば
+  State と link が同時に確定する」という原子性は #7 の範囲でだけ成立する** — #20 が
+  Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
+  idempotency を別に設計する必要がある (#7)
+
+- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
+  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
+  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
+  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
+  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+
+- **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
+  「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
+  required をすべて hard failure にし、その候補を context から落とす。型は optional なので
+  コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
+
+- `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
+  でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
+  `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと
+  なので、応答しないマウント上の root が 1 つあると健全な root の処理がその完了を待たされる
+  — `list()` を呼んで `rootId` で filter する形では防げない (#58)
+
+- **`shared/tests/json-schema.test.ts` の strict object 検査は root の `oneOf` までしか展開せず、
+  nested object property へは降りない。** 境界 DTO が nested object を持つとき
+  （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
+  registry に登録しただけでは検査されないので、nested の `additionalProperties` は
+  個別 assertion で pin する (#7)
+
 - **managed root の同一性判定は `resolve()` による字句正規化までしか見ていない。** symlink 別名と
   大小非区別 FS の綴り違いは別 root として受理され、同じ物理ファイルが 2 つの論理 source として
   list される。duplicate 検査は `rootId` で絞っているので診断も出ない。#4 の override / disable は
   「同じ id を別 root で宣言する」で成立させるので、**この重複は実在しない override 候補として
   #4 の判定に直接混入する**。完全な identity 判定は #60 (#58)
+
 - **`save` が受理する `relativePath` は Windows でも成立する名前に限る**（禁止文字 `< > " | ? *`、
   制御文字、末尾のピリオド/空白、予約デバイス名 `CON` / `PRN` / `AUX` / `NUL` / `CONIN$` /
   `CONOUT$` / `COM1-9` / `COM¹²³` / `LPT1-9` / `LPT¹²³` を、末尾空白を落とした stem の
@@ -298,102 +416,13 @@ local-first Core、およびその Workbench となる VS Code Extension。
   human-readable filesystem なので、手で置かれた名前はそのまま読む。したがって
   「list に出た asset の `relativePath` を、そのまま save に渡し直せるとは限らない」。
   read-modify-write する消費側はこの非対称を前提にすること (#58)
-- **`tsconfig.base.json` に `noUnusedLocals` は無い。** 使われなくなった import を消し忘れても
-  `pnpm -r typecheck` は緑のまま通る。**helper を別ファイルへ切り出す変更は、追加側と削除側を
-  別の完了項目として数え、削除側を `grep -c` で確認する** — 追加だけが着地した状態を gate は
-  捕まえない (#5)
-- **vitest は型を消して実行するので、`exactOptionalPropertyTypes` 違反はテストを緑にしたまま
-  `pnpm -r typecheck` だけを落とす。** テストが通ったことは型が通ったことを意味しない。
-  optional 欄を持つ値は「キーごと置かない」条件付きスプレッドで組み立てる —
-  `{ key: undefined }` も、optional 欄を持つ DTO の丸ごとスプレッドも代入できない (#5)
+
+- **`AgentExecutionRecord.providerId` は、指定された Runtime / Model 定義の `providerId` と一致する必要がある。**
+  各 ID の存在確認だけでは、別 Provider に属する実行先の組合せを通してしまう (#66)
+
 - **`Array.isArray` は union から `readonly string[]` を除去しない。** `AssetFieldValue`
   （`string | readonly string[]`）を絞るのに使うと、false 分岐に配列が残って scalar 側が
   `string` にならない。`typeof value === "string"` で判別する (#5)
-- **branded ID どうしの変換は `as` 1 回では通らない**（2 つの brand は重ならない）。
-  `asset.id as string as RoleId` のように一度 `string` へ広げる。
-  plain string からの brand 付与（`makeAssetRevision` の `as AssetRevision`）は 1 回で通るので、
-  同じ書き方だと思って書くと落ちる (#5)
-- **`AgentExecutionRecord.providerId` は、指定された Runtime / Model 定義の `providerId` と一致する必要がある。**
-  各 ID の存在確認だけでは、別 Provider に属する実行先の組合せを通してしまう (#66)
-- **専用の execution-target catalog は `readFile` の前に `stat().isFile()` を通す。**
-  `readFile` の errno だけでは FIFO・デバイス・ソケットなどの非通常ファイルを読み取り開始前に分類できない (#66)
-- **`AgentExecutionRecord` を DTO input へ投影するときは `tryParseAgentExecutionDto` で runtime validation する。**
-  `Timestamp` の静的型は実行時の ISO datetime 検証を代替しない (#66)
-- **managed root を読む面は、失敗 detail の `path` をファイル位置へ書き換える** —
-  `core/src/internal/diagnostics.ts` の `withFilePath` が唯一の実装で、asset store と
-  catalog loader が共有する。ファイル位置を message に足す形にしない。消費側が
-  「片方は path、片方は散文」を解釈し分ける羽目になる。**複数ファイルにまたがる失敗
-  （別 root の同一 id 重複など）だけは path が1件を指せないので message が担う** (#5)
-- **9軸の scope には語彙が2つあり、8個が改名・1個が同名。** on-disk 側は
-  `core-domain/src/assets.ts` の `ASSET_SCOPE_AXES`（`project` / `workflow` / `stage` /
-  `task-type` / `role` / `provider` / `runtime` / `model` / `directory`）、resolver 側は
-  `core-domain/src/resolution/resolution-context.ts` の `RESOLUTION_AXES`（`projectId` … `modelId` と
-  `directory`）。`task-type` → `taskTypeId` は kebab→camel の非自明な変換。**両者とも
-  string キーなので、対応を取り違えても typecheck も gate も緑のまま通る。**
-  `CanonicalAsset.scope` を candidate へ投影する面（#4）はこの表を明示的に持つこと (#3)
-- **scope resolver の operation は、merge と dependency closure の両方を生き残った issuer だけが適用できる。**
-  exclusive loser と unavailable issuer は target を変更せず、issuer が別 operation の target になって
-  最終的に生き残れない場合も同じ扱いにする。相反する operation の下位 issuer は
-  `operation_conflict` を evaluation と aggregate `conflicts` の両方へ残す。同一 `AssetId` の
-  異なる source layer 間で issuer が自分の ID を明示 target にする override / disable は
-  pair 単位の overlay relation として duplicate identity 判定より先に扱い、複数の lower layer
-  target にはそれぞれ適用する。dependency closure は merge 後・dependency 前の状態から
-  operation 後に再評価し、operation issuer の cycle は conflict として残す (#71)。operation
-  discovery は pre-operation reason を変更せず、unavailable issuer を除いた残りを安定するまで
-  再評価する。operation 後に eligible へ戻った issuer も discovery 対象へ加え、同一パスで
-  複数の operation cycle をすべて conflict として残す。operation cycle graph は最終 dependency
-  closure で available と判定された issuer の action だけから構成し、provisional action だけで
-  cycle を確定しない。依存失敗の分類は scope mismatch の候補ではなく matched candidate を
-  先に判定する。dependency closure は再帰せず canonical SCC と反復処理で評価し、operation
-  cycle を除いた最終状態で依存を再評価する。operation の依存 feedback が安定しない場合は、
-  operation を無視した included issuer を返さず conflict として残す。
-- **mandatory candidate の dependency failure が cycle と別の failure を同時に含む場合は、両方の conflict を残す。**
-  primary cause の選択で `dependency_cycle` を隠さない (#71)
-- **scope resolver の evaluations の同順位は candidate の全 semantic field で決定する。**
-  `AssetId` / revision / sourceId / rank が同じでも、operation、merge、selector、requires などの
-  意味が異なる candidate を入力順へ委ねない (#71)
-- **scope resolver は全 candidate の構造検証を完了し、全 structurally-valid candidate の同一 asset identity（`assetId` + `revision`）に payload（`assetType` / `loadingTier`）の整合性を適用してから、invalid-directory partition と identity map を行う。**
-  構造不正な runtime snapshot の要素を resolver 内で dereference せず、同じ operation tie に
-  参加する全 issuer を conflict evaluation と一致させる。`assetType` と `loadingTier` は
-  `ASSET_TYPES` と `LOADING_TIERS` の membership を runtime で検証する。
-- **workflow instance と agent execution の link は双方向で、その鏡像はすでに契約にある** —
-  `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding`
-  （`shared/src/sessions.ts`）が互いを指し、producer 側は `core-domain/src/agent-execution.ts` の
-  `AgentExecutionRecord` が保持している。**Workflow State の「1 file を rename すれば
-  State と link が同時に確定する」という原子性は #7 の範囲でだけ成立する** — #20 が
-  Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
-  idempotency を別に設計する必要がある (#7)
-- **`shared/tests/json-schema.test.ts` の strict object 検査は root の `oneOf` までしか展開せず、
-  nested object property へは降りない。** 境界 DTO が nested object を持つとき
-  （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
-  registry に登録しただけでは検査されないので、nested の `additionalProperties` は
-  個別 assertion で pin する (#7)
-- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
-  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
-  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
-  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
-  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
-- **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
-  「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
-  required をすべて hard failure にし、その候補を context から落とす。型は optional なので
-  コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
-- **`resolveScope` の候補構造検証と fixed point の capability 評価には、同じ capability context を
-  渡す**（どちらも `evaluateCapabilityDependenciesInValidatedContext` に、冒頭で 1 度だけ
-  `validateCapabilityContext` した結果を渡す）。検証側だけ context 無しで呼ぶと、definition に
-  無い feature を要求する候補が構造検証を通り、fixed point 側が `invalid_request` を返して
-  `throw new Error("Validated capability dependencies must evaluate successfully.")` に落ちる
-  — `CoreFailure` ではなく例外になるので、consumer からは resolver のクラッシュに見える。
-  scope 外の候補も検証対象で、scope が決めるのは「どれが適用されるか」であって
-  「どれが妥当か」ではない (#9)
-- **`dependencyOutcomes` で候補ごとに持たせる失敗種別は、component 単位で union してから
-  各メンバーに配る。** union の対象は 2 つあり、**両方**が要る: メンバー自身が持つ失敗と、
-  いずれか 1 メンバーが component 外へ張るエッジ経由で受け取る失敗。conflict は mandatory
-  候補についてしか materialize されず、per-edge の伝播は component 内部エッジを飛ばすため、
-  どちらか一方でも落とすと SCC 内の非 mandatory 候補側にしか無い失敗が mandatory 候補へ
-  伝わらず、**診断そのものが結果から消える**（cycle と dependency_failure だけが残り、原因の
-  capability 名が出ない）。依存先 component は先に materialize され自身の到達を閉じているので、
-  この 1 パスが不動点になる。capability 側は `componentFailedCapabilities`、requirement 側は
-  `componentHasNonCycleFailure` がこの役目を持つ (#9)
 
 ### Invariants / identity keys
 
@@ -406,18 +435,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
   代表を選ぶ）が安全なのはこの性質のためで、revision を mtime や uuid に変えると
   **body 内容の暗黙の後勝ちに化ける**。revision の作り方を変えるときは resolver の
   dedup を同じ変更で見直すこと (#3)
-- **Asset Type 契約違反の落とし方は「候補 1 枚で判定できるか」で決まる。** 1 枚で判定できる違反
-  （その Type が許さない operation / exclusive merge）は `validateCandidate` に置き
-  `invalid_request` で snapshot 全体を失敗させる。2 候補以上を突き合わせて初めて判る違反
-  （cross-Type の override / disable / exclusive group）は候補単位の reason +
-  `asset_type_conflict` にし、target は変更しない。この境界は既存の構造検証と意味的衝突の
-  分かれ方と同じで、**新しい Type 規則を足すときも同じ問いで置き場所を決める** (#75)
-- **cross-Type の判定は「関係が表現可能か」なので、突き合わせる候補を絞り込む前に置く。**
-  operation の cross-Type 判定は `matchedById` が持つ target id の全候補に対して行い、
-  そこから適用可能な target へ絞る。要求関係 (`requires`)・mandatory 保護・target 個数・
-  適用可能性（exclusive merge に負けた候補など）はいずれも「関係が表現可能である」ことを
-  前提にした規則なので、絞り込み後に判定すると cross-Type 関係が
-  `operation_conflict` や無検出に化ける (#75)
+
 - **Type 固有の意味論は `core-domain/src/resolution/asset-type-contracts.ts` の
   `Record<AssetType, AssetTypeContract>` にだけ置く。** 網羅はコンパイル時の義務であり
   runtime 検査を持たない。contract 自身は `assetType` 欄を持たない — Record のキーが唯一の
@@ -426,43 +444,21 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `core-domain/tests/asset-type-contracts.test.ts` の source scan が機械判定する
   （**走査対象は `scope-resolver.ts` 1 ファイルのみ** — `workflow.ts` や `catalog.ts` には
   正当な type 比較がある） (#75)
+
 - **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
   検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
   `metadata.*` は `isLowerKebabToken` を満たす任意キーを受理する開いた名前空間で、許可値集合が
   まだ存在しないため。保存欄が決まってから有効化する (#87) (#75)
-- **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
-  instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
-  名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
-  `instance_workflow_mismatch` を返す。schema は opaque 値の一意性を検査できないので、
-  独自に発番する producer 側がこの一意性を負う (#7)
-- **State store は execution instance id を「受け取らず」「組み立てる」。** 注入口は乱数部分だけ
-  (`newInstanceSuffix`) で、`instance-<suffix>` の合成と検査は store が持つ。契約が文字集合を
-  縛らないため、id を丸ごと受け取る形は「契約上妥当だがファイル名として使えない値」を
-  無限に生む（空白・接頭辞・デバイス名・大小文字衝突・長さ・Unicode 正規化で 5 ラウンド分の
-  指摘が出た）。**検査は正規化ではなく拒否**で行う — 小文字化や NFC 変換で畳むと、相異なる
-  id が 1 ファイルに写像されて一意性が壊れる (#7)
-- **ファイル名の安全性は「明示的な英数字集合」で決める — 禁止則の積み上げでは閉じない。**
-  大文字禁止 + NFC 必須でも σ と ς は同じ文字に case-fold するため、両方が 1 ファイルを指す。
-  case pair も正規化形も持たない集合 (`[a-z0-9-]`) だけが次の一手を許さない (#7)
-- **Core が作る階層だけを検査対象にする。** state directory とその配下は store の所有物なので
-  実ディレクトリであることを要求できるが、設定されたルートより上の祖先は運用者のもの。
-  ルートから全祖先を辿る検査は OS 提供の symlink (macOS の `/var`) を弾き、そのために
-  パスを両セパレータで分割する必要が生じて、backslash を含む POSIX ディレクトリ名を壊す (#7)
-- **exclusive winner は「他のどの候補にも負けない候補が一意ならそれ、いなければ conflict」で
-  選ぶ。候補を段階的に脱落させる形にしない。** directory 特則（両者が directory 一致なら
-  priority → 最深 path → specificity）と一般 key（specificity → 軸 precedence → depth →
-  source layer）は混在集合に対して非推移で、先に脱落させると **自分では勝てない候補を足す
-  だけで勝者が変わる** — `/repo`+role+model が `/repo/src/deep` に深さで脱落し、勝てるはず
-  だった相手の role+model が勝つ。directory 軸に一致したかは `scopePrecedence` が directory の
-  rank を含むかで判定する。`directoryDepth > 0` では root 一致 (depth 0) と directory selector
-  無しを区別できない (#76)
-- **`selectUnbeaten` の空集合は「勝者不在」であって「相反」ではない。** operation の issuer
-  選択では、rank cycle で空になっても全 action が `disable` なら conflict にせず output 順で
-  coalesce する — 相反しない disable を conflict にすると target が有効なまま残る。
-  `exclusive_tie` の explanation は同順位と cycle の両方を指す文言にする (#76)
+
 - **解決結果で「context に載るか」を表す信号は `CandidateReason.kind` 1 つしかない。**
   `resolveScope` は候補ごとに reason を 1 個返し、消費側は `kind === "included"` で絞る。
   したがって **degraded は `kind: "included"` のまま degradation 欄を載せて返す** —
   `kind: "unavailable"` にすると optional 依存の欠落が候補を黙って context から消し、
   「degraded は載るが能力が落ちた状態」を表現できなくなる。`availability: "unavailable"` を
   作るのは required capability の hard failure だけ (#9)
+
+- **`ExecutionInstanceId` は全 Definition を通じて一意（#50 裁定2）。** State のファイル名が
+  instance id 単独 (`workflows/<id>.json`) なのはこの一意性に依る。同居する `workflowId` は
+  名前空間ではなく**所属不一致の検出用**で、`readStoredState` が突き合わせて
+  `instance_workflow_mismatch` を返す。schema は opaque 値の一意性を検査できないので、
+  独自に発番する producer 側がこの一意性を負う (#7)
