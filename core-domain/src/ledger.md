@@ -8,7 +8,3 @@
   `disable` / `override` も v1 では拒否される。**#4 がこれらの directive を導入するときは
   asset schema version（`schema-version:`）の bump が要る** — v1 parser は未知 version を
   `incompatible_contract` で拒否し、暗黙の migration を行わない (#2)
-
-- **`Array.isArray` は union から `readonly string[]` を除去しない。** `AssetFieldValue`
-  （`string | readonly string[]`）を絞るのに使うと、false 分岐に配列が残って scalar 側が
-  `string` にならない。`typeof value === "string"` で判別する (#5)

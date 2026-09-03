@@ -267,7 +267,13 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
 まさに注意を必要とする編集だからである。同様に、未着手の issue が発火点になる事実
 （「#4 が配線するとき」「保存欄が決まってから」）は、その issue が触る箱で数える。
 
-箱の一覧:
+**ただし「公開 re-export されている」だけでは箱をまたがない。** 判定は 2 条件の連言で、
+**エントリが caller に宛てた注意であること**（caller が果たす義務・caller が前提にすべき
+挙動）と、**違反が黙って通ること**（typecheck も gate も緑のまま誤った値・誤った状態に
+なる）の両方が要る。箱が自分のコードをどう書くかを述べたエントリは、そこに出てくる型が
+すべて公開 re-export でも箱に残る — 読者は実装者であって caller ではない。逆に、違反が
+必ずビルドを落とすなら root どころか Ledger に載せる必要がない（`project-ledger.md` の
+entry 条件）。
 
 - `core/src/ledger.md`
 - `core/src/assets/ledger.md`
@@ -405,6 +411,10 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
 
 - **`AgentExecutionRecord.providerId` は、指定された Runtime / Model 定義の `providerId` と一致する必要がある。**
   各 ID の存在確認だけでは、別 Provider に属する実行先の組合せを通してしまう (#66)
+
+- **`Array.isArray` は union から `readonly string[]` を除去しない。** `AssetFieldValue`
+  （`string | readonly string[]`）を絞るのに使うと、false 分岐に配列が残って scalar 側が
+  `string` にならない。`typeof value === "string"` で判別する (#5)
 
 ### Invariants / identity keys
 
