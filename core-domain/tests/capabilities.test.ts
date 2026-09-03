@@ -236,15 +236,35 @@ describe("capability catalog and dependency semantics", () => {
     });
   });
 
-  it("C17 rejects a fallback that repeats its primary reference", () => {
+  it.each([
+    { name: "repeats its primary reference", features: ["read"] },
+    { name: "requires more features than its primary", features: ["read", "write"] },
+  ])("C17 rejects a same-capability fallback that $name", ({ features }) => {
     const catalog = context([definition("filesystem", ["read", "write"])], []);
     const result = evaluateCapabilityDependencies([
       { strength: "required", capability: reference("filesystem", ["read"]) },
-      { strength: "fallback", capability: reference("filesystem", ["read"]), fallbackFor: reference("filesystem", ["read"]) },
+      { strength: "fallback", capability: reference("filesystem", features), fallbackFor: reference("filesystem", ["read"]) },
     ], catalog);
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("self_fallback");
+    if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("redundant_fallback");
+  });
+
+  it("C19 accepts a fallback on a disjoint feature set of the same capability", () => {
+    const catalog = context([definition("filesystem", ["read", "write"])], [offer("filesystem", ["write"])]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["read"]) },
+      { strength: "fallback", capability: reference("filesystem", ["write"]), fallbackFor: reference("filesystem", ["read"]) },
+    ], catalog));
+
+    expect(result).toMatchObject({
+      ok: true,
+      degradedCapabilities: [{
+        capabilityId: capabilityId("filesystem"),
+        strength: "required",
+        fallbackCapabilityId: capabilityId("filesystem"),
+      }],
+    });
   });
 
   it("C18 accepts a fallback on a weaker feature set of the same capability", () => {

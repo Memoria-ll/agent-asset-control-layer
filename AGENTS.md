@@ -109,7 +109,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
   consumer から到達できない。package 内のテストは module を直接 import できる（`shared` と
   同じ扱い）ので、**テストが緑でも re-export の欠落は見えない**。公開 API を足す変更は同じ
   変更で `index.ts` に re-export を足し、その API を使うテストは `../src/index.ts` から
-  import して欠落を落とす。package 内でしか使わないものは module でも `export` しない (#94)
+  import して欠落を落とす。module の `export` は package 内の module 間で使うためにも張る
+  （`ordering.ts` の `codeUnitCompare` のように index に載せないものがある）ので、
+  `export` を落とすのは同一ファイル内でしか使わないものだけ (#94)
 
 ### レイヤ / seam mapping
 

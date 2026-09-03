@@ -325,14 +325,16 @@ const normalizeDependencies = (
       checkDeclaredFeatures(fallbackFor, [...path, "fallbackFor", "features"]);
       if (capability === undefined || fallbackFor === undefined) continue;
       const fallbackKey = referenceKey(fallbackFor);
-      if (referenceKey(capability) === fallbackKey) {
-        // Availability is decided by one predicate over the reference, so a fallback
-        // repeating its primary verbatim is unavailable exactly when the primary is.
-        // A weaker reference to the same capability keeps a different key and stays legal.
+      if (capability.capabilityId === fallbackFor.capabilityId
+        && featureSetContains(capability.features ?? [], fallbackFor.features ?? [])) {
+        // Availability is one predicate over an offer of that capability, so a fallback
+        // demanding every feature its primary demands is unavailable whenever the primary
+        // is — and satisfied only where the primary already was.  A weaker or disjoint
+        // feature set on the same capability names a genuinely different offer and stays legal.
         details.push(detail(
           [...path, "capability"],
-          "self_fallback",
-          "A fallback must not repeat the capability reference it falls back for.",
+          "redundant_fallback",
+          "A fallback on the same capability must not require every feature its primary requires.",
         ));
       }
       if (fallbackReferences.has(fallbackKey)) {
@@ -430,10 +432,33 @@ export const evaluateCapabilityDependencies = (
     return dependencyResult;
   }
   if (!contextResult.ok) return contextResult;
+  return evaluateNormalizedDependencies(dependencyResult.value, contextResult.value);
+};
 
-  const primaryDependencies = dependencyResult.value.filter((dependency): dependency is Extract<CapabilityDependency, { strength: PrimaryCapabilityStrength }> => dependency.strength !== "fallback");
+/**
+ * Evaluate dependencies against a context that `validateCapabilityContext` has already
+ * returned.  A caller resolving many dependency sets validates the context once and comes
+ * here, instead of paying a full catalog and offer scan per set through the entry point
+ * above.  Package-internal: the entry point is what an outside caller has.
+ */
+export const evaluateCapabilityDependenciesInValidatedContext = (
+  dependencies: readonly CapabilityDependency[],
+  validatedContext: CapabilityResolutionContext | undefined,
+): AssetResult<CapabilityDependencyOutcome> => {
+  const context = validatedContext ?? emptyContext();
+  const dependencyResult = normalizeDependencies(dependencies, context.catalog);
+  return dependencyResult.ok
+    ? evaluateNormalizedDependencies(dependencyResult.value, context)
+    : dependencyResult;
+};
+
+const evaluateNormalizedDependencies = (
+  dependencies: readonly CapabilityDependency[],
+  context: CapabilityResolutionContext,
+): AssetResult<CapabilityDependencyOutcome> => {
+  const primaryDependencies = dependencies.filter((dependency): dependency is Extract<CapabilityDependency, { strength: PrimaryCapabilityStrength }> => dependency.strength !== "fallback");
   const fallbackByPrimary = new Map<string, Extract<CapabilityDependency, { strength: "fallback" }>>();
-  for (const dependency of dependencyResult.value) {
+  for (const dependency of dependencies) {
     if (dependency.strength === "fallback") fallbackByPrimary.set(referenceKey(dependency.fallbackFor), dependency);
   }
 
@@ -442,10 +467,10 @@ export const evaluateCapabilityDependencies = (
   const degradations: CapabilityDegradation[] = [];
   const degradationReasons: Array<{ readonly capabilityId: CapabilityId; readonly text: string }> = [];
   for (const dependency of primaryDependencies) {
-    if (capabilityAvailable(dependency.capability, contextResult.value)) continue;
+    if (capabilityAvailable(dependency.capability, context)) continue;
 
     const fallback = fallbackByPrimary.get(referenceKey(dependency.capability));
-    if (fallback !== undefined && capabilityAvailable(fallback.capability, contextResult.value)) {
+    if (fallback !== undefined && capabilityAvailable(fallback.capability, context)) {
       degradations.push({
         capabilityId: dependency.capability.capabilityId,
         strength: dependency.strength,

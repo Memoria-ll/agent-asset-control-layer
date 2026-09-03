@@ -13,7 +13,7 @@ import type {
 import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
 import {
-  evaluateCapabilityDependencies,
+  evaluateCapabilityDependenciesInValidatedContext,
   validateCapabilityContext,
 } from "./capabilities.ts";
 import type {
@@ -606,7 +606,7 @@ const validateCandidate = (
     // a dependency naming a feature its definition does not declare is invalid
     // configuration of the snapshot, and scope decides which candidates apply — not
     // which ones are well-formed.
-    const capabilityResult = evaluateCapabilityDependencies(
+    const capabilityResult = evaluateCapabilityDependenciesInValidatedContext(
       capabilityDependencies as unknown as readonly CapabilityDependency[],
       capabilityContext,
     );
@@ -1137,13 +1137,12 @@ const resolveScopeFixedPoint = (
 
   // Neither a candidate's capability dependencies nor the capability context change
   // across operation passes, so each outcome is settled once here rather than per pass —
-  // otherwise every pass re-normalizes the dependencies and re-scans the whole catalog
-  // and offer list for every candidate.
+  // otherwise every pass re-normalizes the dependencies of every candidate.
   const capabilityOutcomeByState = new Map<CandidateState, CapabilityDependencyOutcome>();
   for (const state of baseIncluded) {
     const dependencies = state.candidate.rule.capabilityDependencies;
     if (dependencies === undefined) continue;
-    const capabilityResult = evaluateCapabilityDependencies(dependencies, capabilityContext);
+    const capabilityResult = evaluateCapabilityDependenciesInValidatedContext(dependencies, capabilityContext);
     // Structural validation above ran with this same catalog, so a failure here would
     // mean the two disagree rather than that the snapshot is invalid.
     if (!capabilityResult.ok) throw new Error("Validated capability dependencies must evaluate successfully.");
