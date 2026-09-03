@@ -276,11 +276,32 @@ export const featureSetContains = (
 
 const normalizeDependencies = (
   dependencies: unknown,
+  catalog: CapabilityCatalog | undefined,
 ): AssetResult<readonly CapabilityDependency[]> => {
   const details: CoreErrorDetail[] = [];
   if (!Array.isArray(dependencies)) {
     return invalidCapabilityInput([detail(["dependencies"], "invalid_dependencies", "Capability dependencies must be an array.")]);
   }
+
+  // A feature the matching definition does not declare can never be offered either —
+  // validateCapabilityContext rejects such an offer — so the requirement is unsatisfiable
+  // by construction.  Reporting it as a runtime absence would present invalid
+  // configuration as a missing capability, hiding a misspelled feature id.
+  const checkDeclaredFeatures = (
+    reference: CapabilityReference | undefined,
+    path: readonly string[],
+  ): void => {
+    if (catalog === undefined || reference?.features === undefined) return;
+    // A capability absent from the catalog stays a runtime absence: the catalog carries
+    // what this environment declares, not what a dependency is allowed to ask for.
+    const definition = catalog.get(reference.capabilityId);
+    if (definition === undefined || featureSetContains(definition.features, reference.features)) return;
+    details.push(detail(
+      path,
+      "unknown_capability_feature",
+      `Capability "${reference.capabilityId}" does not declare the requested features.`,
+    ));
+  };
 
   const normalized: CapabilityDependency[] = [];
   const primaryReferences = new Set<string>();
@@ -292,6 +313,7 @@ const normalizeDependencies = (
       continue;
     }
     const capability = normalizeReference(dependencyValue.capability, [...path, "capability"], details);
+    checkDeclaredFeatures(capability, [...path, "capability", "features"]);
     const strength = dependencyValue.strength;
     if (strength !== "required" && strength !== "optional" && strength !== "preferred" && strength !== "fallback") {
       details.push(detail([...path, "strength"], "invalid_dependency_strength", "The capability dependency strength is invalid."));
@@ -300,6 +322,7 @@ const normalizeDependencies = (
     const hasFallbackFor = Object.hasOwn(dependencyValue, "fallbackFor");
     if (strength === "fallback") {
       const fallbackFor = normalizeReference(dependencyValue.fallbackFor, [...path, "fallbackFor"], details);
+      checkDeclaredFeatures(fallbackFor, [...path, "fallbackFor", "features"]);
       if (capability === undefined || fallbackFor === undefined) continue;
       const fallbackKey = referenceKey(fallbackFor);
       if (fallbackReferences.has(fallbackKey)) {
@@ -368,7 +391,7 @@ const capabilityAvailable = (
     && featureSetContains(offer.features, reference.features ?? []));
 };
 
-export const capabilityReasonText = (
+const capabilityReasonText = (
   capabilityId: CapabilityId,
   strength: CapabilityStrength,
   fallbackCapabilityId?: CapabilityId,
@@ -384,8 +407,11 @@ export const evaluateCapabilityDependencies = (
   dependencies: readonly CapabilityDependency[],
   context?: CapabilityResolutionContext,
 ): AssetResult<CapabilityDependencyOutcome> => {
-  const dependencyResult = normalizeDependencies(dependencies);
   const contextResult = context === undefined ? { ok: true as const, value: emptyContext() } : validateCapabilityContext(context);
+  const dependencyResult = normalizeDependencies(
+    dependencies,
+    contextResult.ok ? contextResult.value.catalog : undefined,
+  );
   if (!dependencyResult.ok) {
     if (!contextResult.ok) return invalidCapabilityInput([
       ...(dependencyResult.failure.details ?? []),

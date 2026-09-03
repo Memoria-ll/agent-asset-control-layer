@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
-import type { AssetResult } from "../src/failures.ts";
+// The capability API is imported through the package entry point so that a member
+// reachable inside the package but absent from `src/index.ts` — and therefore
+// unreachable for `core` and `vscode-extension` — fails here.
 import {
   buildCapabilityCatalog,
   evaluateCapabilityDependencies,
   featureSetContains,
   validateCapabilityContext,
-} from "../src/capabilities.ts";
+} from "../src/index.ts";
 import type {
+  AssetResult,
   CapabilityDependency,
   CapabilityFeatureId,
   CapabilityId,
   CapabilityOffer,
   CapabilityReference,
-} from "../src/capabilities.ts";
+} from "../src/index.ts";
 
 const capabilityId = (value: string): CapabilityId => value as CapabilityId;
 const featureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
@@ -179,5 +182,27 @@ describe("capability catalog and dependency semantics", () => {
       "workspace",
     ]);
     expect(featureSetContains([featureId("read"), featureId("write")], [featureId("read")])).toBe(true);
+  });
+
+  it("C13 rejects a requirement whose feature the definition does not declare", () => {
+    const catalog = context([definition("filesystem", ["read", "write"])], [offer("filesystem", ["read"])]);
+    const result = evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["writ"]) },
+    ], catalog);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => item.code)).toContain("unknown_capability_feature");
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual(["dependencies", "0", "capability", "features"]);
+    }
+  });
+
+  it("C14 keeps a capability absent from the catalog a runtime absence", () => {
+    const catalog = context([definition("workspace")], [offer("workspace")]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["read"]) },
+    ], catalog));
+
+    expect(result).toMatchObject({ ok: false, failedCapabilities: [capabilityId("filesystem")] });
   });
 });

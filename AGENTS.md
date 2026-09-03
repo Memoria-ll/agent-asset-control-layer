@@ -104,6 +104,12 @@ local-first Core、およびその Workbench となる VS Code Extension。
   変更は `save-schema-check` を通す。
 - `core/` 内部の domain model、`vscode-extension/` の view model / UI state は内部配線。
   `core` の内部 domain model と `shared` の公開 DTO は分離してよい。
+- **`core-domain` の公開面は `core-domain/src/index.ts` の re-export が正。** consumer は
+  `@aacl/core-domain` からしか解決しないため、module に `export` を足しただけの型・関数は
+  consumer から到達できない。package 内のテストは module を直接 import できる（`shared` と
+  同じ扱い）ので、**テストが緑でも re-export の欠落は見えない**。公開 API を足す変更は同じ
+  変更で `index.ts` に re-export を足し、その API を使うテストは `../src/index.ts` から
+  import して欠落を落とす。package 内でしか使わないものは module でも `export` しない (#94)
 
 ### レイヤ / seam mapping
 

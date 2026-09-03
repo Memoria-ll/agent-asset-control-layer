@@ -1122,17 +1122,22 @@ const resolveScopeFixedPoint = (
     readonly capabilityOutcome?: CapabilityDependencyOutcome;
   };
 
+  // Neither a candidate's capability dependencies nor the capability context change
+  // across operation passes, so each outcome is settled once here rather than per pass —
+  // otherwise every pass re-normalizes the dependencies and re-scans the whole catalog
+  // and offer list for every candidate.
+  const capabilityOutcomeByState = new Map<CandidateState, CapabilityDependencyOutcome>();
+  for (const state of baseIncluded) {
+    const dependencies = state.candidate.rule.capabilityDependencies;
+    if (dependencies === undefined) continue;
+    const capabilityResult = evaluateCapabilityDependencies(dependencies, input.capabilityContext);
+    if (!capabilityResult.ok) throw new Error("Validated capability dependencies must evaluate successfully.");
+    capabilityOutcomeByState.set(state, capabilityResult.value);
+  }
+
   const dependencyOutcomes = (
     statuses: ReadonlyMap<CandidateState, FixedStatus>,
   ): ReadonlyMap<CandidateState, DependencyOutcome> => {
-    const capabilityOutcomeFor = (state: CandidateState): CapabilityDependencyOutcome | undefined => {
-      const dependencies = state.candidate.rule.capabilityDependencies;
-      if (dependencies === undefined) return undefined;
-      const result = evaluateCapabilityDependencies(dependencies, input.capabilityContext);
-      if (!result.ok) throw new Error("Validated capability dependencies must evaluate successfully.");
-      return result.value;
-    };
-
     const dependencyOutcomeFromCapability = (outcome: CapabilityDependencyOutcome): DependencyOutcome =>
       outcome.ok
         ? {
@@ -1217,7 +1222,7 @@ const resolveScopeFixedPoint = (
           edges.push({ requiredId, target: targets[0]! });
         }
       }
-      const capabilityOutcome = capabilityOutcomeFor(state);
+      const capabilityOutcome = capabilityOutcomeByState.get(state);
       dependencyNodes.set(state, {
         edges,
         directFailures,

@@ -54,6 +54,25 @@ export type {
 } from "./asset-type-contracts.ts";
 
 export {
+  buildCapabilityCatalog,
+  evaluateCapabilityDependencies,
+  featureSetContains,
+  validateCapabilityContext,
+} from "./capabilities.ts";
+export type {
+  CapabilityCatalog,
+  CapabilityDefinition,
+  CapabilityDegradation,
+  CapabilityDependency,
+  CapabilityDependencyOutcome,
+  CapabilityFeatureId,
+  CapabilityId,
+  CapabilityOffer,
+  CapabilityReference,
+  CapabilityResolutionContext,
+} from "./capabilities.ts";
+
+export {
   resolveScope,
   toResolutionReasonDto,
   toResolutionConflictDto,
