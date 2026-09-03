@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 
@@ -7,13 +8,24 @@ export type RegularFileRead =
   | { readonly status: "unavailable"; readonly error: unknown }
   | { readonly status: "ok"; readonly contents: string; readonly mode: number };
 
+export type RegularFileReadOptions = {
+  readonly beforeOpen?: () => void | Promise<void>;
+};
+
+const readFlags = process.platform === "win32"
+  ? constants.O_RDONLY
+  : constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+
 const errorCode = (error: unknown): string | undefined => {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
   return typeof error.code === "string" ? error.code : undefined;
 };
 
 /** Inspect the path before reading so FIFOs and other special files never block a caller. */
-export const readRegularUtf8 = async (filePath: string): Promise<RegularFileRead> => {
+export const readRegularUtf8 = async (
+  filePath: string,
+  options: RegularFileReadOptions = {},
+): Promise<RegularFileRead> => {
   let linkInfo;
   try {
     linkInfo = await lstat(filePath);
@@ -27,7 +39,8 @@ export const readRegularUtf8 = async (filePath: string): Promise<RegularFileRead
 
   let handle: FileHandle | undefined;
   try {
-    handle = await open(filePath, "r");
+    await options.beforeOpen?.();
+    handle = await open(filePath, readFlags);
     const fileInfo = await handle.stat();
     if (!fileInfo.isFile()) return { status: "not_regular" };
     if (linkInfo.dev !== fileInfo.dev || linkInfo.ino !== fileInfo.ino) {
@@ -39,6 +52,7 @@ export const readRegularUtf8 = async (filePath: string): Promise<RegularFileRead
       mode: fileInfo.mode,
     };
   } catch (error) {
+    if (errorCode(error) === "ELOOP") return { status: "not_regular" };
     return errorCode(error) === "ENOENT"
       ? { status: "missing" }
       : { status: "unavailable", error };

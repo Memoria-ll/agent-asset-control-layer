@@ -1,5 +1,5 @@
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -162,7 +162,7 @@ describe("Project Registry reconciliation", () => {
     expect(result.failure.details?.[0]?.code).toBe("invalid_registry_file");
   });
 
-  it("fails closed while another process owns the Registry lock", async () => {
+  it("fails closed when the Registry lock path is not a regular file", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
     scratch.push(root);
     const registryPath = join(root, "project-registry.json");
@@ -173,7 +173,7 @@ describe("Project Registry reconciliation", () => {
     }).reconcile();
 
     expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("Expected a lock timeout");
+    if (result.ok) throw new Error("Expected a lock path failure");
     expect(result.failure.details?.[0]?.code).toBe("lock_unavailable");
   });
 
@@ -211,10 +211,11 @@ describe("Project Registry reconciliation", () => {
       });
       crashed.kill("SIGKILL");
       await waitForRegistryExit(crashed);
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 2300));
+      const lockInfo = await lstat(`${registryPath}.lock`);
+      expect(lockInfo.isFile()).toBe(true);
 
       const recovered = await createProjectRegistry(registryPath, {
-        lock: { timeoutMs: 10_000, pollMs: 20, staleMs: 2_000, updateMs: 1_000 },
+        lock: { timeoutMs: 2_000, pollMs: 5 },
       }).observe(recoveredWorkspace, recoveredWorkspace, createProjectMarkerDto("project-recovered").projectId);
 
       expect(recovered).toEqual({ ok: true, value: { status: "bound" } });
@@ -234,6 +235,74 @@ describe("Project Registry reconciliation", () => {
       }
     }
   }, 15_000);
+
+  it("times out while a live owner holds the native lock beyond the polling window", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const heldWorkspace = join(root, "held");
+    const waitingWorkspace = join(root, "waiting");
+    await mkdir(heldWorkspace);
+    await mkdir(waitingWorkspace);
+    const owner = spawnRegistryWorker(registryPath, heldWorkspace, "project-held", 0, true);
+
+    try {
+      if (owner.stdout === null) throw new Error("Registry worker stdout is unavailable");
+      await new Promise<void>((resolveReady, rejectReady) => {
+        let output = "";
+        const timeout = setTimeout(() => rejectReady(new Error("Registry worker did not acquire the lock")), 5000);
+        owner.stdout?.setEncoding("utf8");
+        owner.stdout?.on("data", (chunk: string) => {
+          output += chunk;
+          if (output.includes("locked\n")) {
+            clearTimeout(timeout);
+            resolveReady();
+          }
+        });
+        owner.once("error", (error) => {
+          clearTimeout(timeout);
+          rejectReady(error);
+        });
+        owner.once("exit", () => {
+          clearTimeout(timeout);
+          rejectReady(new Error("Registry worker exited before holding the lock"));
+        });
+      });
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_200));
+
+      const waiting = await createProjectRegistry(registryPath, {
+        lock: { timeoutMs: 75, pollMs: 5 },
+      }).observe(waitingWorkspace, waitingWorkspace, createProjectMarkerDto("project-waiting").projectId);
+
+      expect(waiting.ok).toBe(false);
+      if (waiting.ok) throw new Error("Expected a live-owner lock timeout");
+      expect(waiting.failure.details?.[0]?.code).toBe("lock_unavailable");
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) {
+        owner.kill("SIGKILL");
+        await waitForRegistryExit(owner);
+      }
+    }
+  }, 10_000);
+
+  it("keeps the permanent Registry lock file after a successful release", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+
+    const result = await createProjectRegistry(registryPath).observe(
+      workspace,
+      workspace,
+      createProjectMarkerDto("project-permanent-lock").projectId,
+    );
+
+    expect(result).toEqual({ ok: true, value: { status: "bound" } });
+    const lockInfo = await lstat(`${registryPath}.lock`);
+    expect(lockInfo.isFile()).toBe(true);
+    expect(await readFile(`${registryPath}.lock`, "utf8")).toBe("");
+  });
 
   it("preserves both Registry updates made by separate Core processes", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
@@ -445,10 +514,9 @@ describe("Project Registry reconciliation", () => {
     expect(initial).toEqual({ ok: true, value: { status: "bound" } });
 
     const result = await createProjectRegistry(registryPath, {
-      lock: { timeoutMs: 5_000, pollMs: 5, staleMs: 2_000, updateMs: 1_000 },
+      lock: { timeoutMs: 5_000, pollMs: 5 },
       beforeRename: async () => {
         await rm(`${registryPath}.lock`, { recursive: true, force: true });
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_500));
       },
     }).observe(secondWorkspace, secondWorkspace, secondProjectId);
 
@@ -465,6 +533,149 @@ describe("Project Registry reconciliation", () => {
       state: "bound",
     }]);
   }, 10_000);
+
+  it("does not persist after the Registry lock is replaced before the final identity guard", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const firstWorkspace = join(root, "first");
+    const secondWorkspace = join(root, "second");
+    await mkdir(firstWorkspace);
+    await mkdir(secondWorkspace);
+    const firstProjectId = createProjectMarkerDto("project-first").projectId;
+    const secondProjectId = createProjectMarkerDto("project-second").projectId;
+
+    const initial = await createProjectRegistry(registryPath).observe(firstWorkspace, firstWorkspace, firstProjectId);
+    expect(initial).toEqual({ ok: true, value: { status: "bound" } });
+
+    const result = await createProjectRegistry(registryPath, {
+      lock: { timeoutMs: 5_000, pollMs: 5 },
+      beforeRename: async () => {
+        await rm(`${registryPath}.lock`, { recursive: true, force: true });
+        await mkdir(`${registryPath}.lock`);
+      },
+    }).observe(secondWorkspace, secondWorkspace, secondProjectId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected a replaced lock failure");
+    expect(result.failure.details?.[0]?.code).toBe("lock_unavailable");
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as {
+      entries: Array<{ workspacePath: string; projectId: string; state: string }>;
+    };
+    expect(document.entries).toEqual([{
+      workspacePath: firstWorkspace,
+      projectRoot: firstWorkspace,
+      projectId: "project-first",
+      state: "bound",
+    }]);
+    const replacementLock = await lstat(`${registryPath}.lock`);
+    expect(replacementLock.isDirectory()).toBe(true);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_250));
+    const afterDelay = await lstat(`${registryPath}.lock`);
+    expect(afterDelay.isDirectory()).toBe(true);
+    expect(afterDelay.dev).toBe(replacementLock.dev);
+    expect(afterDelay.ino).toBe(replacementLock.ino);
+    expect(afterDelay.mtimeMs).toBe(replacementLock.mtimeMs);
+  });
+
+  it("releases the native lock after the critical section fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+
+    const result = await createProjectRegistry(registryPath, {
+      beforeWrite: async () => {
+        throw new Error("critical section failure");
+      },
+    }).observe(workspace, workspace, createProjectMarkerDto("project-native-release").projectId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected the critical section to fail");
+    expect(result.failure.details?.[0]?.code).toBe("lock_unavailable");
+
+    const followUp = await createProjectRegistry(registryPath).observe(
+      workspace,
+      workspace,
+      createProjectMarkerDto("project-native-release-follow-up").projectId,
+    );
+    expect(followUp).toEqual({ ok: true, value: { status: "bound" } });
+    expect((await lstat(`${registryPath}.lock`)).isFile()).toBe(true);
+  });
+
+  it("keeps the permanent lock file when an out-of-protocol replacement is detected", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+
+    const result = await createProjectRegistry(registryPath, {
+      beforeRename: async () => {
+        await rm(`${registryPath}.lock`, { force: true });
+        await writeFile(`${registryPath}.lock`, "replacement", "utf8");
+      },
+    }).observe(workspace, workspace, createProjectMarkerDto("project-native-replacement").projectId);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected the replacement to compromise the lock");
+    expect(result.failure.details?.[0]?.code).toBe("lock_unavailable");
+    const replacement = await lstat(`${registryPath}.lock`);
+    expect(replacement.isFile()).toBe(true);
+    expect(await readFile(`${registryPath}.lock`, "utf8")).toBe("replacement");
+  });
+
+  it("does not delete an out-of-protocol replacement at process exit", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const registryPath = join(root, "project-registry.json");
+    const lockPath = `${registryPath}.lock`;
+    const fileLockModuleUrl = new URL("../src/internal/file-lock.ts", import.meta.url).href;
+    const childScript = [
+      "const [fileLockModuleUrl, lockPath] = process.argv.slice(1);",
+      "const { withFileLock } = await import(fileLockModuleUrl);",
+      "const { rm, mkdir } = await import(\"node:fs/promises\");",
+      "await withFileLock(lockPath, async () => {",
+      "  await rm(lockPath, { recursive: true, force: true });",
+      "  await mkdir(lockPath);",
+      "  process.exit(0);",
+      "});",
+    ].join("\n");
+    const child = spawn(process.execPath, [
+      "--input-type=module",
+      "-e",
+      childScript,
+      fileLockModuleUrl,
+      lockPath,
+    ], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let errorOutput = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => { errorOutput += chunk; });
+    const exitCode = await new Promise<number | null>((resolveExit, rejectExit) => {
+      child.once("error", rejectExit);
+      child.once("exit", (code) => resolveExit(code));
+    });
+
+    expect(exitCode, errorOutput).toBe(0);
+    const replacementLock = await lstat(lockPath);
+    expect(replacementLock.isDirectory()).toBe(true);
+
+    const probe = await createProjectRegistry(registryPath, {
+      lock: { timeoutMs: 75, pollMs: 5 },
+    }).reconcile();
+    expect(probe.ok).toBe(false);
+    if (probe.ok) throw new Error("Expected the replacement lock to remain owned");
+    expect(probe.failure.details?.[0]?.code).toBe("lock_unavailable");
+    const afterProbe = await lstat(lockPath);
+    expect(afterProbe.isDirectory()).toBe(true);
+    expect(afterProbe.dev).toBe(replacementLock.dev);
+    expect(afterProbe.ino).toBe(replacementLock.ino);
+  });
 
   it("reconciles the durable registry before Core starts listening", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));

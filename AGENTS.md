@@ -49,12 +49,26 @@ local-first Core、およびその Workbench となる VS Code Extension。
   Marker は identity の正、Registry は Marker から再構築できる索引として扱う。
 - init は Registry の `pending`、`.aacl` directory、Marker の排他的・原子的作成、`bound` の順に
   進む。既存の `pending` ID だけを再利用し、Marker が消えた `bound` entry は新しい ID で置き換える。
-  `pending` entry は内部状態として保持し、Core 起動時の reconcile と次回 discovery は Marker を
-  読み直して `bound` または `mismatch` を確定する。
-- Registry の read-modify-write 全体は同じ JSON の lock directory による cross-process lock で保護する。
-  lock は heartbeat と stale reclaim、compromise 検出を備え、クラッシュ後も別プロセスが安全に回復する。
-  Registry の atomic persist は temp file 書込み後、rename 直前にも ownership と compromise を同期検査し、
-  検査を通過したときだけ commit する。
+  Marker への hard link が成功した時点で作成を commit とし、一時ファイル名の cleanup 失敗では
+  `pending` へ戻さず `bound` まで進める。`pending` entry は内部状態として保持し、Core 起動時の
+  reconcile と次回 discovery は Marker を読み直して `bound` または `mismatch` を確定する。
+- Registry の read-modify-write 全体は、Registry 専用ディレクトリ内の恒久 regular lock file と
+  `fs-native-extensions@1.5.1` の OS native exclusive FD lock（Linux は `F_OFD_SETLK`、macOS は
+  `flock`、Windows は `LockFileEx`）で保護する。取得は lock file を
+  `open` してから `tryLock` を monotonic deadline まで bounded polling し、既定の timeout は5秒とする。
+  lock file の作成・取得途中で失敗した場合は FD と polling timer を必ず閉じ、判定不能な状態は
+  `lock_unavailable` として fail-closed にする。
+  この lock は advisory であり、同じ lock protocol を守る Core process 間の read-modify-write を排他する。
+  同じ権限で protocol 外から Registry JSON を直接書き換える process はこの保護対象に含めない。
+  lock file は取得前に regular file として検査し、取得後は descriptor の `fstat` と path の `lstat` の
+  `dev` / `ino` を照合する。atomic persist は temp file 書込み後、rename 直前にも同期 identity guard を
+  実行し、検査を通過したときだけ commit する。guard は偶発的な path replacement を検知し、解放処理は
+  replacement path に触れず native FD のみを解放する。guard と rename の間にある protocol 外 writer との競合は
+  advisory lock の保護範囲外とする。
+  プロトコル参加者は lock file を unlink / rename せず、release は native unlock と FD close をこの順で必ず
+  試みる。異常終了時も OS が lock を解放し、恒久 file は残る。unlock / close の cleanup failure は、callback
+  が完了して commit 済みの結果を反転させない。owner process が生存中は pause の長さに関係なく native
+  lock が保持され、競合側は timeout / fail-closed とする。
   Marker reconciliation は Registry 文書の読込み後に lock 下で開始する各 entry の照合を専用 child process で行い、
   monotonic clock による5秒の全体 deadline を持つ。deadline 超過時は child の stream を閉じて handle を `unref` し、SIGKILL を送り、
   親は child の終了を待たず Registry を変更せず `degraded/timeout` を返す。child の起動・終了・JSON framing の
@@ -62,7 +76,8 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `core.project_registry_reconcile_degraded` を warning で記録して listen と health を開始する。Registry JSON の
   破損、read/write、lock 取得の失敗は `project-registry` stage の startup failure として listen を開始せず、
   起動結果は `settings` / `project-registry` / `listen` の stage で分類する。Registry と Marker は regular file を
-  確認してから読み取る。SIGINT / SIGTERM の handler は `startCore` の await 前に登録し、起動中の停止要求を
+  確認してから読み取る。reader は POSIX で nonblocking・no-follow open を使い、開いた descriptor の regular
+  file 判定と path の `dev` / `ino` 照合を通過してから内容を読む。SIGINT / SIGTERM の handler は `startCore` の await 前に登録し、起動中の停止要求を
   保持する。停止要求後は reconcile の child timeout と cleanup を完了してから listen 済みの Core を close し、
   `core.listening` と startup failure event を記録しない。
 - `ProjectInfoDto` と `ProjectDiscoveryDto` の Marker 由来 ID 欄は Marker 固有の schema
@@ -83,7 +98,7 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - 依存方向は一方向: `core-domain` → `shared`、`core` → `shared` + `core-domain`、
   `vscode-extension` → `shared`。
   `shared` は workspace package に依存せず、runtime 外部依存は schema library (`zod`) だけを持つ。
-  `core` の Project Registry は `@bybrave/proper-lockfile2` をcross-process lockに使用する。
+  `core` の Project Registry は `fs-native-extensions@1.5.1` と Node filesystem API による OS native FD lock を使用する。
   `core` と `vscode-extension` は相互に依存しない。
 - **`core-domain` は host 能力に触れない。** `node:*` を import せず、`@types/node` も持たない
   （`core-domain/tsconfig.json` に `types` を書かない）。外部 SDK・VS Code・Tauri は

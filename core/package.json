@@ -12,7 +12,7 @@
   "dependencies": {
     "@aacl/core-domain": "workspace:*",
     "@aacl/shared": "workspace:*",
-    "@bybrave/proper-lockfile2": "5.0.0"
+    "fs-native-extensions": "1.5.1"
   },
   "devDependencies": {
     "@types/node": "^24.13.3"

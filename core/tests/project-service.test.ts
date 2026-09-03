@@ -278,6 +278,31 @@ describe("Project initialization and discovery", () => {
     });
   });
 
+  it("continues binding after Marker link succeeds but temporary cleanup fails", async () => {
+    const { projectRoot, registryPath } = await setup("cleanup-failure");
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "cleanup-failure",
+      unlinkPath: async () => { throw new Error("simulated cleanup failure"); },
+    });
+
+    const result = await service.initialize(projectRoot);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { projectId: "project-cleanup-failure", projectRoot },
+    });
+    expect(JSON.parse(await readFile(join(projectRoot, ".aacl", "project.json"), "utf8"))).toEqual({
+      schemaVersion: 1,
+      projectId: "project-cleanup-failure",
+    });
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toMatchObject({
+      projectId: "project-cleanup-failure",
+      state: "bound",
+    });
+  });
+
   it("keeps the global Registry outside the .aacl discovery sentinel", async () => {
     const home = await makeScratch();
     const projectRoot = join(home, "project");

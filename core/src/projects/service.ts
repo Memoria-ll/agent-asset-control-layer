@@ -28,6 +28,7 @@ export type ProjectServiceOptions = {
   /** The service composes the `project-` prefix and accepts only the random suffix. */
   readonly newProjectSuffix?: () => string;
   readonly afterMarkerWritten?: () => Promise<void>;
+  readonly unlinkPath?: (path: string) => Promise<void>;
   readonly statPath?: StatPath;
 };
 
@@ -174,8 +175,10 @@ const removeEmptyProjectDirectory = async (projectDirectory: string, created: bo
 const writeMarkerExclusively = async (
   markerPath: string,
   marker: ProjectMarkerDto,
+  unlinkPath: (path: string) => Promise<void>,
 ): Promise<"written" | "exists" | "failed"> => {
   const temporaryPath = join(dirname(markerPath), `.aacl.${randomUUID()}.tmp`);
+  let markerCommitted = false;
   let handle;
   try {
     handle = await open(temporaryPath, "wx", 0o644);
@@ -183,13 +186,15 @@ const writeMarkerExclusively = async (
     await handle.close();
     handle = undefined;
     await link(temporaryPath, markerPath);
-    await unlink(temporaryPath);
+    markerCommitted = true;
+    await unlinkPath(temporaryPath);
     return "written";
   } catch (error) {
     if (handle !== undefined) {
       try { await handle.close(); } catch { /* cleanup still runs */ }
     }
-    try { await unlink(temporaryPath); } catch { /* the operation failure is primary */ }
+    try { await unlinkPath(temporaryPath); } catch { /* the operation failure is primary */ }
+    if (markerCommitted) return "written";
     return errorCode(error) === "EEXIST" ? "exists" : "failed";
   }
 };
@@ -255,6 +260,7 @@ const inspectWorkspace = async (workspacePath: string, statPath: StatPath): Prom
 export const createProjectService = (options: ProjectServiceOptions): ProjectService => {
   const newProjectSuffix = options.newProjectSuffix ?? randomUUID;
   const statPath = options.statPath ?? stat;
+  const unlinkPath = options.unlinkPath ?? unlink;
 
   const bind = async (
     workspacePath: string,
@@ -361,7 +367,7 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
         const marker = createProjectMarkerDto(pending.value);
         const prepared = await prepareProjectDirectory(normalizedRoot);
         if (!prepared.ok) return prepared;
-        const write = await writeMarkerExclusively(markerPath, marker);
+        const write = await writeMarkerExclusively(markerPath, marker, unlinkPath);
         if (write === "failed") {
           await removeEmptyProjectDirectory(prepared.value.path, prepared.value.created);
           return {
