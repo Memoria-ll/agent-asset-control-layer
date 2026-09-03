@@ -28,6 +28,84 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - バージョンは root `package.json` の `version`。`0.0.0` のため `project-stage.sh` は `dev` を返す
   （保存データの破壊的変更が許される状態）。配布を始める前に実バージョンへ更新する。
 
+### Project identity / initialization
+
+- Project identity の正は `<project-root>/.aacl/project.json`。Marker は
+  `{ "schemaVersion": 1, "projectId": "project-<suffix>" }` の strict object で、`projectId` は
+  `^project-[a-z0-9-]+$` に一致し全長128文字以内とする。Core は `[a-z0-9-]` の suffix から ID を
+  組み立てる。Git repository root は参照せず、init に渡された directory を Project root とする。
+- `pnpm project:init -- [project-root]` が明示 init の入口で、root script は Core の Node entrypoint を
+  元の cwd から直接起動する。CLI は pnpm の `--` separator を引数境界として 1 回だけ正規化する。
+  path の省略時と相対 path は pnpm が設定する `INIT_CWD`（直接 Node 実行時は `process.cwd()`）を
+  基準に解決し、絶対 path はそのまま受理する。配布形態の確定前なので executable 名は持たない。
+  未初期化 workspace の discovery は filesystem を変更せず `uninitialized` を返す。
+- discovery は workspace から filesystem root まで親を辿り、最寄りの `.aacl` で停止する。
+  その directory または Marker が不正なら `invalid` を返し、上位 Project へ抜けない。この探索で
+  候補は 1 件に定まるため `ambiguous` は契約に持たない。workspace の stat が `ENOENT` または
+  `ENOTDIR` の場合は `invalid_request`、その他の stat 障害は `unavailable` とする。
+- Registry は `~/.aacl-state/project-registry.json` の JSON 索引で、Project root path ごとに
+  `pending` / `bound` / `mismatch` を保持する。Marker が同じ `project-id` を持つ別 path は同一
+  Project として追加 binding できる。異なる ID は既存 binding を上書きせず `mismatch` にする。
+  Marker は identity の正、Registry は Marker から再構築できる索引として扱う。
+- init は Registry の `pending`、`.aacl` directory、Marker の排他的・原子的作成、`bound` の順に
+  進む。既存の `pending` ID だけを再利用する。Marker 不在を確認した `prepare` は、対象 root の既存
+  `mismatch` entry を提案 ID の `pending` entry へ置き換え、Marker が存在する identity mismatch は
+  `conflict` として拒否する。
+  `prepare` は `.aacl` directory の `dev` / `ino` を返し、Marker の temp file 作成と hard link の前後で
+  directory identity と temp descriptor/path identity を同期検査する。directory が差し替わったときは
+  元の identity と一致する temp path だけを best-effort cleanup の対象とし、作成失敗時の空 directory も
+  元の directory identity と一致するときだけ削除する。Marker 作成と `bound` 遷移を
+  完了させない。hard link 後は directory と installed Marker の identity を再読取りし、source guard を
+  Registry の read-modify-write commit 直前まで渡す。
+  Marker への hard link と直後の directory/Marker identity 検証を作成の commit とし、一時ファイル名の cleanup 失敗では
+  `pending` へ戻さず `bound` まで進める。`pending` entry は内部状態として保持し、Core 起動時の
+  reconcile と次回 discovery は Marker を読み直して `bound` または `mismatch` を確定する。
+- Registry の read-modify-write 全体は、Registry 専用ディレクトリ内の恒久 regular lock file と
+  `fs-native-extensions@1.5.1` の OS native exclusive FD lock（Linux は `F_OFD_SETLK`、macOS は
+  `flock`、Windows は `LockFileEx`）で保護する。取得は lock file を
+  `open` してから `tryLock` を monotonic deadline まで bounded polling し、既定の timeout は5秒とする。
+  lock file の作成・取得途中で失敗した場合は FD と polling timer を必ず閉じ、判定不能な状態は
+  `lock_unavailable` として fail-closed にする。
+  この lock は advisory であり、同じ lock protocol を守る Core process 間の read-modify-write を排他する。
+  同じ権限で protocol 外から Registry JSON を直接書き換える process はこの保護対象に含めない。
+  lock file は取得前に regular file として検査し、取得後は descriptor の `fstat` と path の `lstat` の
+  `dev` / `ino` を照合する。atomic persist は temp file 書込み後、rename 直前にも同期 identity guard を
+  実行し、検査を通過したときだけ commit する。guard は偶発的な path replacement を検知し、解放処理は
+  replacement path に触れず native FD のみを解放する。guard と rename の間にある protocol 外 writer との競合は
+  advisory lock の保護範囲外とする。
+  プロトコル参加者は lock file を unlink / rename せず、release は native unlock と FD close をこの順で必ず
+  試みる。異常終了時も OS が lock を解放し、恒久 file は残る。unlock / close の cleanup failure は、callback
+  が完了して commit 済みの結果を反転させない。owner process が生存中は pause の長さに関係なく native
+  lock が保持され、競合側は timeout / fail-closed とする。
+  Marker reconciliation は Registry 文書の読込み後に lock 下で開始する各 entry の照合を専用 child process で行い、
+  monotonic clock による5秒の全体 deadline を持つ。deadline 超過時は child の stream を閉じて handle を `unref` し、SIGKILL を送り、
+  親は child の終了を待たず Registry を変更せず `degraded/timeout` を返す。child の起動・終了・JSON framing の
+  失敗は `unavailable` observation として扱う。Core は
+  `core.project_registry_reconcile_degraded` を warning で記録して listen と health を開始する。Registry JSON の
+  破損、read/write、lock 取得の失敗は `project-registry` stage の startup failure として listen を開始せず、
+  起動結果は `settings` / `project-registry` / `listen` の stage で分類する。Registry と Marker は regular file を
+  確認してから読み取る。Marker reader は `.aacl` を初回 `lstat` で real directory と確認して `dev` / `ino` を保持し、
+  POSIX で nonblocking・no-follow open した descriptor の `fstat`、descriptor からの内容読取り、Marker path の
+  読取り後 fresh `lstat` を順に行う。その後 `.aacl` を fresh `lstat` し、real directory かつ初回と同じ `dev` / `ino`
+  の場合だけ Marker を採用する。この検査は discovery、init、startup reconciliation の全 Marker 読取り経路に適用し、
+  directory の symlink・非 directory・identity 変更は `invalid_project_directory`、検査障害は `unavailable` とする。
+  valid Marker の directory/Marker identity token は service の binding と initialization に保持し、Registry の
+  persist 前および戻り値直前に同期 guard を行う。startup reconciliation の child は両 identity を返し、親は
+  entry の反映と Registry persist の直前に同じ source を再検査し、検査できない observation を既存 entry のまま保持する。
+  reconciliation は persist 成功後にも同じ guard を実行し、失敗は commit 済みでも `source_changed` の
+  `unavailable` として返す。
+  guard と Marker の open/link の間にある同一権限の protocol 外 writer との競合は保証対象外とする。
+  SIGINT / SIGTERM の handler は `startCore` の await 前に登録し、起動中の停止要求を
+  保持する。停止要求後は reconcile の child timeout と cleanup を完了してから listen 済みの Core を close し、
+  `core.listening` と startup failure event を記録しない。
+- `ProjectInfoDto` と `ProjectDiscoveryDto` の Marker 由来 ID 欄は Marker 固有の schema
+  （`^project-[a-z0-9-]+$`、全長128文字以内）を共有する。`invalid` discovery の nested failure code は
+  実際の探索経路に対応する `invalid_request` または `unavailable` とする。Registry の `mismatch` entry は
+  異なる `projectId` と `markerProjectId` の組合せで表現し、同一 ID の durable entry は
+  `invalid_registry` に分類する。
+- Project Init / discovery / Marker は `shared` の公開 DTO。VS Code Extension は transport-neutral な
+  `ProjectClient` 境界から同じ操作を使う。HTTP route は #12 の範囲で追加する。
+
 ### package 構成と依存方向
 
 - pnpm workspaces の monorepo。package は `shared` / `core-domain` / `core` / `vscode-extension`
@@ -37,7 +115,8 @@ local-first Core、およびその Workbench となる VS Code Extension。
   （宣言だけが広いと、範囲内の Node で gate が動かない）。
 - 依存方向は一方向: `core-domain` → `shared`、`core` → `shared` + `core-domain`、
   `vscode-extension` → `shared`。
-  `shared` は workspace package に依存しない。外部依存は schema library (`zod`) 1 つに限る。
+  `shared` は workspace package に依存せず、runtime 外部依存は schema library (`zod`) だけを持つ。
+  `core` の Project Registry は `fs-native-extensions@1.5.1` と Node filesystem API による OS native FD lock を使用する。
   `core` と `vscode-extension` は相互に依存しない。
 - **`core-domain` は host 能力に触れない。** `node:*` を import せず、`@types/node` も持たない
   （`core-domain/tsconfig.json` に `types` を書かない）。外部 SDK・VS Code・Tauri は

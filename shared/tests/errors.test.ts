@@ -63,7 +63,11 @@ describe("Core error mapping", () => {
  * validates something Core produced, so a failure there is the producer
  * breaking its own contract rather than a bad request.
  */
-const REQUEST_PARSERS = new Set(["tryParseResolveRequest"]);
+const REQUEST_PARSERS = new Set([
+  "tryParseResolveRequest",
+  "tryParseProjectInitRequest",
+  "tryParseProjectDiscoveryRequest",
+]);
 
 describe("boundary direction decides the failure code", () => {
   const parsers = Object.entries(shared).filter(
