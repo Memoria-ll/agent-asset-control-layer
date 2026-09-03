@@ -5,7 +5,7 @@ import {
   type CoreErrorCode,
   type CoreErrorDetail,
 } from "@aacl/shared";
-import { coreFailure, toCoreErrorDto } from "../src/failures.ts";
+import { coreFailure, toCoreErrorDto } from "../src/index.ts";
 
 const code: CoreErrorCode = "internal";
 const detail: CoreErrorDetail = {

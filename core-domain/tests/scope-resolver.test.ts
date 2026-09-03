@@ -6,6 +6,7 @@ import {
 } from "@aacl/shared";
 import type { AssetId, AssetRevision, AssetType, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
 import {
+  buildCapabilityCatalog,
   parseAssetDocument,
   resolveScope,
   toResolutionConflictDetails,
@@ -17,6 +18,11 @@ import type {
   AssetCandidate,
   CandidateReason,
   CanonicalAsset,
+  CapabilityDependency,
+  CapabilityFeatureId,
+  CapabilityId,
+  CapabilityOffer,
+  CapabilityResolutionContext,
   ResolutionAxis,
   ResolutionEvaluation,
   ResolutionMerge,
@@ -32,6 +38,7 @@ type ResolutionDirectives = {
   readonly operation: ResolutionOperation;
   readonly mergeMode: ResolutionMerge["mergeMode"];
   readonly mergeGroup?: string;
+  readonly capabilityDependencies?: readonly CapabilityDependency[];
 };
 
 type FixtureMetadata = {
@@ -45,9 +52,34 @@ const expectOk = <Value>(result: { readonly ok: boolean; readonly value?: Value;
   return result.value;
 };
 
-const assetDocument = (id: string, fields = ""): string => `---
+const capabilityId = (value: string): CapabilityId => value as CapabilityId;
+const capabilityFeatureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
+
+const capabilityReference = (value: string, features?: readonly string[]) => ({
+  capabilityId: capabilityId(value),
+  ...(features === undefined ? {} : { features: features.map(capabilityFeatureId) }),
+});
+
+const capabilityOffer = (value: string, features: readonly string[] = []): CapabilityOffer => ({
+  capabilityId: capabilityId(value),
+  features: features.map(capabilityFeatureId),
+});
+
+const capabilityContext = (
+  definitions: readonly { readonly id: string; readonly features?: readonly string[] }[],
+  offers: readonly CapabilityOffer[],
+): CapabilityResolutionContext => ({
+  catalog: expectOk(buildCapabilityCatalog(definitions.map(({ id, features }) => ({
+    capabilityId: capabilityId(id),
+    displayName: id,
+    features: (features ?? []).map(capabilityFeatureId),
+  })))),
+  offers,
+});
+
+const assetDocument = (id: string, fields = "", type: AssetType = "rule"): string => `---
 id: ${id}
-type: rule
+type: ${type}
 tier: core
 ${fields}---
 `;
@@ -86,6 +118,7 @@ const candidateFromCanonicalAsset = (
       operation: directives.operation,
       ...(directives.explicitPriority === undefined ? {} : { explicitPriority: directives.explicitPriority }),
       requires: asset.requires,
+      ...(directives.capabilityDependencies === undefined ? {} : { capabilityDependencies: directives.capabilityDependencies }),
       ...merge,
     },
   };
@@ -104,13 +137,18 @@ const candidateFromDocument = (
 const resolve = (
   scope: ResolutionScopeInput,
   candidates: readonly AssetCandidate[],
+  capabilityContextValue?: CapabilityResolutionContext,
 ) => resolveScope({
   scope: parseResolveRequest({ scope }).scope,
   snapshot: { candidates },
+  ...(capabilityContextValue === undefined ? {} : { capabilityContext: capabilityContextValue }),
 });
 
-const resultValue = (scope: ResolutionScopeInput, candidates: readonly AssetCandidate[]): ResolutionResult =>
-  expectOk(resolve(scope, candidates));
+const resultValue = (
+  scope: ResolutionScopeInput,
+  candidates: readonly AssetCandidate[],
+  capabilityContextValue?: CapabilityResolutionContext,
+): ResolutionResult => expectOk(resolve(scope, candidates, capabilityContextValue));
 
 const evaluation = (result: ResolutionResult, assetId: string): ResolutionEvaluation => {
   const found = result.evaluations.find((item) => item.candidate.assetId === assetId);
@@ -2261,5 +2299,281 @@ scope.project: [acme]
     expect("resolvedAt" in result).toBe(false);
     expect("cost" in result).toBe(false);
     expect("body" in result).toBe(false);
+  });
+
+  it("S1: marks a missing required capability unavailable", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-required", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-required") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-required" }], []));
+
+    expect(reason(result, "skill-required")).toMatchObject({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "capability_unavailable",
+      failedCapabilities: [capabilityId("cap-required")],
+    });
+  });
+
+  it("S2: retains a candidate with an optional capability degradation", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-optional", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "optional", capability: capabilityReference("cap-optional") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-optional" }], []));
+
+    expect(reason(result, "skill-optional")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{ capabilityId: capabilityId("cap-optional"), strength: "optional" }],
+      degradedInfo: { reasons: [expect.stringContaining("cap-optional")] },
+    });
+  });
+
+  it("S3: retains a candidate with a preferred capability degradation", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-preferred", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "preferred", capability: capabilityReference("cap-preferred") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-preferred" }], []));
+
+    expect(reason(result, "skill-preferred")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{ capabilityId: capabilityId("cap-preferred"), strength: "preferred" }],
+    });
+  });
+
+  it("S4: records adoption of a fallback for a required capability", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-fallback", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [
+        { strength: "required", capability: capabilityReference("cap-primary") },
+        { strength: "fallback", capability: capabilityReference("cap-fallback"), fallbackFor: capabilityReference("cap-primary") },
+      ],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-fallback" }, { id: "cap-primary" }],
+      [capabilityOffer("cap-fallback")],
+    ));
+
+    expect(reason(result, "skill-fallback")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{
+        capabilityId: capabilityId("cap-primary"),
+        strength: "required",
+        fallbackCapabilityId: capabilityId("cap-fallback"),
+      }],
+      degradedInfo: { reasons: [expect.stringContaining("cap-fallback")] },
+    });
+  });
+
+  it("S5: marks a required capability unavailable when its fallback is also absent", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-no-fallback", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [
+        { strength: "required", capability: capabilityReference("cap-primary") },
+        { strength: "fallback", capability: capabilityReference("cap-fallback"), fallbackFor: capabilityReference("cap-primary") },
+      ],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-fallback" }, { id: "cap-primary" }],
+      [],
+    ));
+
+    expect(reason(result, "skill-no-fallback")).toMatchObject({
+      kind: "unavailable",
+      cause: "capability_unavailable",
+      failedCapabilities: [capabilityId("cap-fallback"), capabilityId("cap-primary")],
+    });
+  });
+
+  it("S6: treats an omitted capability context as an empty offer set", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-no-context", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-required") }],
+    });
+
+    expect(reason(resultValue({}, [candidate]), "skill-no-context")).toMatchObject({
+      kind: "unavailable",
+      cause: "capability_unavailable",
+    });
+  });
+
+  it("S7: does not apply an operation from a hard-failed capability issuer", () => {
+    const issuer = candidateFromDocument(assetDocument("skill-hard-issuer", "", "skill"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-required") }],
+    });
+    const target = candidateFromDocument(assetDocument("asset-target", "", "skill"), add());
+    const result = resultValue({}, [issuer, target], capabilityContext([{ id: "cap-required" }], []));
+
+    expect(reason(result, "skill-hard-issuer")).toMatchObject({ kind: "unavailable" });
+    expect(reason(result, "asset-target")).toMatchObject({ kind: "included" });
+  });
+
+  it("S8: applies an operation from a soft-degraded capability issuer", () => {
+    const issuer = candidateFromDocument(assetDocument("skill-soft-issuer", "", "skill"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+      capabilityDependencies: [{ strength: "optional", capability: capabilityReference("cap-optional") }],
+    });
+    const target = candidateFromDocument(assetDocument("asset-target", "", "skill"), add());
+    const result = resultValue({}, [issuer, target], capabilityContext([{ id: "cap-optional" }], []));
+
+    expect(reason(result, "skill-soft-issuer")).toMatchObject({ kind: "included", degradedCapabilities: [{ strength: "optional" }] });
+    expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "skill-soft-issuer" });
+  });
+
+  it("S9: records a mandatory capability failure as a conflict", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-mandatory", "", "skill"), {
+      ...add(),
+      mandatory: true,
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-mandatory") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-mandatory" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{
+      kind: "capability_failure",
+      failedCapabilities: [capabilityId("cap-mandatory")],
+      involvedAssetIds: ["skill-mandatory"],
+    }]);
+  });
+
+  it("S10: does not combine features from separate offers", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-partial-offers", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["read", "write"]) }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read"]), capabilityOffer("cap-feature", ["write"])],
+    ));
+
+    expect(reason(result, "skill-partial-offers")).toMatchObject({ kind: "unavailable", cause: "capability_unavailable" });
+  });
+
+  it("S11: treats same-identity candidates with different capability relations as a conflict", () => {
+    const source = { layer: "global" as const, sourceId: "same-source" };
+    const optional = candidateFromDocument(assetDocument("skill-same-identity", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "optional", capability: capabilityReference("cap-a") }],
+    }, { revision: "same-revision", source });
+    const preferred = candidateFromDocument(assetDocument("skill-same-identity", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "preferred", capability: capabilityReference("cap-a") }],
+    }, { revision: "same-revision", source });
+    const result = resultValue({}, [preferred, optional], capabilityContext([{ id: "cap-a" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ kind: "duplicate_identity", assetId: "skill-same-identity", involvedAssetIds: ["skill-same-identity"] }]);
+    expect(result.evaluations).toHaveLength(2);
+    expect(result.evaluations.every((item) => item.reason.kind === "excluded" && item.reason.cause === "resolution_conflict")).toBe(true);
+  });
+
+  it("S12: rejects capability dependencies on a type outside the capability policy", () => {
+    const candidate = candidateFromDocument(assetDocument("rule-with-capability", "", "rule"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-rule") }],
+    });
+    const result = resolve({}, [candidate]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.some((item) => item.code === "capability_dependencies_not_allowed")).toBe(true);
+    }
+  });
+
+  it("S13: rejects an undeclared capability feature on an in-scope candidate", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-in-scope", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["writ"]) }],
+    });
+    const result = resolve({}, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read", "write"])],
+    ));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual([
+        "snapshot", "candidate", "skill-in-scope", "rule", "capabilityDependencies", "0", "capability", "features",
+      ]);
+    }
+  });
+
+  it("S14: rejects an undeclared capability feature on a candidate outside the scope", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-out-of-scope", "scope.role: [author]\n", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["writ"]) }],
+    });
+    const result = resolve({ roleId: "reviewer" }, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read", "write"])],
+    ));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.some((item) => item.code === "unknown_capability_feature")).toBe(true);
+    }
+  });
+
+  it("S15: roots capability context diagnostics at the input field", () => {
+    const result = resolve({}, [], capabilityContext([{ id: "cap-a" }], [capabilityOffer("cap-b")]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual([
+        "capabilityContext", "offers", "0", "capabilityId",
+      ]);
+    }
+  });
+
+  it("S16: propagates a capability failure across a dependency cycle", () => {
+    const mandatory = candidateFromDocument(assetDocument("skill-a", "requires: [skill-b]\n", "skill"), {
+      ...add(),
+      mandatory: true,
+    });
+    const cycleMember = candidateFromDocument(assetDocument("skill-b", "requires: [skill-a]\n", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-cycle") }],
+    });
+    const result = resultValue({}, [mandatory, cycleMember], capabilityContext([{ id: "cap-cycle" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "capability_failure", failedCapabilities: [capabilityId("cap-cycle")], involvedAssetIds: ["skill-a"] },
+      { kind: "dependency_cycle", involvedAssetIds: ["skill-a", "skill-b"] },
+    ]));
+    expect(reason(result, "skill-a")).toMatchObject({
+      kind: "unavailable",
+      cause: "requirement_cycle",
+      failedCapabilities: [capabilityId("cap-cycle")],
+    });
+  });
+
+  it("S17: propagates a capability failure a single cycle member requires from outside", () => {
+    const mandatory = candidateFromDocument(assetDocument("skill-a", "requires: [skill-b]\n", "skill"), {
+      ...add(),
+      mandatory: true,
+    });
+    const cycleMember = candidateFromDocument(assetDocument("skill-b", "requires: [skill-a, skill-c]\n", "skill"), add());
+    const outside = candidateFromDocument(assetDocument("skill-c", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-outside") }],
+    });
+    const result = resultValue({}, [mandatory, cycleMember, outside], capabilityContext([{ id: "cap-outside" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "capability_failure", failedCapabilities: [capabilityId("cap-outside")], involvedAssetIds: ["skill-a"] },
+    ]));
+    expect(reason(result, "skill-a")).toMatchObject({
+      kind: "unavailable",
+      failedCapabilities: [capabilityId("cap-outside")],
+    });
   });
 });

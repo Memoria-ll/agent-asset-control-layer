@@ -104,6 +104,17 @@ local-first Core、およびその Workbench となる VS Code Extension。
   変更は `save-schema-check` を通す。
 - `core/` 内部の domain model、`vscode-extension/` の view model / UI state は内部配線。
   `core` の内部 domain model と `shared` の公開 DTO は分離してよい。
+- **`core-domain` の公開面は `core-domain/src/index.ts` の re-export が正。** consumer は
+  `@aacl/core-domain` からしか解決しないため、module に `export` を足しただけの型・関数は
+  consumer から到達できない。TypeScript は module 直 import を通すので、**テストが緑でも
+  re-export の欠落は見えない**。公開 API を足す変更は同じ変更で `index.ts` に re-export を
+  足す。**`core-domain/tests/**` が公開 API を引くのは `../src/index.ts` からに限る** —
+  module を直接引いてよいのは index に載せない内部だけで、現状その該当は 0 件（`grep -n
+  'from "\.\./src/[a-z-]*\.ts"' core-domain/tests/*.ts` の非 index 行が 0 であることで確認
+  できる）。これが consumer の到達可能性をテストで担保する唯一の手段になる。
+  module の `export` は package 内の module 間で使うためにも張る
+  （`ordering.ts` の `codeUnitCompare` のように index に載せないものがある）ので、
+  `export` を落とすのは同一ファイル内でしか使わないものだけ (#94)
 
 ### レイヤ / seam mapping
 
@@ -283,6 +294,27 @@ local-first Core、およびその Workbench となる VS Code Extension。
   `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
   漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
   Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+- **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
+  「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
+  required をすべて hard failure にし、その候補を context から落とす。型は optional なので
+  コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
+- **`resolveScope` の候補構造検証と fixed point の capability 評価には、同じ capability context を
+  渡す**（どちらも `evaluateCapabilityDependenciesInValidatedContext` に、冒頭で 1 度だけ
+  `validateCapabilityContext` した結果を渡す）。検証側だけ context 無しで呼ぶと、definition に
+  無い feature を要求する候補が構造検証を通り、fixed point 側が `invalid_request` を返して
+  `throw new Error("Validated capability dependencies must evaluate successfully.")` に落ちる
+  — `CoreFailure` ではなく例外になるので、consumer からは resolver のクラッシュに見える。
+  scope 外の候補も検証対象で、scope が決めるのは「どれが適用されるか」であって
+  「どれが妥当か」ではない (#9)
+- **`dependencyOutcomes` で候補ごとに持たせる失敗種別は、component 単位で union してから
+  各メンバーに配る。** union の対象は 2 つあり、**両方**が要る: メンバー自身が持つ失敗と、
+  いずれか 1 メンバーが component 外へ張るエッジ経由で受け取る失敗。conflict は mandatory
+  候補についてしか materialize されず、per-edge の伝播は component 内部エッジを飛ばすため、
+  どちらか一方でも落とすと SCC 内の非 mandatory 候補側にしか無い失敗が mandatory 候補へ
+  伝わらず、**診断そのものが結果から消える**（cycle と dependency_failure だけが残り、原因の
+  capability 名が出ない）。依存先 component は先に materialize され自身の到達を閉じているので、
+  この 1 パスが不動点になる。capability 側は `componentFailedCapabilities`、requirement 側は
+  `componentHasNonCycleFailure` がこの役目を持つ (#9)
 
 ### Invariants / identity keys
 
@@ -349,3 +381,9 @@ local-first Core、およびその Workbench となる VS Code Extension。
   選択では、rank cycle で空になっても全 action が `disable` なら conflict にせず output 順で
   coalesce する — 相反しない disable を conflict にすると target が有効なまま残る。
   `exclusive_tie` の explanation は同順位と cycle の両方を指す文言にする (#76)
+- **解決結果で「context に載るか」を表す信号は `CandidateReason.kind` 1 つしかない。**
+  `resolveScope` は候補ごとに reason を 1 個返し、消費側は `kind === "included"` で絞る。
+  したがって **degraded は `kind: "included"` のまま degradation 欄を載せて返す** —
+  `kind: "unavailable"` にすると optional 依存の欠落が候補を黙って context から消し、
+  「degraded は載るが能力が落ちた状態」を表現できなくなる。`availability: "unavailable"` を
+  作るのは required capability の hard failure だけ (#9)

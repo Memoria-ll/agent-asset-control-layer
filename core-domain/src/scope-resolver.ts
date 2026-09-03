@@ -3,6 +3,7 @@ import type {
   AssetId,
   AssetRevision,
   AssetType,
+  DegradedInfo,
   ConflictDto,
   CoreErrorDetail,
   LoadingTier,
@@ -11,6 +12,17 @@ import type {
 } from "@aacl/shared";
 import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
+import {
+  evaluateCapabilityDependenciesInValidatedContext,
+  validateCapabilityContext,
+} from "./capabilities.ts";
+import type {
+  CapabilityDegradation,
+  CapabilityDependency,
+  CapabilityDependencyOutcome,
+  CapabilityId,
+  CapabilityResolutionContext,
+} from "./capabilities.ts";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import {
   normalizeResolutionDirectory,
@@ -44,6 +56,7 @@ export type ResolutionRule = {
   readonly operation: ResolutionOperation;
   readonly explicitPriority?: number;
   readonly requires: readonly AssetId[];
+  readonly capabilityDependencies?: readonly CapabilityDependency[];
 } & ResolutionMerge;
 
 export type AssetCandidate = {
@@ -95,6 +108,8 @@ export type CandidateReason =
       readonly kind: "included";
       readonly matchedAxes: readonly ResolutionAxis[];
       readonly rank: ResolutionRank;
+      readonly degradedInfo?: DegradedInfo;
+      readonly degradedCapabilities?: readonly CapabilityDegradation[];
     }
   | {
       readonly kind: "excluded";
@@ -131,8 +146,10 @@ export type CandidateReason =
         | "requirement_disabled"
         | "requirement_overridden"
         | "requirement_cycle"
-        | "requirement_invalid";
+        | "requirement_invalid"
+        | "capability_unavailable";
       readonly failedRequirements: readonly AssetId[];
+      readonly failedCapabilities?: readonly CapabilityId[];
     };
 
 export type ResolutionConflict =
@@ -167,12 +184,18 @@ export type ResolutionConflict =
   | {
       readonly kind: "asset_type_conflict";
       readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "capability_failure";
+      readonly failedCapabilities: readonly CapabilityId[];
+      readonly involvedAssetIds: readonly AssetId[];
     };
 
 export type ResolveScopeInput = {
   readonly scope: ResolutionScopeInput;
   readonly snapshot: ResolutionSnapshot;
   readonly contracts?: AssetTypeContractRegistry;
+  readonly capabilityContext?: CapabilityResolutionContext;
 };
 
 export type ResolutionEvaluation = {
@@ -200,14 +223,20 @@ type DependencyCause =
   | "requirement_disabled"
   | "requirement_overridden"
   | "requirement_cycle"
-  | "requirement_invalid";
+  | "requirement_invalid"
+  | "capability_unavailable";
 
 type DependencyOutcome =
-  | { readonly ok: true }
+  | {
+      readonly ok: true;
+      readonly degradedInfo?: DegradedInfo;
+      readonly degradedCapabilities?: readonly CapabilityDegradation[];
+    }
   | {
       readonly ok: false;
       readonly cause: DependencyCause;
       readonly failedRequirements: readonly AssetId[];
+      readonly failedCapabilities?: readonly CapabilityId[];
       readonly cycleIds?: readonly AssetId[];
       readonly nonCycleFailedRequirements: readonly AssetId[];
     };
@@ -246,6 +275,7 @@ const conflictKey = (conflict: ResolutionConflict): string => {
     case "operation_conflict": return `${conflict.kind}:${conflict.targetAssetId}:${conflict.involvedAssetIds.join("\u0000")}`;
     case "duplicate_identity": return `${conflict.kind}:${conflict.assetId}:${conflict.involvedAssetIds.join("\u0000")}`;
     case "dependency_failure": return `${conflict.kind}:${conflict.failedRequirement}:${conflict.involvedAssetIds.join("\u0000")}`;
+    case "capability_failure": return `${conflict.kind}:${conflict.failedCapabilities.join("\u0000")}:${conflict.involvedAssetIds.join("\u0000")}`;
     default: return `${conflict.kind}:${conflict.involvedAssetIds.join("\u0000")}`;
   }
 };
@@ -254,6 +284,21 @@ const canonicalIds = (ids: readonly AssetId[]): readonly AssetId[] => sortedUniq
 
 const sameOperation = (left: ResolutionOperation, right: ResolutionOperation): boolean =>
   left.kind === right.kind && (left.kind === "add" || right.kind === "add" || left.targetAssetId === right.targetAssetId);
+
+const capabilityReferenceKey = (reference: { readonly capabilityId: CapabilityId; readonly features?: readonly string[] }): string =>
+  JSON.stringify([reference.capabilityId, reference.features === undefined ? null : reference.features]);
+
+const capabilityDependencyKey = (dependency: CapabilityDependency): string =>
+  dependency.strength === "fallback"
+    ? `${dependency.strength}\u0000${capabilityReferenceKey(dependency.capability)}\u0000${capabilityReferenceKey(dependency.fallbackFor)}`
+    : `${dependency.strength}\u0000${capabilityReferenceKey(dependency.capability)}`;
+
+const canonicalCapabilityDependencyKeys = (
+  dependencies: readonly CapabilityDependency[] | undefined,
+): readonly string[] => (dependencies ?? []).map(capabilityDependencyKey).sort(codeUnitCompare);
+
+const sameStringLists = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
 
 const sameCandidateMeaning = (
   left: NormalizedCandidate,
@@ -265,6 +310,10 @@ const sameCandidateMeaning = (
   if (leftRule.mandatory !== rightRule.mandatory || !sameOperation(leftRule.operation, rightRule.operation)) return false;
   if (leftRule.explicitPriority !== rightRule.explicitPriority || leftRule.mergeMode !== rightRule.mergeMode) return false;
   if (leftRule.mergeGroup !== rightRule.mergeGroup || !compareStringLists(leftRule.requires, rightRule.requires)) return false;
+  if (!sameStringLists(
+    canonicalCapabilityDependencyKeys(leftRule.capabilityDependencies),
+    canonicalCapabilityDependencyKeys(rightRule.capabilityDependencies),
+  )) return false;
   for (const axis of RESOLUTION_AXES) {
     const leftHas = Object.prototype.hasOwnProperty.call(leftRule.selectors, axis);
     const rightHas = Object.prototype.hasOwnProperty.call(rightRule.selectors, axis);
@@ -551,6 +600,7 @@ const validateStringList = (
 const validateCandidate = (
   candidate: NormalizedCandidate,
   contracts: AssetTypeContractRegistry,
+  capabilityContext: CapabilityResolutionContext | undefined,
 ): readonly CoreErrorDetail[] => {
   const details: CoreErrorDetail[] = [];
   const value = candidate.candidate as unknown as Record<string, unknown>;
@@ -592,6 +642,30 @@ const validateCandidate = (
   }
   if (!Array.isArray(rule.requires)) details.push(detail([...path, "rule", "requires"], "invalid_value", "Requires must be a list."));
   else validateStringList(rule.requires, [...path, "rule", "requires"], details, true);
+
+  const capabilityDependencies = rule.capabilityDependencies;
+  if (capabilityDependencies !== undefined) {
+    // The catalog is passed here, not only where the included candidates are evaluated:
+    // a dependency naming a feature its definition does not declare is invalid
+    // configuration of the snapshot, and scope decides which candidates apply — not
+    // which ones are well-formed.
+    const capabilityResult = evaluateCapabilityDependenciesInValidatedContext(
+      capabilityDependencies as unknown as readonly CapabilityDependency[],
+      capabilityContext,
+    );
+    if (!capabilityResult.ok) {
+      for (const capabilityDetail of capabilityResult.failure.details ?? []) {
+        const relativePath = capabilityDetail.path[0] === "dependencies"
+          ? capabilityDetail.path.slice(1)
+          : capabilityDetail.path;
+        details.push(detail(
+          [...path, "rule", "capabilityDependencies", ...relativePath],
+          capabilityDetail.code,
+          capabilityDetail.message,
+        ));
+      }
+    }
+  }
 
   const selectors = rule.selectors;
   if (!isRecord(selectors)) {
@@ -639,6 +713,13 @@ const validateCandidate = (
         [...path, "rule", "mergeMode"],
         "merge_mode_not_allowed",
         "The asset type does not allow an exclusive merge.",
+      ));
+    }
+    if (Array.isArray(capabilityDependencies) && capabilityDependencies.length > 0 && !contract.allowsCapabilityDependencies) {
+      details.push(detail(
+        [...path, "rule", "capabilityDependencies"],
+        "capability_dependencies_not_allowed",
+        "The asset type does not allow capability dependencies.",
       ));
     }
   }
@@ -703,6 +784,14 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
     const requirementOrder = codeUnitCompare(leftRule.requires[index] as string, rightRule.requires[index] as string);
     if (requirementOrder !== 0) return requirementOrder;
   }
+  const leftCapabilityDependencies = canonicalCapabilityDependencyKeys(leftRule.capabilityDependencies);
+  const rightCapabilityDependencies = canonicalCapabilityDependencyKeys(rightRule.capabilityDependencies);
+  const capabilityDependencyLengthOrder = leftCapabilityDependencies.length - rightCapabilityDependencies.length;
+  if (capabilityDependencyLengthOrder !== 0) return capabilityDependencyLengthOrder;
+  for (let index = 0; index < leftCapabilityDependencies.length; index += 1) {
+    const dependencyOrder = codeUnitCompare(leftCapabilityDependencies[index]!, rightCapabilityDependencies[index]!);
+    if (dependencyOrder !== 0) return dependencyOrder;
+  }
   for (const axis of RESOLUTION_AXES) {
     const leftSelectors = leftRule.selectors[axis];
     const rightSelectors = rightRule.selectors[axis];
@@ -729,12 +818,18 @@ const conflictExplanation = (conflict: ResolutionConflict): string => {
     case "dependency_cycle": return "Asset requirements contain a cycle.";
     case "dependency_failure": return "A mandatory asset requirement could not be satisfied.";
     case "asset_type_conflict": return "Candidates of different asset types cannot be combined.";
+    case "capability_failure": return `Mandatory capability dependencies could not be satisfied: ${conflict.failedCapabilities.join(", ")}.`;
   }
 };
 
 export const toResolutionReasonDto = (reason: CandidateReason): ResolutionReason => {
   switch (reason.kind) {
-    case "included": return { kind: "included", explanation: "The candidate matched the requested scope." };
+    case "included": return {
+      kind: "included",
+      explanation: reason.degradedInfo === undefined
+        ? "The candidate matched the requested scope."
+        : `The candidate matched the requested scope. ${reason.degradedInfo.reasons.join(" ")}`,
+    };
     case "excluded": {
       if (reason.cause === "scope_mismatch") return { kind: "excluded", explanation: "The candidate did not match the requested scope." };
       if (reason.cause === "invalid_directory") return { kind: "excluded", explanation: "The candidate has an invalid directory selector." };
@@ -784,6 +879,19 @@ const resolveScopeFixedPoint = (
     return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
   }
   const contracts = input.contracts ?? DEFAULT_ASSET_TYPE_CONTRACTS;
+  const capabilityContextResult = input.capabilityContext === undefined
+    ? undefined
+    : validateCapabilityContext(input.capabilityContext);
+  if (capabilityContextResult !== undefined && !capabilityContextResult.ok) {
+    // The helper reports against its own input, so its paths name `catalog` / `offers`,
+    // neither of which is a field of ResolveScopeInput.  Rooting them at the field the
+    // caller passed is what lets a consumer find the offending value.
+    return invalidRequest((capabilityContextResult.failure.details ?? []).map((item) =>
+      detail(["capabilityContext", ...item.path], item.code, item.message)));
+  }
+  const capabilityContext = capabilityContextResult === undefined || !capabilityContextResult.ok
+    ? undefined
+    : capabilityContextResult.value;
 
   const conflicts = new Map<string, ResolutionConflict>();
   const addConflict = (conflict: ResolutionConflict): void => {
@@ -809,7 +917,7 @@ const resolveScopeFixedPoint = (
   // invalid-directory evaluation, and it must not be dereferenced below.
   for (const rawCandidate of input.snapshot.candidates) {
     const candidate = rawCandidate as AssetCandidate;
-    const structuralDetails = validateCandidate({ candidate }, contracts);
+    const structuralDetails = validateCandidate({ candidate }, contracts, capabilityContext);
     if (structuralDetails.length > 0) {
       validationDetails.push(...structuralDetails);
       continue;
@@ -1073,11 +1181,70 @@ const resolveScopeFixedPoint = (
   type DependencyNode = {
     readonly edges: readonly { readonly requiredId: AssetId; readonly target: CandidateState }[];
     readonly directFailures: readonly { readonly id: AssetId; readonly cause: DependencyCause }[];
+    readonly capabilityOutcome?: CapabilityDependencyOutcome;
   };
+
+  // Neither a candidate's capability dependencies nor the capability context change
+  // across operation passes, so each outcome is settled once here rather than per pass —
+  // otherwise every pass re-normalizes the dependencies of every candidate.
+  const capabilityOutcomeByState = new Map<CandidateState, CapabilityDependencyOutcome>();
+  for (const state of baseIncluded) {
+    const dependencies = state.candidate.rule.capabilityDependencies;
+    if (dependencies === undefined) continue;
+    const capabilityResult = evaluateCapabilityDependenciesInValidatedContext(dependencies, capabilityContext);
+    // Structural validation above ran with this same catalog, so a failure here would
+    // mean the two disagree rather than that the snapshot is invalid.
+    if (!capabilityResult.ok) throw new Error("Validated capability dependencies must evaluate successfully.");
+    capabilityOutcomeByState.set(state, capabilityResult.value);
+  }
 
   const dependencyOutcomes = (
     statuses: ReadonlyMap<CandidateState, FixedStatus>,
   ): ReadonlyMap<CandidateState, DependencyOutcome> => {
+    const dependencyOutcomeFromCapability = (outcome: CapabilityDependencyOutcome): DependencyOutcome =>
+      outcome.ok
+        ? {
+            ok: true,
+            ...(outcome.degradation === undefined ? {} : { degradedInfo: outcome.degradation }),
+            ...(outcome.degradedCapabilities === undefined ? {} : { degradedCapabilities: outcome.degradedCapabilities }),
+          }
+        : {
+            ok: false,
+            cause: "capability_unavailable",
+            failedRequirements: [],
+            failedCapabilities: outcome.failedCapabilities,
+            nonCycleFailedRequirements: [],
+          };
+
+    const degradationOrder = (left: CapabilityDegradation, right: CapabilityDegradation): number => {
+      const idOrder = codeUnitCompare(left.capabilityId, right.capabilityId);
+      if (idOrder !== 0) return idOrder;
+      const strengthOrder = codeUnitCompare(left.strength, right.strength);
+      if (strengthOrder !== 0) return strengthOrder;
+      return codeUnitCompare(left.fallbackCapabilityId ?? "", right.fallbackCapabilityId ?? "");
+    };
+    const mergeDegradation = (
+      sources: readonly DependencyOutcome[],
+    ): Pick<Extract<DependencyOutcome, { readonly ok: true }>, "degradedInfo" | "degradedCapabilities"> => {
+      const degradedCapabilities = sources.flatMap((source) => source.ok ? [...(source.degradedCapabilities ?? [])] : []);
+      const reasons = sources.flatMap((source) => source.ok ? [...(source.degradedInfo?.reasons ?? [])] : []);
+      const orderedDegradations = degradedCapabilities.sort(degradationOrder);
+      const uniqueDegradations: CapabilityDegradation[] = [];
+      for (const degradation of orderedDegradations) {
+        const previous = uniqueDegradations.at(-1);
+        if (previous !== undefined && degradationOrder(previous, degradation) === 0) continue;
+        uniqueDegradations.push(degradation);
+      }
+      const uniqueReasons = [...new Set(reasons)].sort(codeUnitCompare);
+      if (uniqueDegradations.length === 0) return {};
+      // A degraded outcome must retain a reason because DegradedInfo rejects empty lists.
+      if (uniqueReasons.length === 0) throw new Error("A degraded capability outcome must include a reason.");
+      return {
+        degradedCapabilities: uniqueDegradations,
+        degradedInfo: { reasons: uniqueReasons },
+      };
+    };
+
     const activeById = new Map<string, CandidateState[]>();
     for (const state of baseIncluded) {
       if (statuses.get(state)?.kind !== "included") continue;
@@ -1118,7 +1285,12 @@ const resolveScopeFixedPoint = (
           edges.push({ requiredId, target: targets[0]! });
         }
       }
-      dependencyNodes.set(state, { edges, directFailures });
+      const capabilityOutcome = capabilityOutcomeByState.get(state);
+      dependencyNodes.set(state, {
+        edges,
+        directFailures,
+        ...(capabilityOutcome === undefined ? {} : { capabilityOutcome }),
+      });
       outgoing.set(state, edges.map((edge) => edge.target));
     }
 
@@ -1215,19 +1387,47 @@ const resolveScopeFixedPoint = (
         : undefined;
       const componentHasNonCycleFailure = component.some((state) => {
         const node = dependencyNodes.get(state)!;
-        return node.directFailures.some((failure) => failure.cause !== "requirement_cycle") ||
+        return node.capabilityOutcome?.ok === false ||
+          node.directFailures.some((failure) => failure.cause !== "requirement_cycle") ||
           node.edges.some((edge) => {
             if (componentStates.has(edge.target)) return false;
             const outcome = outcomes.get(edge.target);
-            return outcome !== undefined && !outcome.ok && outcome.nonCycleFailedRequirements.length > 0;
+            return outcome !== undefined && !outcome.ok && (
+              outcome.nonCycleFailedRequirements.length > 0 ||
+              (outcome.failedCapabilities?.length ?? 0) > 0
+            );
           });
+      });
+      // Every state of a component reaches every other, so a capability the component
+      // cannot satisfy is unsatisfied for all of its members — whether the requirement
+      // sits on a member itself or on something a single member requires from outside.
+      // Both arrive here, so each member carries the whole set rather than only the part
+      // its own edges happen to touch.  Components this one depends on are materialized
+      // first and already closed over their own reach, so this single pass is the fixed
+      // point; a member's own external edges are re-walked below only for the per-edge
+      // requirement diagnostics, which are not shared across the component.
+      const componentFailedCapabilities = component.flatMap((state) => {
+        const node = dependencyNodes.get(state)!;
+        const own = node.capabilityOutcome?.ok === false ? [...node.capabilityOutcome.failedCapabilities] : [];
+        const required = node.edges.flatMap((edge) => {
+          if (componentStates.has(edge.target)) return [];
+          const outcome = outcomes.get(edge.target);
+          return outcome === undefined || outcome.ok ? [] : [...(outcome.failedCapabilities ?? [])];
+        });
+        return [...own, ...required];
       });
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
         const failures = [...node.directFailures];
+        const capabilityFailure = node.capabilityOutcome?.ok === false
+          ? node.capabilityOutcome
+          : undefined;
+        const failedCapabilities = [...componentFailedCapabilities];
         const nonCycleFailedRequirements = node.directFailures
           .filter((failure) => failure.cause !== "requirement_cycle")
           .map((failure) => failure.id);
+        const outcomeSources: DependencyOutcome[] = [];
+        if (node.capabilityOutcome !== undefined) outcomeSources.push(dependencyOutcomeFromCapability(node.capabilityOutcome));
         let cycleIds = componentCycleIds;
         if (componentCycleIds !== undefined) {
           for (const edge of node.edges) {
@@ -1239,22 +1439,33 @@ const resolveScopeFixedPoint = (
         for (const edge of node.edges) {
           if (componentStates.has(edge.target)) continue;
           const outcome = outcomes.get(edge.target);
-          if (outcome === undefined || outcome.ok) continue;
+          if (outcome === undefined) continue;
+          if (outcome.ok) {
+            outcomeSources.push(outcome);
+            continue;
+          }
           failures.push({ id: edge.requiredId, cause: outcome.cause });
           if (outcome.cycleIds !== undefined) {
             cycleIds = cycleIds === undefined ? outcome.cycleIds : canonicalIds([...cycleIds, ...outcome.cycleIds]);
           }
-          if (outcome.nonCycleFailedRequirements.length > 0) nonCycleFailedRequirements.push(edge.requiredId);
+          if (outcome.nonCycleFailedRequirements.length > 0 || (outcome.failedCapabilities?.length ?? 0) > 0) {
+            nonCycleFailedRequirements.push(edge.requiredId);
+          }
         }
         failures.sort((left, right) => codeUnitCompare(left.id, right.id));
         nonCycleFailedRequirements.sort(codeUnitCompare);
-        if (failures.length === 0) {
-          outcomes.set(state, { ok: true });
+        const uniqueFailedCapabilities = [...new Set(failedCapabilities)].sort(codeUnitCompare);
+        if (failures.length === 0 && capabilityFailure === undefined) {
+          outcomes.set(state, { ok: true, ...mergeDegradation(outcomeSources) });
         } else {
+          const cause = capabilityFailure === undefined
+            ? failures[0]!.cause
+            : "capability_unavailable";
           outcomes.set(state, {
             ok: false,
-            cause: failures[0]!.cause,
+            cause,
             failedRequirements: failures.map((failure) => failure.id),
+            ...(uniqueFailedCapabilities.length === 0 ? {} : { failedCapabilities: uniqueFailedCapabilities }),
             ...(cycleIds === undefined ? {} : { cycleIds }),
             nonCycleFailedRequirements: canonicalIds(nonCycleFailedRequirements),
           });
@@ -1993,13 +2204,21 @@ const resolveScopeFixedPoint = (
       finalReasons.set(state, resolutionConflictReason(status.conflict, state.rank));
     } else {
       const outcome = finalPass.dependency.get(state)!;
-      if (outcome.ok) finalReasons.set(state, baseReasons.get(state)!);
-      else finalReasons.set(state, {
-        kind: "unavailable",
-        availability: "unavailable",
-        cause: outcome.cause,
-        failedRequirements: [...outcome.failedRequirements],
-      });
+      if (outcome.ok) {
+        finalReasons.set(state, {
+          ...baseReasons.get(state)!,
+          ...(outcome.degradedInfo === undefined ? {} : { degradedInfo: outcome.degradedInfo }),
+          ...(outcome.degradedCapabilities === undefined ? {} : { degradedCapabilities: outcome.degradedCapabilities }),
+        });
+      } else {
+        finalReasons.set(state, {
+          kind: "unavailable",
+          availability: "unavailable",
+          cause: outcome.cause,
+          failedRequirements: [...outcome.failedRequirements],
+          ...(outcome.failedCapabilities === undefined ? {} : { failedCapabilities: outcome.failedCapabilities }),
+        });
+      }
     }
   }
   for (const reason of finalReasons.values()) {
@@ -2028,6 +2247,13 @@ const resolveScopeFixedPoint = (
     if (reason.kind !== "unavailable" || !state.candidate.rule.mandatory) continue;
     const outcome = finalPass.dependency.get(state)!;
     if (outcome.ok) continue;
+    if (outcome.failedCapabilities !== undefined && outcome.failedCapabilities.length > 0) {
+      addConflict({
+        kind: "capability_failure",
+        failedCapabilities: [...outcome.failedCapabilities],
+        involvedAssetIds: [state.candidate.assetId],
+      });
+    }
     if (outcome.cycleIds !== undefined) {
       addConflict({
         kind: "dependency_cycle",
