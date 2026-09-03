@@ -1,5 +1,5 @@
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
-import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,162 @@ describe("Project Registry reconciliation", () => {
     expect(result).toEqual({ ok: true, value: { status: "complete" } });
     const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
     expect(document.entries[0].state).toBe("bound");
+  });
+
+  it("retains the Registry entry when reconciliation detects a replaced .aacl directory", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "state", "project-registry.json");
+    await mkdir(join(projectRoot, ".aacl"), { recursive: true });
+    await writeFile(join(projectRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "project-one",
+    }), "utf8");
+    const document = JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId: "project-one",
+        state: "bound",
+      }],
+    });
+    await mkdir(join(root, "state"));
+    await writeFile(registryPath, document, "utf8");
+
+    const result = await createProjectRegistry(registryPath, {
+      markerObservationWorkerPath: fileURLToPath(new URL("./fixtures/marker-observer-replace-directory.ts", import.meta.url)),
+    }).reconcile();
+
+    expect(result).toEqual({ ok: true, value: { status: "complete" } });
+    expect(await readFile(registryPath, "utf8")).toBe(document);
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+  });
+
+  it("does not persist reconciliation after the Marker source changes before commit", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "state", "project-registry.json");
+    await mkdir(join(projectRoot, ".aacl"), { recursive: true });
+    await writeFile(join(projectRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "project-one",
+    }), "utf8");
+    const document = JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId: "project-one",
+        state: "pending",
+      }],
+    });
+    await mkdir(join(root, "state"));
+    await writeFile(registryPath, document, "utf8");
+
+    const result = await createProjectRegistry(registryPath, {
+      beforeWrite: async () => {
+        const replacementDirectory = join(projectRoot, ".aacl-replacement");
+        await mkdir(replacementDirectory);
+        await writeFile(join(replacementDirectory, "project.json"), JSON.stringify({
+          schemaVersion: 1,
+          projectId: "project-replacement",
+        }), "utf8");
+        await rename(join(projectRoot, ".aacl"), join(projectRoot, ".aacl-original"));
+        await symlink(replacementDirectory, join(projectRoot, ".aacl"), "dir");
+      },
+    }).reconcile();
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected the reconciliation source guard failure");
+    expect(result.failure.details?.[0]?.code).toBe("unavailable");
+    expect(await readFile(registryPath, "utf8")).toBe(document);
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+  });
+
+  it("returns source_changed when a Marker source changes after reconciliation commit", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "state", "project-registry.json");
+    await mkdir(join(projectRoot, ".aacl"), { recursive: true });
+    await writeFile(join(projectRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "project-one",
+    }), "utf8");
+    const document = JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId: "project-one",
+        state: "pending",
+      }],
+    });
+    await mkdir(join(root, "state"));
+    await writeFile(registryPath, document, "utf8");
+
+    const result = await createProjectRegistry(registryPath, {
+      afterPersist: async () => {
+        const replacementDirectory = join(projectRoot, ".aacl-replacement");
+        await mkdir(replacementDirectory);
+        await writeFile(join(replacementDirectory, "project.json"), JSON.stringify({
+          schemaVersion: 1,
+          projectId: "project-replacement",
+        }), "utf8");
+        await rename(join(projectRoot, ".aacl"), join(projectRoot, ".aacl-original"));
+        await symlink(replacementDirectory, join(projectRoot, ".aacl"), "dir");
+      },
+    }).reconcile();
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected a post-commit source guard failure");
+    expect(result.failure.details?.[0]?.code).toBe("source_changed");
+    const persisted = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(persisted.entries[0]).toMatchObject({
+      projectId: "project-one",
+      state: "bound",
+    });
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+  });
+
+  it("replaces a same-root mismatch with the proposed pending identity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-registry-test-"));
+    scratch.push(root);
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "state", "project-registry.json");
+    await mkdir(projectRoot);
+    await mkdir(join(root, "state"));
+    await writeFile(registryPath, JSON.stringify({
+      schemaVersion: 1,
+      entries: [{
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId: "project-registered",
+        state: "mismatch",
+        markerProjectId: "project-conflicting",
+      }],
+    }), "utf8");
+
+    const result = await createProjectRegistry(registryPath).prepare(
+      projectRoot,
+      projectRoot,
+      createProjectMarkerDto("project-recovered").projectId,
+    );
+
+    expect(result).toEqual({ ok: true, value: "project-recovered" });
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries).toEqual([{
+      workspacePath: projectRoot,
+      projectRoot,
+      projectId: "project-recovered",
+      state: "pending",
+    }]);
   });
 
   it("refuses a malformed durable registry", async () => {

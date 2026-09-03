@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, rmdir, stat, unlink } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   createProjectMarkerDto,
@@ -13,7 +14,18 @@ import type {
 } from "@aacl/shared";
 import { coreFailure, type AssetResult, type CoreFailure } from "@aacl/core-domain";
 import type { ProjectRegistry } from "./registry.ts";
-import { readRegularUtf8 } from "../internal/regular-file.ts";
+import {
+  FileIdentityError,
+  assertDirectoryIdentity,
+  assertRegularFileIdentity,
+  fileIdentityOf,
+  sameFileIdentity,
+  type FileIdentity,
+} from "../internal/fs-identity.ts";
+import {
+  readMarkerInDirectory,
+  type MarkerSource,
+} from "../internal/project-marker.ts";
 
 export const PROJECT_DIRECTORY_NAME = ".aacl";
 export const PROJECT_MARKER_FILE_NAME = "project.json";
@@ -30,13 +42,19 @@ export type ProjectServiceOptions = {
   readonly afterMarkerWritten?: () => Promise<void>;
   readonly unlinkPath?: (path: string) => Promise<void>;
   readonly statPath?: StatPath;
+  readonly beforeMarkerDirectoryFreshStat?: () => void | Promise<void>;
+  readonly afterMarkerDirectoryFreshStat?: () => void | Promise<void>;
+  readonly beforeMarkerTemporaryOpen?: () => void | Promise<void>;
+  readonly afterMarkerTemporaryOpen?: () => void | Promise<void>;
+  readonly beforeMarkerLink?: () => void | Promise<void>;
+  readonly afterMarkerLink?: () => void | Promise<void>;
 };
 
 type StatPath = (path: string) => Promise<{ readonly isDirectory: () => boolean }>;
 
 type MarkerRead =
-  | { readonly status: "missing" }
-  | { readonly status: "valid"; readonly marker: ProjectMarkerDto }
+  | { readonly status: "missing_directory" | "missing_marker" }
+  | { readonly status: "valid"; readonly marker: ProjectMarkerDto; readonly source: MarkerSource }
   | { readonly status: "invalid"; readonly failure: DiscoveryFailure };
 
 type FailureWithCode<Code extends CoreFailure["code"]> = Omit<CoreFailure, "code"> & {
@@ -57,6 +75,16 @@ const errorCode = (error: unknown): string | undefined => {
   return typeof error.code === "string" ? error.code : undefined;
 };
 
+const sourceFailure = (error: unknown, unavailableMessage: string): DiscoveryFailure => {
+  if (error instanceof FileIdentityError && error.kind === "directory") {
+    return projectFailure("invalid_request", "The .aacl path is not a regular directory.", ["projectRoot"], "invalid_project_directory");
+  }
+  if (error instanceof FileIdentityError && error.kind === "file") {
+    return projectFailure("invalid_request", "The Project Marker is not a regular file.", ["projectMarker"], "invalid_marker_file");
+  }
+  return projectFailure("unavailable", unavailableMessage, ["projectMarker"], "unavailable");
+};
+
 const invalidDiscovery = (
   workspacePath: string,
   projectRoot: string,
@@ -72,33 +100,42 @@ const invalidDiscovery = (
   },
 });
 
-const readMarker = async (markerPath: string): Promise<MarkerRead> => {
-  let info;
-  try {
-    info = await lstat(markerPath);
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return { status: "missing" };
+const readMarker = async (
+  projectDirectory: string,
+  beforeDirectoryFreshStat?: () => void | Promise<void>,
+  afterDirectoryFreshStat?: () => void | Promise<void>,
+): Promise<MarkerRead> => {
+  const markerReadOptions = beforeDirectoryFreshStat === undefined && afterDirectoryFreshStat === undefined
+    ? {}
+    : {
+        ...(beforeDirectoryFreshStat === undefined ? {} : { beforeDirectoryFreshStat }),
+        ...(afterDirectoryFreshStat === undefined ? {} : { afterDirectoryFreshStat }),
+      };
+  const read = await readMarkerInDirectory(
+    projectDirectory,
+    join(projectDirectory, PROJECT_MARKER_FILE_NAME),
+    markerReadOptions,
+  );
+  if (read.status === "missing_directory" || read.status === "missing_marker") return read;
+  if (read.status === "invalid_directory") {
     return {
       status: "invalid",
-      failure: projectFailure("unavailable", "The Project Marker could not be inspected.", ["projectMarker"], "unavailable"),
+      failure: projectFailure("invalid_request", "The .aacl path is not a regular directory.", ["projectRoot"], "invalid_project_directory"),
     };
   }
-  if (info.isSymbolicLink() || !info.isFile()) {
+  if (read.status === "unavailable_directory") {
+    return {
+      status: "invalid",
+      failure: projectFailure("unavailable", "The .aacl directory could not be inspected.", ["projectRoot"], "unavailable"),
+    };
+  }
+  if (read.status === "invalid_marker") {
     return {
       status: "invalid",
       failure: projectFailure("invalid_request", "The Project Marker is not a regular file.", ["projectMarker"], "invalid_marker_file"),
     };
   }
-
-  const read = await readRegularUtf8(markerPath);
-  if (read.status === "missing") return { status: "missing" };
-  if (read.status === "not_regular") {
-    return {
-      status: "invalid",
-      failure: projectFailure("invalid_request", "The Project Marker is not a regular file.", ["projectMarker"], "invalid_marker_file"),
-    };
-  }
-  if (read.status === "unavailable") {
+  if (read.status === "unavailable_marker") {
     return {
       status: "invalid",
       failure: projectFailure("unavailable", "The Project Marker could not be read.", ["projectMarker"], "unavailable"),
@@ -113,7 +150,7 @@ const readMarker = async (markerPath: string): Promise<MarkerRead> => {
         failure: projectFailure("invalid_request", "The Project Marker has an invalid shape.", ["projectMarker"], "invalid_marker"),
       };
     }
-    return { status: "valid", marker: parsed.value };
+    return { status: "valid", marker: parsed.value, source: read.source };
   } catch {
     return {
       status: "invalid",
@@ -124,7 +161,7 @@ const readMarker = async (markerPath: string): Promise<MarkerRead> => {
 
 const prepareProjectDirectory = async (
   projectRoot: string,
-): Promise<AssetResult<{ readonly path: string; readonly created: boolean }>> => {
+): Promise<AssetResult<{ readonly path: string; readonly created: boolean; readonly identity: FileIdentity }>> => {
   const projectDirectory = join(projectRoot, PROJECT_DIRECTORY_NAME);
   try {
     let info;
@@ -139,7 +176,7 @@ const prepareProjectDirectory = async (
         failure: projectFailure("invalid_request", "The .aacl path is not a regular directory.", ["projectRoot"], "invalid_project_directory"),
       };
     }
-    if (info !== undefined) return { ok: true, value: { path: projectDirectory, created: false } };
+    if (info !== undefined) return { ok: true, value: { path: projectDirectory, created: false, identity: fileIdentityOf(info) } };
     let created = false;
     try {
       await mkdir(projectDirectory);
@@ -154,7 +191,7 @@ const prepareProjectDirectory = async (
         failure: projectFailure("invalid_request", "The .aacl path is not a regular directory.", ["projectRoot"], "invalid_project_directory"),
       };
     }
-    return { ok: true, value: { path: projectDirectory, created } };
+    return { ok: true, value: { path: projectDirectory, created, identity: fileIdentityOf(prepared) } };
   } catch {
     return {
       ok: false,
@@ -163,9 +200,14 @@ const prepareProjectDirectory = async (
   }
 };
 
-const removeEmptyProjectDirectory = async (projectDirectory: string, created: boolean): Promise<void> => {
+const removeEmptyProjectDirectory = async (
+  projectDirectory: string,
+  created: boolean,
+  directoryIdentity: FileIdentity,
+): Promise<void> => {
   if (!created) return;
   try {
+    assertDirectoryIdentity(projectDirectory, directoryIdentity);
     await rmdir(projectDirectory);
   } catch {
     // A concurrent initializer or a user-written asset keeps the directory in place.
@@ -176,27 +218,73 @@ const writeMarkerExclusively = async (
   markerPath: string,
   marker: ProjectMarkerDto,
   unlinkPath: (path: string) => Promise<void>,
+  directoryIdentity: FileIdentity,
+  options: MarkerWriteOptions = {},
 ): Promise<"written" | "exists" | "failed"> => {
+  const projectDirectory = dirname(markerPath);
   const temporaryPath = join(dirname(markerPath), `.aacl.${randomUUID()}.tmp`);
   let markerCommitted = false;
-  let handle;
+  let temporaryIdentity: FileIdentity | undefined;
+  let handle: FileHandle | undefined;
+  const assertDirectory = (): void => assertDirectoryIdentity(projectDirectory, directoryIdentity);
+  const assertTemporary = (): void => {
+    if (temporaryIdentity === undefined) {
+      throw new FileIdentityError("file", temporaryPath);
+    }
+    assertRegularFileIdentity(temporaryPath, temporaryIdentity);
+  };
+  const cleanupTemporary = async (): Promise<void> => {
+    if (temporaryIdentity === undefined) return;
+    try {
+      assertDirectory();
+      assertTemporary();
+      await unlinkPath(temporaryPath);
+    } catch {
+      // A replacement directory or file must never be removed by stale cleanup.
+    }
+  };
   try {
+    assertDirectory();
+    await options.beforeTemporaryOpen?.();
+    assertDirectory();
     handle = await open(temporaryPath, "wx", 0o644);
+    const temporaryInfo = await handle.stat();
+    if (!temporaryInfo.isFile()) throw new FileIdentityError("file", temporaryPath);
+    temporaryIdentity = fileIdentityOf(temporaryInfo);
+    assertDirectory();
+    assertTemporary();
+    await options.afterTemporaryOpen?.();
+    assertDirectory();
+    assertTemporary();
     await handle.writeFile(`${JSON.stringify(marker, null, 2)}\n`, "utf8");
     await handle.close();
     handle = undefined;
+    await options.beforeMarkerLink?.();
+    assertDirectory();
+    assertTemporary();
     await link(temporaryPath, markerPath);
+    await options.afterMarkerLink?.();
+    assertDirectory();
+    assertTemporary();
+    assertRegularFileIdentity(markerPath, temporaryIdentity);
     markerCommitted = true;
-    await unlinkPath(temporaryPath);
+    await cleanupTemporary();
     return "written";
   } catch (error) {
     if (handle !== undefined) {
       try { await handle.close(); } catch { /* cleanup still runs */ }
     }
-    try { await unlinkPath(temporaryPath); } catch { /* the operation failure is primary */ }
+    await cleanupTemporary();
     if (markerCommitted) return "written";
     return errorCode(error) === "EEXIST" ? "exists" : "failed";
   }
+};
+
+type MarkerWriteOptions = {
+  readonly beforeTemporaryOpen?: () => void | Promise<void>;
+  readonly afterTemporaryOpen?: () => void | Promise<void>;
+  readonly beforeMarkerLink?: () => void | Promise<void>;
+  readonly afterMarkerLink?: () => void | Promise<void>;
 };
 
 const projectChains = new Map<string, Promise<unknown>>();
@@ -266,24 +354,34 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
     workspacePath: string,
     projectRoot: string,
     projectId: ProjectId,
+    source: MarkerSource,
   ): Promise<AssetResult<ProjectDiscoveryDto>> => {
     // The binding key is the discovered Project root, not whichever nested folder happened
     // to initiate discovery. Otherwise opening `packages/a` and later explicitly initializing
     // it as a nested Project would collide with the parent Project's cached binding.
-    const observed = await options.registry.observe(projectRoot, projectRoot, projectId);
-    if (!observed.ok) return observed;
-    return observed.value.status === "bound"
-      ? { ok: true, value: { status: "initialized", workspacePath, projectRoot, projectId } }
-      : {
-          ok: true,
-          value: {
-            status: "mismatch",
-            workspacePath,
-            projectRoot,
-            markerProjectId: projectId,
-            registryProjectId: observed.value.registryProjectId,
-          },
-        };
+    try {
+      source.assertSource();
+      const observed = await options.registry.observe(projectRoot, projectRoot, projectId, source.assertSource);
+      if (!observed.ok) return observed;
+      source.assertSource();
+      return observed.value.status === "bound"
+        ? { ok: true, value: { status: "initialized", workspacePath, projectRoot, projectId } }
+        : {
+            ok: true,
+            value: {
+              status: "mismatch",
+              workspacePath,
+              projectRoot,
+              markerProjectId: projectId,
+              registryProjectId: observed.value.registryProjectId,
+            },
+          };
+    } catch (error) {
+      return {
+        ok: true,
+        value: invalidDiscovery(workspacePath, projectRoot, sourceFailure(error, "The Project Marker source changed during discovery.")),
+      };
+    }
   };
 
   const discover = async (workspacePath: string): Promise<AssetResult<ProjectDiscoveryDto>> => {
@@ -294,29 +392,31 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
     while (true) {
       const projectDirectory = join(current, PROJECT_DIRECTORY_NAME);
       try {
-        const info = await lstat(projectDirectory);
-        if (info.isSymbolicLink() || !info.isDirectory()) {
-          const failure = projectFailure("invalid_request", "The nearest .aacl path is not a regular directory.", ["projectMarker"], "invalid_project_directory");
-          return { ok: true, value: invalidDiscovery(normalizedWorkspace, current, failure) };
+        const marker = await readMarker(
+          projectDirectory,
+          options.beforeMarkerDirectoryFreshStat,
+          options.afterMarkerDirectoryFreshStat,
+        );
+        if (marker.status === "missing_directory") {
+          const parent = dirname(current);
+          if (parent === current) return { ok: true, value: { status: "uninitialized", workspacePath: normalizedWorkspace } };
+          current = parent;
+          continue;
         }
-        const marker = await readMarker(join(projectDirectory, PROJECT_MARKER_FILE_NAME));
-        if (marker.status === "missing") {
+        if (marker.status === "missing_marker") {
           const failure = projectFailure("invalid_request", "The nearest .aacl directory has no Project Marker.", ["projectMarker"], "missing_marker");
           return { ok: true, value: invalidDiscovery(normalizedWorkspace, current, failure) };
         }
         if (marker.status === "invalid") {
           return { ok: true, value: invalidDiscovery(normalizedWorkspace, current, marker.failure) };
         }
-        return bind(normalizedWorkspace, current, marker.marker.projectId);
+        if (marker.status === "valid") return bind(normalizedWorkspace, current, marker.marker.projectId, marker.source);
+        const failure = projectFailure("unavailable", "The workspace could not be searched for a Project Marker.", ["workspacePath"], "unavailable");
+        return { ok: true, value: invalidDiscovery(normalizedWorkspace, current, failure) };
       } catch (error) {
-        if (errorCode(error) !== "ENOENT") {
-          const failure = projectFailure("unavailable", "The workspace could not be searched for a Project Marker.", ["workspacePath"], "unavailable");
-          return { ok: true, value: invalidDiscovery(normalizedWorkspace, current, failure) };
-        }
+        const failure = projectFailure("unavailable", "The workspace could not be searched for a Project Marker.", ["workspacePath"], "unavailable");
+        return { ok: true, value: invalidDiscovery(normalizedWorkspace, current, failure) };
       }
-      const parent = dirname(current);
-      if (parent === current) return { ok: true, value: { status: "uninitialized", workspacePath: normalizedWorkspace } };
-      current = parent;
     }
   };
 
@@ -328,36 +428,32 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
       const normalizedRoot = inspected.value;
       return serialized(normalizedRoot, async () => {
         const projectDirectory = join(normalizedRoot, PROJECT_DIRECTORY_NAME);
-        let directoryInfo;
-        try {
-          directoryInfo = await lstat(projectDirectory);
-        } catch (error) {
-          if (errorCode(error) !== "ENOENT") {
-            return {
-              ok: false,
-              failure: projectFailure("unavailable", "The .aacl path could not be inspected.", ["projectRoot"], "unavailable"),
-            };
-          }
-        }
-        if (directoryInfo !== undefined && (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory())) {
-          return {
-            ok: false,
-            failure: projectFailure("invalid_request", "The .aacl path is not a regular directory.", ["projectRoot"], "invalid_project_directory"),
-          };
-        }
-
-        const markerPath = join(projectDirectory, PROJECT_MARKER_FILE_NAME);
-        const existingMarker = await readMarker(markerPath);
+        const existingMarker = await readMarker(
+          projectDirectory,
+          options.beforeMarkerDirectoryFreshStat,
+          options.afterMarkerDirectoryFreshStat,
+        );
         if (existingMarker.status === "invalid") return { ok: false, failure: existingMarker.failure };
         if (existingMarker.status === "valid") {
-          const observed = await options.registry.observe(normalizedRoot, normalizedRoot, existingMarker.marker.projectId);
-          if (!observed.ok) return observed;
-          return observed.value.status === "bound"
-            ? { ok: true, value: { projectId: existingMarker.marker.projectId, projectRoot: normalizedRoot } }
-            : {
-                ok: false,
-                failure: projectFailure("conflict", "The Project Marker conflicts with the registered Project identity.", ["projectMarker", "projectId"], "project_id_mismatch"),
-              };
+          try {
+            existingMarker.source.assertSource();
+            const observed = await options.registry.observe(
+              normalizedRoot,
+              normalizedRoot,
+              existingMarker.marker.projectId,
+              existingMarker.source.assertSource,
+            );
+            if (!observed.ok) return observed;
+            existingMarker.source.assertSource();
+            return observed.value.status === "bound"
+              ? { ok: true, value: { projectId: existingMarker.marker.projectId, projectRoot: normalizedRoot } }
+              : {
+                  ok: false,
+                  failure: projectFailure("conflict", "The Project Marker conflicts with the registered Project identity.", ["projectMarker", "projectId"], "project_id_mismatch"),
+                };
+          } catch (error) {
+            return { ok: false, failure: sourceFailure(error, "The Project Marker source changed during initialization.") };
+          }
         }
 
         const proposed = projectIdFrom(newProjectSuffix());
@@ -367,32 +463,59 @@ export const createProjectService = (options: ProjectServiceOptions): ProjectSer
         const marker = createProjectMarkerDto(pending.value);
         const prepared = await prepareProjectDirectory(normalizedRoot);
         if (!prepared.ok) return prepared;
-        const write = await writeMarkerExclusively(markerPath, marker, unlinkPath);
+        const markerPath = join(projectDirectory, PROJECT_MARKER_FILE_NAME);
+        const write = await writeMarkerExclusively(markerPath, marker, unlinkPath, prepared.value.identity, {
+          ...(options.beforeMarkerTemporaryOpen === undefined ? {} : { beforeTemporaryOpen: options.beforeMarkerTemporaryOpen }),
+          ...(options.afterMarkerTemporaryOpen === undefined ? {} : { afterTemporaryOpen: options.afterMarkerTemporaryOpen }),
+          ...(options.beforeMarkerLink === undefined ? {} : { beforeMarkerLink: options.beforeMarkerLink }),
+          ...(options.afterMarkerLink === undefined ? {} : { afterMarkerLink: options.afterMarkerLink }),
+        });
         if (write === "failed") {
-          await removeEmptyProjectDirectory(prepared.value.path, prepared.value.created);
+          await removeEmptyProjectDirectory(prepared.value.path, prepared.value.created, prepared.value.identity);
           return {
             ok: false,
             failure: projectFailure("unavailable", "The Project Marker could not be created atomically.", ["projectMarker"], "unavailable"),
           };
         }
-        const installed = write === "written" ? marker : await readMarker(markerPath);
         if (options.afterMarkerWritten !== undefined && write === "written") await options.afterMarkerWritten();
-        if (!("projectId" in installed) && installed.status !== "valid") {
-          const failure = installed.status === "invalid"
-            ? installed.failure
-            : projectFailure("conflict", "The Project Marker disappeared during initialization.", ["projectMarker"], "marker_race");
-          return { ok: false, failure };
-        }
-        const installedProjectId = "projectId" in installed ? installed.projectId : installed.marker.projectId;
-        const observed = await options.registry.observe(normalizedRoot, normalizedRoot, installedProjectId);
-        if (!observed.ok) return observed;
-        if (observed.value.status === "mismatch") {
+        const installed = await readMarker(
+          projectDirectory,
+          options.beforeMarkerDirectoryFreshStat,
+          options.afterMarkerDirectoryFreshStat,
+        );
+        if (installed.status === "invalid") return { ok: false, failure: installed.failure };
+        if (installed.status !== "valid") {
           return {
             ok: false,
-            failure: projectFailure("conflict", "The Project Marker conflicts with the registered Project identity.", ["projectMarker", "projectId"], "project_id_mismatch"),
+            failure: projectFailure("conflict", "The Project Marker disappeared during initialization.", ["projectMarker"], "marker_race"),
           };
         }
-        return { ok: true, value: { projectId: installedProjectId, projectRoot: normalizedRoot } };
+        try {
+          if (!sameFileIdentity(installed.source.directoryIdentity, prepared.value.identity)) {
+            throw new FileIdentityError("directory", projectDirectory);
+          }
+          installed.source.assertSource();
+          const observed = await options.registry.observe(
+            normalizedRoot,
+            normalizedRoot,
+            installed.marker.projectId,
+            installed.source.assertSource,
+          );
+          if (!observed.ok) return observed;
+          installed.source.assertSource();
+          if (observed.value.status === "mismatch") {
+            return {
+              ok: false,
+              failure: projectFailure("conflict", "The Project Marker conflicts with the registered Project identity.", ["projectMarker", "projectId"], "project_id_mismatch"),
+            };
+          }
+          return { ok: true, value: { projectId: installed.marker.projectId, projectRoot: normalizedRoot } };
+        } catch (error) {
+          return {
+            ok: false,
+            failure: sourceFailure(error, "The Project Marker source changed during initialization."),
+          };
+        }
       });
     },
   };

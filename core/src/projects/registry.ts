@@ -9,6 +9,7 @@ import type { ProjectId } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "@aacl/core-domain";
 import { writeAtomically, type BeforeRename } from "../internal/atomic-write.ts";
 import { withFileLock, type FileLockGuard, type FileLockOptions } from "../internal/file-lock.ts";
+import { markerSourceFromSnapshot, type MarkerSourceSnapshot } from "../internal/project-marker.ts";
 import { readRegularUtf8 } from "../internal/regular-file.ts";
 import type { MarkerObservation } from "./marker-observer.ts";
 
@@ -50,6 +51,7 @@ export type ProjectRegistry = {
     workspacePath: string,
     projectRoot: string,
     markerProjectId: ProjectId,
+    sourceGuard?: FileLockGuard,
   ) => Promise<AssetResult<RegistryObservation>>;
   readonly reconcile: () => Promise<AssetResult<RegistryReconcileOutcome>>;
 };
@@ -57,6 +59,7 @@ export type ProjectRegistry = {
 export type ProjectRegistryOptions = {
   readonly lock?: FileLockOptions;
   readonly beforeWrite?: () => Promise<void>;
+  readonly afterPersist?: () => Promise<void>;
   readonly beforeRename?: () => Promise<void>;
   readonly markerObservationWorkerPath?: string;
   readonly markerReconciliationTimeoutMs?: number;
@@ -139,16 +142,23 @@ const writeRegistry = async (
   mode?: number,
   beforeRename?: BeforeRename,
   assertBeforeRename?: FileLockGuard,
+  sourceGuard?: FileLockGuard,
 ): Promise<AssetResult<undefined>> => {
   try {
     await mkdir(dirname(registryPath), { recursive: true, mode: 0o700 });
+    const commitGuard = sourceGuard === undefined
+      ? assertBeforeRename
+      : () => {
+          assertBeforeRename?.();
+          sourceGuard();
+        };
     const written = await writeAtomically(
       registryPath,
       `${JSON.stringify(document, null, 2)}\n`,
       rename,
       mode ?? 0o600,
       beforeRename,
-      assertBeforeRename,
+      commitGuard,
     );
     return written
       ? { ok: true, value: undefined }
@@ -179,14 +189,26 @@ const defaultMarkerObservationWorkerPath = fileURLToPath(
   new URL("./marker-observer-child.ts", import.meta.url),
 );
 
+const isFileIdentity = (value: unknown): value is MarkerSourceSnapshot["directoryIdentity"] => {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return Number.isInteger(candidate.dev) && Number.isInteger(candidate.ino);
+};
+
+const isMarkerSourceSnapshot = (value: unknown): value is MarkerSourceSnapshot => {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return isFileIdentity(candidate.directoryIdentity) && isFileIdentity(candidate.markerIdentity);
+};
+
 const parseMarkerObservation = (value: unknown): MarkerObservation | undefined => {
   if (typeof value !== "object" || value === null) return undefined;
   const candidate = value as Record<string, unknown>;
   if (candidate.status === "missing" || candidate.status === "invalid" || candidate.status === "unavailable") {
     return { status: candidate.status };
   }
-  if (candidate.status === "valid" && isProjectId(candidate.projectId)) {
-    return { status: "valid", projectId: candidate.projectId };
+  if (candidate.status === "valid" && isProjectId(candidate.projectId) && isMarkerSourceSnapshot(candidate.source)) {
+    return { status: "valid", projectId: candidate.projectId, source: candidate.source };
   }
   return undefined;
 };
@@ -338,9 +360,20 @@ export const createProjectRegistry = (
     assertOwned: FileLockGuard,
     document: RegistryDocument,
     mode?: number,
+    sourceGuard?: FileLockGuard,
+    afterPersist?: () => Promise<void>,
   ): Promise<AssetResult<undefined>> => {
+    if (sourceGuard !== undefined) {
+      try {
+        sourceGuard();
+      } catch {
+        return registryFailure("unavailable", "The Project Marker source could not be verified.", "source_changed");
+      }
+    }
     await options.beforeWrite?.();
-    return writeRegistry(normalizedRegistryPath, document, mode, options.beforeRename, assertOwned);
+    const saved = await writeRegistry(normalizedRegistryPath, document, mode, options.beforeRename, assertOwned, sourceGuard);
+    if (saved.ok) await afterPersist?.();
+    return saved;
   };
 
   return {
@@ -353,7 +386,7 @@ export const createProjectRegistry = (
       const normalizedWorkspace = resolve(workspacePath);
       const normalizedRoot = resolve(projectRoot);
       const existing = loaded.value.document.entries.find((entry) => entry.workspacePath === normalizedWorkspace);
-      if (existing?.state === "mismatch") {
+      if (existing?.state === "mismatch" && existing.projectRoot !== normalizedRoot) {
         return registryFailure("conflict", "The workspace conflicts with its registered Project identity.", "project_id_mismatch");
       }
       if (existing?.state === "pending") return { ok: true, value: existing.projectId };
@@ -374,7 +407,7 @@ export const createProjectRegistry = (
       return saved.ok ? { ok: true, value: proposedProjectId } : saved;
     }),
 
-    observe: (workspacePath, projectRoot, markerProjectId) => runLocked<RegistryObservation>(async (assertOwned): Promise<AssetResult<RegistryObservation>> => {
+    observe: (workspacePath, projectRoot, markerProjectId, sourceGuard) => runLocked<RegistryObservation>(async (assertOwned): Promise<AssetResult<RegistryObservation>> => {
       if (!isProjectId(markerProjectId)) {
         return registryFailure("invalid_request", "The Project Marker ID is invalid.", "invalid_project_id");
       }
@@ -404,8 +437,16 @@ export const createProjectRegistry = (
       const entries = existing === undefined
         ? [...loaded.value.document.entries, replacement]
         : loaded.value.document.entries.map((entry) => entry.workspacePath === normalizedWorkspace ? replacement : entry);
-      const saved = await persistRegistry(assertOwned, { schemaVersion: 1, entries }, loaded.value.mode);
-      return saved.ok ? { ok: true, value: observation } : saved;
+      const saved = await persistRegistry(assertOwned, { schemaVersion: 1, entries }, loaded.value.mode, sourceGuard);
+      if (!saved.ok) return saved;
+      if (sourceGuard !== undefined) {
+        try {
+          sourceGuard();
+        } catch {
+          return registryFailure("unavailable", "The Project Marker source could not be verified.", "source_changed");
+        }
+      }
+      return { ok: true, value: observation };
     }),
 
     reconcile: () => runLocked<RegistryReconcileOutcome>(async (assertOwned): Promise<AssetResult<RegistryReconcileOutcome>> => {
@@ -415,6 +456,7 @@ export const createProjectRegistry = (
         return { ok: true, value: { status: "complete" } };
       }
       const entries: RegistryEntry[] = [];
+      const sourceGuards: FileLockGuard[] = [];
       const deadline = performance.now() + Math.max(0, markerReconciliationTimeoutMs);
       for (const entry of loaded.value.document.entries) {
         const remaining = deadline - performance.now();
@@ -430,6 +472,19 @@ export const createProjectRegistry = (
           entries.push(entry);
           continue;
         }
+        const projectDirectory = join(entry.projectRoot, ".aacl");
+        const markerSource = markerSourceFromSnapshot(
+          projectDirectory,
+          join(projectDirectory, "project.json"),
+          observed.source,
+        );
+        try {
+          markerSource.assertSource();
+        } catch {
+          entries.push(entry);
+          continue;
+        }
+        sourceGuards.push(markerSource.assertSource);
         entries.push(observed.projectId === entry.projectId
           ? { workspacePath: entry.workspacePath, projectRoot: entry.projectRoot, projectId: entry.projectId, state: "bound" }
           : {
@@ -441,11 +496,27 @@ export const createProjectRegistry = (
             });
       }
       const next: RegistryDocument = { schemaVersion: 1, entries };
+      const assertSources: FileLockGuard | undefined = sourceGuards.length === 0
+        ? undefined
+        : () => {
+            for (const sourceGuard of sourceGuards) sourceGuard();
+          };
+      try {
+        assertSources?.();
+      } catch {
+        return { ok: true, value: { status: "complete" } };
+      }
       if (JSON.stringify(next) === JSON.stringify(loaded.value.document)) {
         return { ok: true, value: { status: "complete" } };
       }
-      const saved = await persistRegistry(assertOwned, next, loaded.value.mode);
-      return saved.ok ? { ok: true, value: { status: "complete" } } : saved;
+      const saved = await persistRegistry(assertOwned, next, loaded.value.mode, assertSources, options.afterPersist);
+      if (!saved.ok) return saved;
+      try {
+        assertSources?.();
+      } catch {
+        return registryFailure("unavailable", "The Project Marker source could not be verified.", "source_changed");
+      }
+      return { ok: true, value: { status: "complete" } };
     }),
   };
 };

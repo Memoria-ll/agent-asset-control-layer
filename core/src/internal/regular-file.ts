@@ -1,12 +1,13 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { fileIdentityOf, sameFileIdentity, type FileIdentity } from "./fs-identity.ts";
 
 export type RegularFileRead =
   | { readonly status: "missing" }
   | { readonly status: "not_regular" }
   | { readonly status: "unavailable"; readonly error: unknown }
-  | { readonly status: "ok"; readonly contents: string; readonly mode: number };
+  | { readonly status: "ok"; readonly contents: string; readonly mode: number; readonly identity: FileIdentity };
 
 export type RegularFileReadOptions = {
   readonly beforeOpen?: () => void | Promise<void>;
@@ -44,16 +45,18 @@ export const readRegularUtf8 = async (
     handle = await open(filePath, readFlags);
     const fileInfo = await handle.stat();
     if (!fileInfo.isFile()) return { status: "not_regular" };
-    if (linkInfo.dev !== fileInfo.dev || linkInfo.ino !== fileInfo.ino) return { status: "not_regular" };
+    const descriptorIdentity = fileIdentityOf(fileInfo);
+    if (!sameFileIdentity(fileIdentityOf(linkInfo), descriptorIdentity)) return { status: "not_regular" };
     const contents = await handle.readFile("utf8");
     await options.beforeFreshStat?.();
     const freshPathInfo = await lstat(filePath);
     if (freshPathInfo.isSymbolicLink() || !freshPathInfo.isFile()) return { status: "not_regular" };
-    if (freshPathInfo.dev !== fileInfo.dev || freshPathInfo.ino !== fileInfo.ino) return { status: "not_regular" };
+    if (!sameFileIdentity(descriptorIdentity, fileIdentityOf(freshPathInfo))) return { status: "not_regular" };
     return {
       status: "ok",
       contents,
       mode: fileInfo.mode,
+      identity: descriptorIdentity,
     };
   } catch (error) {
     if (errorCode(error) === "ELOOP") return { status: "not_regular" };
