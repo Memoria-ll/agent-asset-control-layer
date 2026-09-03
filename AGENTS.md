@@ -251,6 +251,12 @@ Ledger は箱ごとに分割している。**編集するファイルが属す�
 またがる事実とリポジトリ全体の規約はここに置く。同じ事実を両方に置かない —
 守備範囲が変わったときは移す。
 
+**置き場は「その事実に違反しうる編集がどの箱で起きるか」で決める。** 事実が語る対象が
+この箱にあっても、義務の発火点（別の箱の宣言を更新する、caller として欄を埋める、
+src の変更に対してテストを足す）が箱の外にあるなら、それは箱をまたぐ事実なので
+ここに置く — 違反する側の編集者はその箱の `ledger.md` を読まないため、箱に置くと
+**まさに違反が起きる瞬間に見えない**。
+
 箱の一覧:
 
 - `core/src/ledger.md`
@@ -289,6 +295,12 @@ Ledger は箱ごとに分割している。**編集するファイルが属す�
   `shared/tests/enum-values.test.ts` が両者を逐語で pin し、その assertion message が
   "Changing enum values requires bumping CONTRACT_VERSION." である。**on-disk の type / tier を
   増やすと、wire DTO が何も変わらなくても `CONTRACT_VERSION` の bump を伴う破壊的変更になる** (#2)
+
+- 境界の値集合（`ASSET_TYPES` 等）の正は #2 の Canonical Asset model。#2 Scope が初期 type として
+  Skill / Rule / Role / Workflow / Task Type / Policy / Guardrail / Knowledge の 8 個を挙げており、
+  `ASSET_TYPES` はこれと一致している。README の製品説明はこれより広い語（templates / checklists /
+  capability bindings）を含むが型の正ではない。**#2 が type を増やしたら同じ変更で `ASSET_TYPES` を
+  更新する** — enum への値追加は破壊的変更 (#47)
 
 - `core` は `@types/node` を devDependency に持ち、かつ `core/tsconfig.json` に
   `"types": ["node"]` を書く。`typeRoots` を指定しても自動発見は効かず、`node:*` の import が
@@ -348,6 +360,23 @@ Ledger は箱ごとに分割している。**編集するファイルが属す�
   `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
   漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
   Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+
+- **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
+  「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
+  required をすべて hard failure にし、その候補を context から落とす。型は optional なので
+  コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
+
+- `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
+  でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
+  `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと
+  なので、応答しないマウント上の root が 1 つあると健全な root の処理がその完了を待たされる
+  — `list()` を呼んで `rootId` で filter する形では防げない (#58)
+
+- **`shared/tests/json-schema.test.ts` の strict object 検査は root の `oneOf` までしか展開せず、
+  nested object property へは降りない。** 境界 DTO が nested object を持つとき
+  （`WorkflowDefinitionDto` の stage / transition など）、その strictness は汎用網の**外**にある。
+  registry に登録しただけでは検査されないので、nested の `additionalProperties` は
+  個別 assertion で pin する (#7)
 
 ### Invariants / identity keys
 

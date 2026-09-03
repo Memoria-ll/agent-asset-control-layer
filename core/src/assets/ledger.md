@@ -4,12 +4,6 @@
 
 ## Traps
 
-- `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
-  でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
-  `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと
-  なので、応答しないマウント上の root が 1 つあると健全な root の処理がその完了を待たされる
-  — `list()` を呼んで `rootId` で filter する形では防げない (#58)
-
 - `save` の直列化キーは **`resolve()` した root ディレクトリ**で、chain は module スコープに
   置く。`rootId` はインスタンスごとのラベルにすぎず、同じディレクトリに別の `rootId` を付けた
   store を 2 つ作れるので、キーには使えない。これにより `expectedRevision` は

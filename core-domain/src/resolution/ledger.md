@@ -33,11 +33,6 @@
   参加する全 issuer を conflict evaluation と一致させる。`assetType` と `loadingTier` は
   `ASSET_TYPES` と `LOADING_TIERS` の membership を runtime で検証する。
 
-- **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
-  「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
-  required をすべて hard failure にし、その候補を context から落とす。型は optional なので
-  コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
-
 - **`resolveScope` の候補構造検証と fixed point の capability 評価には、同じ capability context を
   渡す**（どちらも `evaluateCapabilityDependenciesInValidatedContext` に、冒頭で 1 度だけ
   `validateCapabilityContext` した結果を渡す）。検証側だけ context 無しで呼ぶと、definition に
