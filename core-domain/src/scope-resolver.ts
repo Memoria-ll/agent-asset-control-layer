@@ -1747,8 +1747,12 @@ const resolveScopeFixedPoint = (
         const groupIds = new Set(group.map((state) => String(state.candidate.assetId)));
         const dependencyFeedback = group.every((state) => {
           const evidence = selectionEvidence.get(state);
+          // A tie represents a selection cycle only when every failure is
+          // peer-related.  Independent failures keep the candidates
+          // unavailable even if a peer requirement also failed.
           return evidence?.kind === "unavailable" &&
-            evidence.failedRequirements.some((requiredId) => groupIds.has(String(requiredId)));
+            evidence.failedRequirements.length > 0 &&
+            evidence.failedRequirements.every((requiredId) => groupIds.has(String(requiredId)));
         });
         if (dependencyFeedback) {
           const conflict: ResolutionConflict = {

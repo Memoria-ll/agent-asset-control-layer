@@ -1153,6 +1153,32 @@ scope.project: [acme]
     }
   });
 
+  it("case 10-o: keeps independent dependency failures out of selection feedback", () => {
+    const left = candidateFromDocument(
+      assetDocument("asset-left", "requires: [asset-right, asset-missing-left]\n"),
+      exclusive("g", { explicitPriority: 2 }),
+    );
+    const right = candidateFromDocument(
+      assetDocument("asset-right", "requires: [asset-left, asset-missing-right]\n"),
+      exclusive("g", { explicitPriority: 1 }),
+    );
+
+    for (const candidates of permutations([left, right])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-left")).toMatchObject({
+        kind: "unavailable",
+        failedRequirements: ["asset-missing-left", "asset-right"],
+      });
+      expect(reason(result, "asset-right")).toMatchObject({
+        kind: "unavailable",
+        failedRequirements: ["asset-left", "asset-missing-right"],
+      });
+    }
+  });
+
   it("case 10-k: does not retain disable provenance from an issuer removed by fallback", () => {
     const winner = candidateFromDocument(assetDocument("asset-winner"), exclusive("g", { explicitPriority: 2 }));
     const lower = candidateFromDocument(assetDocument("asset-lower"), {
