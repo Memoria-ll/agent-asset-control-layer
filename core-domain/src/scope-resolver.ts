@@ -63,8 +63,7 @@ type NormalizedCandidate = {
   readonly candidate: AssetCandidate;
 };
 
-type MatchedCandidate = NormalizedCandidate & {
-  readonly matchedAxes: readonly ResolutionAxis[];
+type RankedCandidate = NormalizedCandidate & {
   readonly rank: ResolutionRank;
 };
 
@@ -80,14 +79,15 @@ type ScopeMatchDecision =
     };
 
 type ExclusiveDecision =
-  | { readonly kind: "winner"; readonly candidate: MatchedCandidate }
+  | { readonly kind: "winner"; readonly candidate: RankedCandidate }
   | { readonly kind: "conflict"; readonly conflict: ResolutionConflict };
 
 export type ResolutionRank = {
-  readonly sourcePrecedence: 0 | 1 | 2;
   readonly explicitPriority: number;
   readonly matchingAxisCount: number;
+  readonly scopePrecedence: readonly number[];
   readonly directoryDepth: number;
+  readonly sourceLayerPrecedence: 0 | 1 | 2;
 };
 
 export type CandidateReason =
@@ -220,7 +220,7 @@ type DependencyOutcome =
  * candidates is preferred; a global asset that must survive a personal override
  * declares itself mandatory, and the hard rule then holds regardless of rank.
  */
-const sourcePrecedence = (layer: ResolutionSourceLayer): 0 | 1 | 2 => {
+const sourceLayerPrecedence = (layer: ResolutionSourceLayer): 0 | 1 | 2 => {
   switch (layer) {
     case "global": return 0;
     case "personal": return 1;
@@ -280,7 +280,7 @@ const chooseCanonicalDuplicateRepresentative = (
   const first = candidates[0];
   if (first === undefined) throw new Error("Cannot choose a representative from an empty candidate list.");
   return candidates.slice(1).reduce((best, current) => {
-    const layerOrder = sourcePrecedence(current.candidate.source.layer) - sourcePrecedence(best.candidate.source.layer);
+    const layerOrder = sourceLayerPrecedence(current.candidate.source.layer) - sourceLayerPrecedence(best.candidate.source.layer);
     if (layerOrder < 0) return best;
     if (layerOrder > 0) return current;
     return codeUnitCompare(current.candidate.source.sourceId, best.candidate.source.sourceId) < 0 ? current : best;
@@ -311,7 +311,7 @@ const isSameIdOverlayPair = (
     operation.targetAssetId === issuer.candidate.assetId &&
     target.candidate.assetId === issuer.candidate.assetId &&
     target.candidate.source.layer !== issuer.candidate.source.layer &&
-    sourcePrecedence(target.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer);
+    sourceLayerPrecedence(target.candidate.source.layer) < sourceLayerPrecedence(issuer.candidate.source.layer);
 };
 
 const hasUnresolvedIdentityPair = (
@@ -320,18 +320,66 @@ const hasUnresolvedIdentityPair = (
   group.slice(leftIndex + 1).some((right) =>
     !isSameIdOverlayPair(left, right) && !isSameIdOverlayPair(right, left)));
 
-const compareResolutionRank = (left: ResolutionRank, right: ResolutionRank): number => {
-  if (left.sourcePrecedence !== right.sourcePrecedence) return left.sourcePrecedence - right.sourcePrecedence;
-  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
-  if (left.matchingAxisCount !== right.matchingAxisCount) return left.matchingAxisCount - right.matchingAxisCount;
-  return left.directoryDepth - right.directoryDepth;
+/**
+ * The default scope precedence, keyed by the resolver axis vocabulary rather than the
+ * on-disk one.
+ *
+ * `stageId` is 45 because the requirement's precedence table has no Stage row: the same
+ * section lists its resolution inputs as Project / Workflow Stage / Task Type, which puts
+ * Stage between Workflow and Task Type. The gap at 20 belongs to a team axis that the
+ * scope input does not carry, so no request can reach it.
+ */
+const SCOPE_PRECEDENCE: Readonly<Record<ResolutionAxis, number>> = {
+  projectId: 30,
+  workflowId: 40,
+  stageId: 45,
+  taskTypeId: 50,
+  roleId: 60,
+  providerId: 70,
+  runtimeId: 80,
+  modelId: 90,
+  directory: 100,
 };
 
-const sameResolutionRank = (left: ResolutionRank, right: ResolutionRank): boolean =>
-  left.sourcePrecedence === right.sourcePrecedence &&
-  left.explicitPriority === right.explicitPriority &&
-  left.matchingAxisCount === right.matchingAxisCount &&
-  left.directoryDepth === right.directoryDepth;
+const compareScopePrecedence = (left: readonly number[], right: readonly number[]): number => {
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftRank = left[index] ?? -1;
+    const rightRank = right[index] ?? -1;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+  }
+  return 0;
+};
+
+const compareRank = (left: ResolutionRank, right: ResolutionRank): number => {
+  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
+  if (left.matchingAxisCount !== right.matchingAxisCount) return left.matchingAxisCount - right.matchingAxisCount;
+  const vector = compareScopePrecedence(left.scopePrecedence, right.scopePrecedence);
+  if (vector !== 0) return vector;
+  if (left.directoryDepth !== right.directoryDepth) return left.directoryDepth - right.directoryDepth;
+  return left.sourceLayerPrecedence - right.sourceLayerPrecedence;
+};
+
+const compareDirectoryRank = (left: ResolutionRank, right: ResolutionRank): number => {
+  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
+  if (left.directoryDepth !== right.directoryDepth) return left.directoryDepth - right.directoryDepth;
+  return left.matchingAxisCount - right.matchingAxisCount;
+};
+
+const matchesDirectoryAxis = (rank: ResolutionRank): boolean =>
+  // Do not use directoryDepth > 0: a root directory match has depth 0.
+  rank.scopePrecedence.includes(SCOPE_PRECEDENCE.directory);
+
+const beatsCandidate = (left: ResolutionRank, right: ResolutionRank): boolean =>
+  matchesDirectoryAxis(left) && matchesDirectoryAxis(right)
+    ? compareDirectoryRank(left, right) > 0
+    : compareRank(left, right) > 0;
+
+const selectUnbeaten = <Item extends { readonly rank: ResolutionRank }>(
+  items: readonly Item[],
+): readonly Item[] =>
+  // Do not reduce through partial winners: directory precedence is non-transitive across mixed pairs.
+  items.filter((item) => !items.some((other) => other !== item && beatsCandidate(other.rank, item.rank)));
 
 const directorySegments = (value: string): readonly string[] => value === "/" ? [] : value.slice(1).split("/");
 
@@ -348,7 +396,6 @@ const matchesScope = (
 ): ScopeMatchDecision => {
   const mismatchedAxes: ResolutionAxis[] = [];
   const matchedAxes: ResolutionAxis[] = [];
-  let matchingAxisCount = 0;
   let directoryDepth = 0;
 
   for (const axis of RESOLUTION_AXES) {
@@ -374,7 +421,6 @@ const matchesScope = (
     if (!selectors.includes(requestValue)) mismatchedAxes.push(axis);
     else {
       matchedAxes.push(axis);
-      matchingAxisCount += 1;
     }
   }
 
@@ -383,29 +429,26 @@ const matchesScope = (
     matched: true,
     matchedAxes,
     rank: {
-      sourcePrecedence: sourcePrecedence(candidate.candidate.source.layer),
       explicitPriority: candidate.candidate.rule.explicitPriority ?? -1,
-      matchingAxisCount,
+      matchingAxisCount: matchedAxes.length,
+      scopePrecedence: matchedAxes.map((axis) => SCOPE_PRECEDENCE[axis]).sort((left, right) => right - left),
       directoryDepth,
+      sourceLayerPrecedence: sourceLayerPrecedence(candidate.candidate.source.layer),
     },
   };
 };
 
-const selectExclusiveWinner = (candidates: readonly MatchedCandidate[]): ExclusiveDecision => {
+const selectExclusiveWinner = (candidates: readonly RankedCandidate[]): ExclusiveDecision => {
   const first = candidates[0];
   if (first === undefined) throw new Error("Cannot select an exclusive winner from an empty group.");
-  const bestRank = candidates.reduce((best, current) =>
-    compareResolutionRank(current.rank, best) > 0 ? current.rank : best, first.rank);
-  const tied = candidates.filter((candidate) => sameResolutionRank(candidate.rank, bestRank));
-  if (tied.length === 1) return { kind: "winner", candidate: tied[0] as MatchedCandidate };
-  const sameMeaning = tied.every((candidate) => sameCandidateMeaning(first, candidate));
-  if (sameMeaning) return { kind: "winner", candidate: tied[0] as MatchedCandidate };
+  const unbeaten = selectUnbeaten(candidates);
+  if (unbeaten.length === 1) return { kind: "winner", candidate: unbeaten[0] as RankedCandidate };
   return {
     kind: "conflict",
     conflict: {
       kind: "exclusive_tie",
       mergeGroup: first.candidate.rule.mergeGroup as string,
-      involvedAssetIds: canonicalIds(tied.map((candidate) => candidate.candidate.assetId)),
+      involvedAssetIds: canonicalIds((unbeaten.length === 0 ? candidates : unbeaten).map((candidate) => candidate.candidate.assetId)),
     },
   };
 };
@@ -613,7 +656,7 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
   if (left.rank !== undefined && right.rank === undefined) return -1;
   if (left.rank === undefined && right.rank !== undefined) return 1;
   if (left.rank !== undefined && right.rank !== undefined) {
-    const rankOrder = compareResolutionRank(right.rank, left.rank);
+    const rankOrder = compareRank(right.rank, left.rank);
     if (rankOrder !== 0) return rankOrder;
   }
   const assetOrder = codeUnitCompare(String(left.candidate.assetId), String(right.candidate.assetId));
@@ -678,7 +721,8 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
 
 const conflictExplanation = (conflict: ResolutionConflict): string => {
   switch (conflict.kind) {
-    case "exclusive_tie": return "Exclusive candidates have the same resolution rank.";
+    // Covers a cycle as well as an equal rank: neither leaves a candidate that beats all others.
+    case "exclusive_tie": return "Exclusive candidates have no single highest-ranked candidate.";
     case "mandatory_conflict": return "Mandatory candidates cannot be resolved together.";
     case "operation_conflict": return "Conflicting operations target the same asset.";
     case "duplicate_identity": return "Candidates with the same asset identity have different meanings.";
@@ -894,7 +938,6 @@ const resolveScopeFixedPoint = (
     }
     const decision = selectExclusiveWinner(group.map((state) => ({
       candidate: state.candidate,
-      matchedAxes: state.reason.kind === "included" ? state.reason.matchedAxes : [],
       rank: state.rank!,
     })));
     if (decision.kind === "conflict") {
@@ -1333,20 +1376,20 @@ const resolveScopeFixedPoint = (
         if (issuerOrder !== 0) return issuerOrder;
         return codeUnitCompare(left.kind, right.kind);
       });
-      const first = actions[0]!;
-      const bestRank = actions.reduce((best, action) =>
-        compareResolutionRank(action.issuer.rank!, best) > 0 ? action.issuer.rank! : best, first.issuer.rank!);
-      const best = actions.filter((action) => sameResolutionRank(action.issuer.rank!, bestRank));
-      const allDisable = best.every((action) => action.kind === "disable");
-      if (best.length > 1 && !allDisable) {
+      const best = selectUnbeaten(actions.map((action) => ({ action, rank: action.issuer.rank! }))).map(({ action }) => action);
+      // A precedence cycle leaves no unbeaten action, but issuers that all disable are not
+      // contradictory: coalesce them on output order rather than leaving the target enabled.
+      const contenders = best.length === 0 ? actions : best;
+      const allDisable = contenders.every((action) => action.kind === "disable");
+      if (contenders.length > 1 && !allDisable) {
         const conflict = makeOperationConflict(target.candidate.assetId, [target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]);
         operationConflicts.push({ conflict, issuers: actions.map((action) => action.issuer) });
         for (const action of actions) addIssuerConflict(action.issuer, conflict);
         continue;
       }
       const winner = allDisable
-        ? best.slice().sort((left, right) => compareCandidatesForOutput(left.issuer, right.issuer))[0]!
-        : best[0]!;
+        ? contenders.slice().sort((left, right) => compareCandidatesForOutput(left.issuer, right.issuer))[0]!
+        : contenders[0]!;
       selectedActions.push(winner);
       chosenByTarget.set(target, winner);
       for (const action of actions) {

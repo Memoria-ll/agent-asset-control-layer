@@ -218,7 +218,7 @@ describe("scope resolver", () => {
       expect(current.reason).toMatchObject({
         kind: "excluded",
         cause: "resolution_conflict",
-        rank: { sourcePrecedence: 0, explicitPriority: -1, matchingAxisCount: 0, directoryDepth: 0 },
+        rank: { explicitPriority: -1, matchingAxisCount: 0, scopePrecedence: [], directoryDepth: 0, sourceLayerPrecedence: 0 },
       });
     }
   });
@@ -268,8 +268,10 @@ requires: [asset-required, asset-prerequisite]
     expect(reason(result, "asset-all-axes")).toEqual({
       kind: "included",
       matchedAxes: ["projectId", "workflowId", "stageId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId", "directory"],
-      rank: { sourcePrecedence: 0, explicitPriority: -1, matchingAxisCount: 8, directoryDepth: 2 },
+      rank: { explicitPriority: -1, matchingAxisCount: 9, scopePrecedence: [100, 90, 80, 70, 60, 50, 45, 40, 30], directoryDepth: 2, sourceLayerPrecedence: 0 },
     });
+    const allAxesReason = reason(result, "asset-all-axes");
+    if (allAxesReason.kind === "included") expect(new Set(allAxesReason.rank.scopePrecedence).size).toBe(9);
     expect(candidate.rule.requires).toEqual(["asset-prerequisite", "asset-required"]);
     expect(result.scope.directory).toBe("/repo/src/unit");
   });
@@ -282,7 +284,7 @@ requires: [asset-required, asset-prerequisite]
     expect(reason(result, "asset-a")).toEqual({
       kind: "included",
       matchedAxes: [],
-      rank: { sourcePrecedence: 0, explicitPriority: -1, matchingAxisCount: 0, directoryDepth: 0 },
+      rank: { explicitPriority: -1, matchingAxisCount: 0, scopePrecedence: [], directoryDepth: 0, sourceLayerPrecedence: 0 },
     });
   });
 
@@ -324,7 +326,7 @@ scope.project: [acme]
     expect(reason(result, "asset-a")).toEqual({
       kind: "included",
       matchedAxes: [],
-      rank: { sourcePrecedence: 0, explicitPriority: -1, matchingAxisCount: 0, directoryDepth: 0 },
+      rank: { explicitPriority: -1, matchingAxisCount: 0, scopePrecedence: [], directoryDepth: 0, sourceLayerPrecedence: 0 },
     });
     expect(result.outcome).toBe("resolved");
   });
@@ -335,22 +337,35 @@ scope.project: [acme]
       const result = resultValue({ directory }, [candidate]);
       expect(result.scope.directory).toBe(directory === "/repo/src/" ? "/repo/src" : directory);
       expect(result.outcome).toBe("resolved");
-      expect(reason(result, "asset-src")).toMatchObject({ kind: "included", rank: { directoryDepth: 2 } });
+      expect(reason(result, "asset-src")).toEqual({
+        kind: "included",
+        matchedAxes: ["directory"],
+        rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 2, sourceLayerPrecedence: 0 },
+      });
     }
     const excluded = resultValue({ directory: "/repo/src-extra" }, [candidate]);
     expect(excluded.outcome).toBe("resolved");
     expect(reason(excluded, "asset-src").kind).toBe("excluded");
   });
 
-  it("case 5-b: gives root and unscoped candidates the same rank but different meaning", () => {
+  it("case 5-b: gives a root directory candidate precedence over an unscoped candidate", () => {
     const root = candidateFromDocument(assetDocument("asset-root", "scope.directory: [/]\n"), exclusive("g"));
     const unscoped = candidateFromDocument(assetDocument("asset-unscoped"), exclusive("g"));
     const result = resultValue({ directory: "/repo/src" }, [root, unscoped]);
 
-    expect(result.outcome).toBe("conflicted");
-    expect(result.conflicts[0]).toEqual({ kind: "exclusive_tie", mergeGroup: "g", involvedAssetIds: ["asset-root", "asset-unscoped"] });
-    expect(reason(result, "asset-root")).toMatchObject({ rank: { directoryDepth: 0, matchingAxisCount: 0 } });
-    expect(reason(result, "asset-unscoped")).toMatchObject({ rank: { directoryDepth: 0, matchingAxisCount: 0 } });
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toEqual([]);
+    expect(reason(result, "asset-root")).toEqual({
+      kind: "included",
+      matchedAxes: ["directory"],
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-unscoped")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-root",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
   });
 
   it("case 6: chooses the deepest matching directory in an exclusive group", () => {
@@ -361,9 +376,23 @@ scope.project: [acme]
     ];
     const result = resultValue({ directory: "/repo/src/tests/unit" }, candidates);
 
-    expect(reason(result, "asset-tests")).toMatchObject({ kind: "included", rank: { directoryDepth: 3 } });
-    expect(reason(result, "asset-src")).toMatchObject({ kind: "overridden", overriddenBy: "asset-tests", mergeGroup: "g", winnerRank: { directoryDepth: 3 } });
-    expect(reason(result, "asset-repo")).toMatchObject({ kind: "overridden", overriddenBy: "asset-tests", mergeGroup: "g", winnerRank: { directoryDepth: 3 } });
+    expect(reason(result, "asset-tests")).toEqual({
+      kind: "included",
+      matchedAxes: ["directory"],
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-src")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-tests",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-repo")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-tests",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+    });
     expect(result.outcome).toBe("resolved");
     expect(result.conflicts).toHaveLength(0);
   });
@@ -374,7 +403,7 @@ scope.project: [acme]
     expect(included.outcome).toBe("resolved");
     const includedReason = reason(included, "asset-project");
     expect(includedReason.kind).toBe("included");
-    if (includedReason.kind === "included") expect(includedReason.rank).toMatchObject({ sourcePrecedence: 2 });
+    if (includedReason.kind === "included") expect(includedReason.rank).toEqual({ explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [30], directoryDepth: 0, sourceLayerPrecedence: 2 });
     const excluded = resultValue({ projectId: "project-b" }, [candidate]);
     expect(excluded.outcome).toBe("resolved");
     expect(reason(excluded, "asset-project")).toEqual({ kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["projectId"] });
@@ -390,6 +419,384 @@ scope.project: [acme]
     expect(reason(result, "asset-priority").kind).toBe("included");
     expect(reason(result, "asset-specific")).toMatchObject({ kind: "overridden", overriddenBy: "asset-priority", mergeGroup: "g" });
     expect(result.outcome).toBe("resolved");
+  });
+
+  it.each([
+    {
+      name: "role and model",
+      scope: { roleId: "reviewer", modelId: "model-a" },
+      otherId: "asset-role",
+      otherFields: "scope.role: [reviewer]\n",
+      winnerId: "asset-model",
+      winnerFields: "scope.model: [model-a]\n",
+      winnerAxes: ["modelId"] as const,
+      winnerVector: [90],
+    },
+    {
+      name: "stage and model",
+      scope: { stageId: "review", modelId: "model-a" },
+      otherId: "asset-stage",
+      otherFields: "scope.stage: [review]\n",
+      winnerId: "asset-model",
+      winnerFields: "scope.model: [model-a]\n",
+      winnerAxes: ["modelId"] as const,
+      winnerVector: [90],
+    },
+  ])("case 21: chooses the higher-precedence axis for $name", ({ scope, otherId, otherFields, winnerId, winnerFields, winnerAxes, winnerVector }) => {
+    const result = resultValue(scope, [
+      candidateFromDocument(assetDocument(otherId, otherFields), exclusive("g")),
+      candidateFromDocument(assetDocument(winnerId, winnerFields), exclusive("g")),
+    ]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toEqual([]);
+    expect(reason(result, winnerId)).toEqual({
+      kind: "included",
+      matchedAxes: winnerAxes,
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: winnerVector, directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, otherId)).toEqual({
+      kind: "overridden",
+      overriddenBy: winnerId,
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: winnerVector, directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual([winnerId, otherId]);
+  });
+
+  it("case 22: compares the second scope-precedence vector element", () => {
+    const provider = candidateFromDocument(assetDocument("asset-model-provider", "scope.provider: [anthropic]\nscope.model: [model-a]\n"), exclusive("g"));
+    const role = candidateFromDocument(assetDocument("asset-model-role", "scope.role: [reviewer]\nscope.model: [model-a]\n"), exclusive("g"));
+    const result = resultValue({ providerId: "anthropic", roleId: "reviewer", modelId: "model-a" }, [role, provider]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toEqual([]);
+    expect(reason(result, "asset-model-provider")).toEqual({
+      kind: "included",
+      matchedAxes: ["providerId", "modelId"],
+      rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [90, 70], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-model-role")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-model-provider",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [90, 70], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-model-provider", "asset-model-role"]);
+  });
+
+  it("case 23: prefers the deeper matching directory across a scope-axis boundary", () => {
+    const roleDirectory = candidateFromDocument(assetDocument("asset-role-directory", "scope.role: [reviewer]\nscope.directory: [/repo]\n"), exclusive("g"));
+    const directory = candidateFromDocument(assetDocument("asset-directory-deep", "scope.directory: [/repo/src/deep]\n"), exclusive("g"));
+    for (const candidates of permutations([roleDirectory, directory])) {
+      const result = resultValue({ roleId: "reviewer", directory: "/repo/src/deep" }, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-directory-deep")).toEqual({
+        kind: "included",
+        matchedAxes: ["directory"],
+        rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-role-directory")).toEqual({
+        kind: "overridden",
+        overriddenBy: "asset-directory-deep",
+        mergeGroup: "g",
+        winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+      });
+      expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-role-directory", "asset-directory-deep"]);
+    }
+  });
+
+  it("case 24: prefers a directory candidate over a role-only candidate", () => {
+    const role = candidateFromDocument(assetDocument("asset-role", "scope.role: [reviewer]\n"), exclusive("g"));
+    const directory = candidateFromDocument(assetDocument("asset-directory", "scope.directory: [/repo/src]\n"), exclusive("g"));
+    const result = resultValue({ roleId: "reviewer", directory: "/repo/src" }, [role, directory]);
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toEqual([]);
+    expect(reason(result, "asset-directory")).toEqual({
+      kind: "included",
+      matchedAxes: ["directory"],
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 2, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-role")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-directory",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 2, sourceLayerPrecedence: 0 },
+    });
+    expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-directory", "asset-role"]);
+  });
+
+  it("case 25: compares directory priority before depth and source layer", () => {
+    const shallowGlobal = candidateFromDocument(assetDocument("asset-shallow-global", "scope.directory: [/repo]\n"), exclusive("g", { explicitPriority: 10 }));
+    const deepProject = candidateFromDocument(assetDocument("asset-deep-project", "scope.directory: [/repo/src/deep]\n"), exclusive("g", { explicitPriority: 9 }), { source: { layer: "project", sourceId: "project-source" } });
+    const priorityResult = resultValue({ directory: "/repo/src/deep" }, [deepProject, shallowGlobal]);
+
+    expect(reason(priorityResult, "asset-shallow-global")).toEqual({
+      kind: "included",
+      matchedAxes: ["directory"],
+      rank: { explicitPriority: 10, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 1, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(priorityResult, "asset-deep-project")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-shallow-global",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: 10, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 1, sourceLayerPrecedence: 0 },
+    });
+
+    const samePriorityResult = resultValue({ directory: "/repo/src/deep" }, [
+      candidateFromDocument(assetDocument("asset-shallow-global", "scope.directory: [/repo]\n"), exclusive("g", { explicitPriority: 9 })),
+      candidateFromDocument(assetDocument("asset-deep-project", "scope.directory: [/repo/src/deep]\n"), exclusive("g", { explicitPriority: 9 }), { source: { layer: "project", sourceId: "project-source" } }),
+    ]);
+    expect(reason(samePriorityResult, "asset-deep-project")).toEqual({
+      kind: "included",
+      matchedAxes: ["directory"],
+      rank: { explicitPriority: 9, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 2 },
+    });
+    expect(reason(samePriorityResult, "asset-shallow-global")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-deep-project",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: 9, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 2 },
+    });
+  });
+
+  it("case 26: keeps equal directory-special keys conflicted", () => {
+    const role = candidateFromDocument(assetDocument("asset-directory-role", "scope.role: [reviewer]\nscope.directory: [/repo]\n"), exclusive("g"));
+    const model = candidateFromDocument(assetDocument("asset-directory-model", "scope.model: [model-a]\nscope.directory: [/repo]\n"), exclusive("g"));
+    const result = resultValue({ roleId: "reviewer", modelId: "model-a", directory: "/repo" }, [model, role]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ kind: "exclusive_tie", mergeGroup: "g", involvedAssetIds: ["asset-directory-model", "asset-directory-role"] }]);
+    const conflict = { kind: "exclusive_tie" as const, mergeGroup: "g", involvedAssetIds: ["asset-directory-model", "asset-directory-role"] as const };
+    expect(reason(result, "asset-directory-role")).toEqual({
+      kind: "excluded",
+      cause: "resolution_conflict",
+      conflict,
+      rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [100, 60], directoryDepth: 1, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-directory-model")).toEqual({
+      kind: "excluded",
+      cause: "resolution_conflict",
+      conflict,
+      rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [100, 90], directoryDepth: 1, sourceLayerPrecedence: 0 },
+    });
+  });
+
+  it("case 27: gives explicit priority precedence over source layer", () => {
+    const global = candidateFromDocument(assetDocument("asset-global", "scope.role: [reviewer]\n"), exclusive("g", { explicitPriority: 9 }));
+    const project = candidateFromDocument(assetDocument("asset-project", "scope.role: [reviewer]\n"), exclusive("g", { explicitPriority: 1 }), { source: { layer: "project", sourceId: "project-source" } });
+    const result = resultValue({ roleId: "reviewer" }, [project, global]);
+
+    expect(reason(result, "asset-global")).toEqual({
+      kind: "included",
+      matchedAxes: ["roleId"],
+      rank: { explicitPriority: 9, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-project")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-global",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: 9, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+  });
+
+  it("case 28: gives scope vector precedence over source layer", () => {
+    const globalModel = candidateFromDocument(assetDocument("asset-global-model", "scope.model: [model-a]\n"), exclusive("g"));
+    const projectRole = candidateFromDocument(assetDocument("asset-project-role", "scope.role: [reviewer]\n"), exclusive("g"), { source: { layer: "project", sourceId: "project-source" } });
+    const result = resultValue({ roleId: "reviewer", modelId: "model-a" }, [projectRole, globalModel]);
+
+    expect(reason(result, "asset-global-model")).toEqual({
+      kind: "included",
+      matchedAxes: ["modelId"],
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [90], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+    expect(reason(result, "asset-project-role")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-global-model",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [90], directoryDepth: 0, sourceLayerPrecedence: 0 },
+    });
+  });
+
+  it("case 29: uses source layer as the final rank tie-break", () => {
+    const candidates = [
+      candidateFromDocument(assetDocument("asset-global-role", "scope.role: [reviewer]\n"), exclusive("g"), { source: { layer: "global", sourceId: "global-source" } }),
+      candidateFromDocument(assetDocument("asset-personal-role", "scope.role: [reviewer]\n"), exclusive("g"), { source: { layer: "personal", sourceId: "personal-source" } }),
+      candidateFromDocument(assetDocument("asset-project-role", "scope.role: [reviewer]\n"), exclusive("g"), { source: { layer: "project", sourceId: "project-source" } }),
+    ];
+    const result = resultValue({ roleId: "reviewer" }, candidates);
+
+    expect(reason(result, "asset-project-role")).toEqual({
+      kind: "included",
+      matchedAxes: ["roleId"],
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 2 },
+    });
+    expect(reason(result, "asset-personal-role")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-project-role",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 2 },
+    });
+    expect(reason(result, "asset-global-role")).toEqual({
+      kind: "overridden",
+      overriddenBy: "asset-project-role",
+      mergeGroup: "g",
+      winnerRank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 2 },
+    });
+    expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-project-role", "asset-personal-role", "asset-global-role"]);
+  });
+
+  it("case 30: keeps the spoiler set conflicted and selects the unbeaten spoiler pair", () => {
+    const dB = candidateFromDocument(assetDocument("asset-db", "scope.role: [reviewer]\nscope.model: [model-a]\nscope.directory: [/repo]\n"), exclusive("g"));
+    const n = candidateFromDocument(assetDocument("asset-n", "scope.role: [reviewer]\nscope.model: [model-a]\n"), exclusive("g"));
+    const dA = candidateFromDocument(assetDocument("asset-da", "scope.directory: [/repo/src/deep]\n"), exclusive("g"));
+
+    for (const candidates of permutations([dB, n, dA])) {
+      const result = resultValue({ roleId: "reviewer", modelId: "model-a", directory: "/repo/src/deep" }, candidates);
+      const conflict = { kind: "exclusive_tie" as const, mergeGroup: "g", involvedAssetIds: ["asset-da", "asset-db", "asset-n"] as const };
+
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([conflict]);
+      expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-db", "asset-n", "asset-da"]);
+      expect(reason(result, "asset-db")).toEqual({
+        kind: "excluded",
+        cause: "resolution_conflict",
+        conflict,
+        rank: { explicitPriority: -1, matchingAxisCount: 3, scopePrecedence: [100, 90, 60], directoryDepth: 1, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-n")).toEqual({
+        kind: "excluded",
+        cause: "resolution_conflict",
+        conflict,
+        rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [90, 60], directoryDepth: 0, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-da")).toEqual({
+        kind: "excluded",
+        cause: "resolution_conflict",
+        conflict,
+        rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+      });
+    }
+
+    for (const candidates of permutations([dB, n])) {
+      const result = resultValue({ roleId: "reviewer", modelId: "model-a", directory: "/repo/src/deep" }, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-db")).toMatchObject({ kind: "included", rank: { matchingAxisCount: 3, scopePrecedence: [100, 90, 60], directoryDepth: 1 } });
+      expect(reason(result, "asset-n")).toMatchObject({ overriddenBy: "asset-db" });
+    }
+  });
+
+  it("case 31: reports the X/Y/Z precedence cycle for every candidate permutation", () => {
+    const x = candidateFromDocument(assetDocument("asset-x", "scope.directory: [/repo/src/deep]\n"), exclusive("g"));
+    const y = candidateFromDocument(assetDocument("asset-y", "scope.role: [reviewer]\nscope.directory: [/repo]\n"), exclusive("g"));
+    const z = candidateFromDocument(assetDocument("asset-z", "scope.role: [reviewer]\nscope.model: [model-a]\n"), exclusive("g"));
+
+    for (const candidates of permutations([x, y, z])) {
+      const result = resultValue({ roleId: "reviewer", modelId: "model-a", directory: "/repo/src/deep" }, candidates);
+      const conflict = { kind: "exclusive_tie" as const, mergeGroup: "g", involvedAssetIds: ["asset-x", "asset-y", "asset-z"] as const };
+
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([conflict]);
+      expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-y", "asset-z", "asset-x"]);
+      expect(reason(result, "asset-x")).toEqual({
+        kind: "excluded",
+        cause: "resolution_conflict",
+        conflict,
+        rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-y")).toEqual({
+        kind: "excluded",
+        cause: "resolution_conflict",
+        conflict,
+        rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [100, 60], directoryDepth: 1, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-z")).toEqual({
+        kind: "excluded",
+        cause: "resolution_conflict",
+        conflict,
+        rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [90, 60], directoryDepth: 0, sourceLayerPrecedence: 0 },
+      });
+    }
+  });
+
+  it("case 32: applies directory precedence to operation issuer selection", () => {
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const deep = candidateFromDocument(assetDocument("asset-deep", "scope.directory: [/repo/src/deep]\n"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const shallow = candidateFromDocument(assetDocument("asset-shallow", "scope.role: [reviewer]\nscope.directory: [/repo]\n"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+
+    for (const candidates of permutations([target, deep, shallow])) {
+      const result = resultValue({ roleId: "reviewer", directory: "/repo/src/deep" }, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(result.evaluations.map((item) => item.candidate.assetId)).toEqual(["asset-shallow", "asset-deep", "asset-target"]);
+      expect(reason(result, "asset-shallow")).toEqual({
+        kind: "included",
+        matchedAxes: ["roleId", "directory"],
+        rank: { explicitPriority: -1, matchingAxisCount: 2, scopePrecedence: [100, 60], directoryDepth: 1, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-deep")).toEqual({
+        kind: "included",
+        matchedAxes: ["directory"],
+        rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 3, sourceLayerPrecedence: 0 },
+      });
+      expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-deep" });
+    }
+  });
+
+  it("case 33: keeps all-disable provenance stable when a lower-ranked directory issuer is present", () => {
+    const target = candidateFromDocument(assetDocument("asset-provenance-target"), add());
+    const disableA = candidateFromDocument(assetDocument("asset-disable-a"), {
+      ...add(),
+      explicitPriority: 10,
+      operation: { kind: "disable", targetAssetId: "asset-provenance-target" as AssetId },
+    });
+    const disableB = candidateFromDocument(assetDocument("asset-disable-b"), {
+      ...add(),
+      explicitPriority: 10,
+      operation: { kind: "disable", targetAssetId: "asset-provenance-target" as AssetId },
+    });
+    const directoryDisable = candidateFromDocument(assetDocument("asset-disable-directory", "scope.directory: [/repo/src/deep]\n"), {
+      ...add(),
+      explicitPriority: 9,
+      operation: { kind: "disable", targetAssetId: "asset-provenance-target" as AssetId },
+    });
+
+    for (const candidates of permutations([target, disableA, disableB, directoryDisable])) {
+      expect(reason(resultValue({ directory: "/repo/src/deep" }, candidates), "asset-provenance-target")).toEqual({ kind: "disabled", disabledBy: "asset-disable-a" });
+    }
+    for (const candidates of permutations([target, disableA, disableB])) {
+      expect(reason(resultValue({ directory: "/repo/src/deep" }, candidates), "asset-provenance-target")).toEqual({ kind: "disabled", disabledBy: "asset-disable-a" });
+    }
+  });
+
+  it("case 34: coalesces all-disable issuers that form the X/Y/Z precedence cycle", () => {
+    const target = candidateFromDocument(assetDocument("asset-cycle-target"), add());
+    const disableOf = (assetId: string, scope: string) => candidateFromDocument(assetDocument(assetId, scope), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-cycle-target" as AssetId },
+    });
+    const x = disableOf("asset-cycle-x", "scope.directory: [/repo/src/deep]\n");
+    const y = disableOf("asset-cycle-y", "scope.role: [reviewer]\nscope.directory: [/repo]\n");
+    const z = disableOf("asset-cycle-z", "scope.role: [reviewer]\nscope.model: [model-a]\n");
+
+    for (const candidates of permutations([target, x, y, z])) {
+      const result = resultValue({ roleId: "reviewer", modelId: "model-a", directory: "/repo/src/deep" }, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-cycle-target")).toEqual({ kind: "disabled", disabledBy: "asset-cycle-y" });
+    }
   });
 
   it("case 8: preserves a mandatory target and reports a mandatory disable conflict", () => {
@@ -484,7 +891,7 @@ scope.project: [acme]
 
     expect(result.evaluations).toHaveLength(4);
     expect(result.evaluations.filter((item) => item.reason.kind === "included").map((item) => item.candidate.assetId)).toEqual(["asset-exclusive-a", "asset-add-a", "asset-add-b"]);
-    expect(reason(result, "asset-exclusive-b")).toEqual({ kind: "overridden", overriddenBy: "asset-exclusive-a", mergeGroup: "g", winnerRank: { sourcePrecedence: 0, explicitPriority: 2, matchingAxisCount: 0, directoryDepth: 0 } });
+    expect(reason(result, "asset-exclusive-b")).toEqual({ kind: "overridden", overriddenBy: "asset-exclusive-a", mergeGroup: "g", winnerRank: { explicitPriority: 2, matchingAxisCount: 0, scopePrecedence: [], directoryDepth: 0, sourceLayerPrecedence: 0 } });
     expect(result.outcome).toBe("resolved");
   });
 
@@ -516,8 +923,8 @@ scope.project: [acme]
     expect(reason(result, "asset-a")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
     expect(reason(result, "asset-b")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
     if (caseName === "case 11-b") {
-      expect(reason(result, "asset-a")).toMatchObject({ rank: { sourcePrecedence: 0, explicitPriority: -1, matchingAxisCount: 1, directoryDepth: 0 } });
-      expect(reason(result, "asset-b")).toMatchObject({ rank: { sourcePrecedence: 0, explicitPriority: -1, matchingAxisCount: 1, directoryDepth: 0 } });
+      expect(reason(result, "asset-a")).toMatchObject({ rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 0 } });
+      expect(reason(result, "asset-b")).toMatchObject({ rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [60], directoryDepth: 0, sourceLayerPrecedence: 0 } });
     }
   });
 
@@ -1251,7 +1658,11 @@ scope.project: [acme]
     const result = resultValue({ directory: "/repo/src/" }, [candidateFromDocument(assetDocument("asset-src", "scope.directory: [/repo/src]\n"), add())]);
 
     expect(result.scope.directory).toBe("/repo/src");
-    expect(reason(result, "asset-src")).toMatchObject({ kind: "included", rank: { directoryDepth: 2 } });
+    expect(reason(result, "asset-src")).toEqual({
+      kind: "included",
+      matchedAxes: ["directory"],
+      rank: { explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [100], directoryDepth: 2, sourceLayerPrecedence: 0 },
+    });
   });
 
   it.each(["\\repo\\src", "C:/repo", "repo/src", "/repo/./src", "/repo/../src"])("case 17.5 directory rejection: rejects %s", (directory) => {
