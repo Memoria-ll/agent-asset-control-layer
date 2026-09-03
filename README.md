@@ -85,6 +85,44 @@ runtime interfaces without changing the canonical asset model.
 
 **The model can change. The development knowledge remains.**
 
+## You define where assets apply
+
+AACL does not decide by itself that a rule "looks like" a Reviewer rule or that a skill should only
+be used with a particular model. The user can explicitly define the scope in which an asset applies.
+
+Assets can be scoped by project, workflow, task type, role, provider, runtime, model, directory, or
+combinations of those dimensions.
+
+For example, the same asset store can contain:
+
+- a rule that applies globally
+- a rule that applies only to the `reviewer` role
+- guidance that applies to a particular model
+- guidance that applies only when a particular model is acting as a particular role
+- project-specific knowledge that is further limited to a workflow, role, model, or directory
+
+```mermaid
+flowchart TB
+    Global[Global rule] --> Resolver[Context Resolver]
+    Reviewer[Role scope<br/>reviewer] --> Resolver
+    Model[Model scope<br/>specific model] --> Resolver
+    Combo[Role + Model scope<br/>reviewer × specific model] --> Resolver
+    Project[Project + Directory scope] --> Resolver
+
+    Execution[Current execution<br/>Project · Workflow · Role · Model · Directory] --> Resolver
+
+    Resolver --> Match[Matched assets]
+    Resolver --> NoMatch[Non-matching assets]
+```
+
+**You decide where an asset applies; the resolver determines whether those conditions match the
+current execution.**
+
+Role and model are intentionally separate dimensions. A Role describes what responsibility an
+execution has; a Model describes what performs that execution. This allows the same Role to be used
+with different models, while still letting model-specific or Role × Model guidance be expressed when
+needed.
+
 ## Resolve, don't dump
 
 The Core does not simply load every asset into every execution.
@@ -141,6 +179,10 @@ The common model handles shared management concerns without erasing the differen
 types. A workflow can remain a workflow, a guardrail can remain an enforcement policy, and a skill
 can retain its own invocation semantics while still participating in the same management and
 resolution system.
+
+Users can define where each asset applies rather than relying on runtime-specific copies to imply
+its scope. Role, model, project, workflow, task type, runtime, directory, and combinations of them
+remain explicit, inspectable metadata.
 
 The source of truth remains human-readable and versionable, so assets can still be inspected,
 diffed, reviewed, and edited directly.
@@ -268,6 +310,8 @@ the same canonical assets and resolution semantics through compatible interfaces
 ## Design principles
 
 - **One source of truth.** Reusable assets should not have to drift across tool-specific copies.
+- **User-defined applicability.** Users define where assets apply; the resolver evaluates those scopes against each execution.
+- **Role and model are separate dimensions.** The same role can move across models, while model-specific and role × model guidance remains expressible.
 - **Shared management, distinct semantics.** Asset types can share lifecycle and resolution infrastructure without being forced into identical behavior.
 - **Resolve, don't dump.** Give each execution what it needs instead of loading everything by default.
 - **Resolution is a Core decision.** Applicability is decided centrally and should not be silently reinterpreted by adapters or clients.
