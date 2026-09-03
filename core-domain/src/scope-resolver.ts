@@ -1349,15 +1349,21 @@ const resolveScopeFixedPoint = (
             );
           });
       });
+      // Every state of a component reaches every other, so an unsatisfied capability
+      // anywhere in it is unsatisfied for all of them.  The per-edge propagation below
+      // walks only the edges leaving the component, which is why the union is taken here
+      // — the same reach that makes a non-cycle requirement failure propagate.
+      const componentFailedCapabilities = component.flatMap((state) => {
+        const outcome = dependencyNodes.get(state)!.capabilityOutcome;
+        return outcome?.ok === false ? [...outcome.failedCapabilities] : [];
+      });
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
         const failures = [...node.directFailures];
         const capabilityFailure = node.capabilityOutcome?.ok === false
           ? node.capabilityOutcome
           : undefined;
-        const failedCapabilities = capabilityFailure === undefined
-          ? []
-          : [...capabilityFailure.failedCapabilities];
+        const failedCapabilities = [...componentFailedCapabilities];
         const nonCycleFailedRequirements = node.directFailures
           .filter((failure) => failure.cause !== "requirement_cycle")
           .map((failure) => failure.id);

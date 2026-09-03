@@ -296,12 +296,19 @@ local-first Core、およびその Workbench となる VS Code Extension。
   required をすべて hard failure にし、その候補を context から落とす。型は optional なので
   コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
 - **`resolveScope` の候補構造検証と fixed point の capability 評価には、同じ capability context を
-  渡す。** 検証側だけ context 無しで呼ぶと、definition に無い feature を要求する候補が構造検証を
-  通り、fixed point 側の `evaluateCapabilityDependencies` が `invalid_request` を返して
+  渡す**（どちらも `evaluateCapabilityDependenciesInValidatedContext` に、冒頭で 1 度だけ
+  `validateCapabilityContext` した結果を渡す）。検証側だけ context 無しで呼ぶと、definition に
+  無い feature を要求する候補が構造検証を通り、fixed point 側が `invalid_request` を返して
   `throw new Error("Validated capability dependencies must evaluate successfully.")` に落ちる
   — `CoreFailure` ではなく例外になるので、consumer からは resolver のクラッシュに見える。
   scope 外の候補も検証対象で、scope が決めるのは「どれが適用されるか」であって
   「どれが妥当か」ではない (#9)
+- **`dependencyOutcomes` の伝播は component 内部エッジを飛ばすので、状態ごとの失敗種別を
+  足したら component 単位の union も同じ変更で足す。** conflict は mandatory 候補についてしか
+  materialize されないため、union を忘れると SCC 内の非 mandatory 候補が持つ失敗は
+  mandatory 候補へ伝わらず、**診断そのものが結果から消える**（cycle と dependency_failure だけが
+  残り、原因の capability 名が出ない）。requirement 失敗側は `componentHasNonCycleFailure` が、
+  capability 側は `componentFailedCapabilities` がこの役目を持つ (#9)
 
 ### Invariants / identity keys
 

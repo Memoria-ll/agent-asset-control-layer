@@ -1738,4 +1738,27 @@ scope.project: [acme]
       ]);
     }
   });
+
+  it("S16: propagates a capability failure across a dependency cycle", () => {
+    const mandatory = candidateFromDocument(assetDocument("skill-a", "requires: [skill-b]\n", "skill"), {
+      ...add(),
+      mandatory: true,
+    });
+    const cycleMember = candidateFromDocument(assetDocument("skill-b", "requires: [skill-a]\n", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-cycle") }],
+    });
+    const result = resultValue({}, [mandatory, cycleMember], capabilityContext([{ id: "cap-cycle" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "capability_failure", failedCapabilities: [capabilityId("cap-cycle")], involvedAssetIds: ["skill-a"] },
+      { kind: "dependency_cycle", involvedAssetIds: ["skill-a", "skill-b"] },
+    ]));
+    expect(reason(result, "skill-a")).toMatchObject({
+      kind: "unavailable",
+      cause: "requirement_cycle",
+      failedCapabilities: [capabilityId("cap-cycle")],
+    });
+  });
 });
