@@ -325,6 +325,16 @@ const normalizeDependencies = (
       checkDeclaredFeatures(fallbackFor, [...path, "fallbackFor", "features"]);
       if (capability === undefined || fallbackFor === undefined) continue;
       const fallbackKey = referenceKey(fallbackFor);
+      if (referenceKey(capability) === fallbackKey) {
+        // Availability is decided by one predicate over the reference, so a fallback
+        // repeating its primary verbatim is unavailable exactly when the primary is.
+        // A weaker reference to the same capability keeps a different key and stays legal.
+        details.push(detail(
+          [...path, "capability"],
+          "self_fallback",
+          "A fallback must not repeat the capability reference it falls back for.",
+        ));
+      }
       if (fallbackReferences.has(fallbackKey)) {
         details.push(detail([...path, "fallbackFor"], "duplicate_fallback", "A primary capability may have only one fallback."));
       } else {
@@ -479,6 +489,15 @@ export const evaluateCapabilityDependencies = (
     }
   }
 
+  // Several references to one capability differ only in their features, and neither the
+  // exposed record nor the reason text carries a feature — so two such references
+  // collapse to one indistinguishable entry rather than being reported twice.
+  const canonicalReasons = (
+    reasons: readonly { readonly capabilityId: CapabilityId; readonly text: string }[],
+  ): string[] => [...new Set([...reasons]
+    .sort((left, right) => codeUnitCompare(left.capabilityId, right.capabilityId))
+    .map((reason) => reason.text))];
+
   // A required failure removes the candidate, so soft degradation cannot be retained alongside it.
   if (failedCapabilities.length > 0) {
     const uniqueFailedCapabilities = [...new Set(failedCapabilities)].sort(codeUnitCompare);
@@ -487,23 +506,27 @@ export const evaluateCapabilityDependencies = (
       value: {
         ok: false,
         failedCapabilities: uniqueFailedCapabilities,
-        reasons: failureReasons
-          .sort((left, right) => codeUnitCompare(left.capabilityId, right.capabilityId))
-          .map((reason) => reason.text),
+        reasons: canonicalReasons(failureReasons),
       },
     };
   }
   if (degradations.length === 0) return { ok: true, value: { ok: true } };
+  const degradationKey = (degradation: CapabilityDegradation): string =>
+    JSON.stringify([degradation.capabilityId, degradation.strength, degradation.fallbackCapabilityId ?? null]);
+  const uniqueDegradations: CapabilityDegradation[] = [];
+  const seenDegradations = new Set<string>();
+  for (const degradation of [...degradations].sort((left, right) => codeUnitCompare(degradationKey(left), degradationKey(right)))) {
+    const key = degradationKey(degradation);
+    if (seenDegradations.has(key)) continue;
+    seenDegradations.add(key);
+    uniqueDegradations.push(degradation);
+  }
   return {
     ok: true,
     value: {
       ok: true,
-      degradation: {
-        reasons: degradationReasons
-          .sort((left, right) => codeUnitCompare(left.capabilityId, right.capabilityId))
-          .map((reason) => reason.text),
-      },
-      degradedCapabilities: degradations,
+      degradation: { reasons: canonicalReasons(degradationReasons) },
+      degradedCapabilities: uniqueDegradations,
     },
   };
 };

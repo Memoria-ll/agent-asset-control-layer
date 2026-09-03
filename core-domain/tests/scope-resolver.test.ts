@@ -1692,4 +1692,50 @@ scope.project: [acme]
       expect(result.failure.details?.some((item) => item.code === "capability_dependencies_not_allowed")).toBe(true);
     }
   });
+
+  it("S13: rejects an undeclared capability feature on an in-scope candidate", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-in-scope", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["writ"]) }],
+    });
+    const result = resolve({}, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read", "write"])],
+    ));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual([
+        "snapshot", "candidate", "skill-in-scope", "rule", "capabilityDependencies", "0", "capability", "features",
+      ]);
+    }
+  });
+
+  it("S14: rejects an undeclared capability feature on a candidate outside the scope", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-out-of-scope", "scope.role: [author]\n", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["writ"]) }],
+    });
+    const result = resolve({ roleId: "reviewer" }, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read", "write"])],
+    ));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.some((item) => item.code === "unknown_capability_feature")).toBe(true);
+    }
+  });
+
+  it("S15: roots capability context diagnostics at the input field", () => {
+    const result = resolve({}, [], capabilityContext([{ id: "cap-a" }], [capabilityOffer("cap-b")]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual([
+        "capabilityContext", "offers", "0", "capabilityId",
+      ]);
+    }
+  });
 });

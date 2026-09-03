@@ -557,6 +557,7 @@ const validateStringList = (
 const validateCandidate = (
   candidate: NormalizedCandidate,
   contracts: AssetTypeContractRegistry,
+  capabilityContext: CapabilityResolutionContext | undefined,
 ): readonly CoreErrorDetail[] => {
   const details: CoreErrorDetail[] = [];
   const value = candidate.candidate as unknown as Record<string, unknown>;
@@ -601,8 +602,13 @@ const validateCandidate = (
 
   const capabilityDependencies = rule.capabilityDependencies;
   if (capabilityDependencies !== undefined) {
+    // The catalog is passed here, not only where the included candidates are evaluated:
+    // a dependency naming a feature its definition does not declare is invalid
+    // configuration of the snapshot, and scope decides which candidates apply — not
+    // which ones are well-formed.
     const capabilityResult = evaluateCapabilityDependencies(
       capabilityDependencies as unknown as readonly CapabilityDependency[],
+      capabilityContext,
     );
     if (!capabilityResult.ok) {
       for (const capabilityDetail of capabilityResult.failure.details ?? []) {
@@ -833,8 +839,15 @@ const resolveScopeFixedPoint = (
     ? undefined
     : validateCapabilityContext(input.capabilityContext);
   if (capabilityContextResult !== undefined && !capabilityContextResult.ok) {
-    return invalidRequest(capabilityContextResult.failure.details ?? []);
+    // The helper reports against its own input, so its paths name `catalog` / `offers`,
+    // neither of which is a field of ResolveScopeInput.  Rooting them at the field the
+    // caller passed is what lets a consumer find the offending value.
+    return invalidRequest((capabilityContextResult.failure.details ?? []).map((item) =>
+      detail(["capabilityContext", ...item.path], item.code, item.message)));
   }
+  const capabilityContext = capabilityContextResult === undefined || !capabilityContextResult.ok
+    ? undefined
+    : capabilityContextResult.value;
 
   const conflicts = new Map<string, ResolutionConflict>();
   const addConflict = (conflict: ResolutionConflict): void => {
@@ -860,7 +873,7 @@ const resolveScopeFixedPoint = (
   // invalid-directory evaluation, and it must not be dereferenced below.
   for (const rawCandidate of input.snapshot.candidates) {
     const candidate = rawCandidate as AssetCandidate;
-    const structuralDetails = validateCandidate({ candidate }, contracts);
+    const structuralDetails = validateCandidate({ candidate }, contracts, capabilityContext);
     if (structuralDetails.length > 0) {
       validationDetails.push(...structuralDetails);
       continue;
@@ -1130,7 +1143,9 @@ const resolveScopeFixedPoint = (
   for (const state of baseIncluded) {
     const dependencies = state.candidate.rule.capabilityDependencies;
     if (dependencies === undefined) continue;
-    const capabilityResult = evaluateCapabilityDependencies(dependencies, input.capabilityContext);
+    const capabilityResult = evaluateCapabilityDependencies(dependencies, capabilityContext);
+    // Structural validation above ran with this same catalog, so a failure here would
+    // mean the two disagree rather than that the snapshot is invalid.
     if (!capabilityResult.ok) throw new Error("Validated capability dependencies must evaluate successfully.");
     capabilityOutcomeByState.set(state, capabilityResult.value);
   }

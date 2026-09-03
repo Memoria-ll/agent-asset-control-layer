@@ -205,4 +205,62 @@ describe("capability catalog and dependency semantics", () => {
 
     expect(result).toMatchObject({ ok: false, failedCapabilities: [capabilityId("filesystem")] });
   });
+
+  it("C15 collapses degradations that differ only in their features", () => {
+    const catalog = context([definition("filesystem", ["read", "write"])], []);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "optional", capability: reference("filesystem", ["read"]) },
+      { strength: "optional", capability: reference("filesystem", ["write"]) },
+    ], catalog));
+
+    if (result.ok !== true) throw new Error("Expected a degraded outcome.");
+    expect(result.degradedCapabilities).toEqual([
+      { capabilityId: capabilityId("filesystem"), strength: "optional" },
+    ]);
+    expect(result.degradation?.reasons).toEqual([
+      'Capability "filesystem" with optional strength is unavailable.',
+    ]);
+  });
+
+  it("C16 collapses required failure reasons that differ only in their features", () => {
+    const catalog = context([definition("filesystem", ["read", "write"])], []);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["read"]) },
+      { strength: "required", capability: reference("filesystem", ["write"]) },
+    ], catalog));
+
+    expect(result).toEqual({
+      ok: false,
+      failedCapabilities: [capabilityId("filesystem")],
+      reasons: ['Capability "filesystem" with required strength is unavailable.'],
+    });
+  });
+
+  it("C17 rejects a fallback that repeats its primary reference", () => {
+    const catalog = context([definition("filesystem", ["read", "write"])], []);
+    const result = evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["read"]) },
+      { strength: "fallback", capability: reference("filesystem", ["read"]), fallbackFor: reference("filesystem", ["read"]) },
+    ], catalog);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("self_fallback");
+  });
+
+  it("C18 accepts a fallback on a weaker feature set of the same capability", () => {
+    const catalog = context([definition("filesystem", ["read", "write"])], [offer("filesystem", ["read"])]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["read", "write"]) },
+      { strength: "fallback", capability: reference("filesystem", ["read"]), fallbackFor: reference("filesystem", ["read", "write"]) },
+    ], catalog));
+
+    expect(result).toMatchObject({
+      ok: true,
+      degradedCapabilities: [{
+        capabilityId: capabilityId("filesystem"),
+        strength: "required",
+        fallbackCapabilityId: capabilityId("filesystem"),
+      }],
+    });
+  });
 });
