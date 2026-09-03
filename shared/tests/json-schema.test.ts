@@ -106,4 +106,43 @@ describe("contract JSON Schemas", () => {
     expect(blocked.properties.blockedReasons.minItems).toBe(1);
     expect(unblocked.properties.blockedReasons).toBeUndefined();
   });
+
+  it("publishes the Project boundary and nested failure strictness", () => {
+    const schemas = contractJsonSchemas() as any;
+    expect(schemas.ProjectMarkerDto.required).toEqual(["schemaVersion", "projectId"]);
+    expect(schemas.ProjectMarkerDto.properties.schemaVersion.const).toBe(1);
+    expect(schemas.ProjectMarkerDto.properties.projectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(schemas.ProjectMarkerDto.properties.projectId.maxLength).toBe(128);
+    expect(schemas.ProjectInitRequest.required).toEqual(["projectRoot"]);
+    expect(schemas.ProjectInfoDto.properties.projectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(schemas.ProjectInfoDto.properties.projectId.maxLength).toBe(128);
+    expect(schemas.ProjectDiscoveryDto.oneOf).toHaveLength(4);
+
+    const initialized = schemas.ProjectDiscoveryDto.oneOf.find(
+      (arm: any) => arm.properties.status.const === "initialized",
+    );
+    expect(initialized.properties.projectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(initialized.properties.projectId.maxLength).toBe(128);
+    const invalid = schemas.ProjectDiscoveryDto.oneOf.find(
+      (arm: any) => arm.properties.status.const === "invalid",
+    );
+    expect(invalid.properties.failure.additionalProperties).toBe(false);
+    expect(invalid.properties.failure.properties.code.enum).toEqual([
+      "invalid_request",
+      "unavailable",
+    ]);
+    const mismatch = schemas.ProjectDiscoveryDto.oneOf.find(
+      (arm: any) => arm.properties.status.const === "mismatch",
+    );
+    expect(mismatch.properties.markerProjectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(mismatch.properties.markerProjectId.maxLength).toBe(128);
+    expect(mismatch.properties.registryProjectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(mismatch.properties.registryProjectId.maxLength).toBe(128);
+    expect(mismatch.required).toEqual(expect.arrayContaining([
+      "workspacePath",
+      "projectRoot",
+      "markerProjectId",
+      "registryProjectId",
+    ]));
+  });
 });

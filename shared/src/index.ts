@@ -142,6 +142,20 @@ export type {
   VersionInfoInput,
 } from "./contract-version.ts";
 
+export type {
+  ProjectMarkerDto,
+  ProjectMarkerDtoInput,
+  ProjectInitRequest,
+  ProjectInitRequestInput,
+  ProjectInfoDto,
+  ProjectInfoDtoInput,
+  ProjectDiscoveryRequest,
+  ProjectDiscoveryRequestInput,
+  ProjectDiscoveryStatus,
+  ProjectDiscoveryDto,
+  ProjectDiscoveryDtoInput,
+} from "./projects.ts";
+
 // ---------------------------------------------------------------------------
 // Closed value sets, as plain arrays.
 //
@@ -156,6 +170,9 @@ export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
 export { CORE_ERROR_CODES } from "./errors.ts";
 export { COMPATIBILITY_STATUSES } from "./contract-version.ts";
 export { TRANSITION_KINDS } from "./workflow.ts";
+export {
+  PROJECT_DISCOVERY_STATUSES,
+} from "./projects.ts";
 
 // ---------------------------------------------------------------------------
 // Boundary validation. One named entry point per DTO: `parse*` throws,
@@ -210,6 +227,20 @@ export {
 export { parseCoreErrorDto, tryParseCoreErrorDto } from "./errors.ts";
 
 export { parseVersionInfo, tryParseVersionInfo } from "./contract-version.ts";
+
+export {
+  createProjectMarkerDto,
+  parseProjectMarkerDto,
+  tryParseProjectMarkerDto,
+  parseProjectInitRequest,
+  tryParseProjectInitRequest,
+  parseProjectInfoDto,
+  tryParseProjectInfoDto,
+  parseProjectDiscoveryRequest,
+  tryParseProjectDiscoveryRequest,
+  parseProjectDiscoveryDto,
+  tryParseProjectDiscoveryDto,
+} from "./projects.ts";
 
 // ---------------------------------------------------------------------------
 // Contract version, and the serialized form of every boundary type.

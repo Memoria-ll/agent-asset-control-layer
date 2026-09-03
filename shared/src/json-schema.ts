@@ -5,6 +5,13 @@ import { ModelDto, ProviderDto, RuntimeDto } from "./execution-targets.ts";
 import { ResolveRequest, ResolveResponse } from "./resolution.ts";
 import { ResolvedContextDto } from "./resolved-context.ts";
 import { RoleDto, TaskTypeDto } from "./roles.ts";
+import {
+  ProjectDiscoveryDto,
+  ProjectDiscoveryRequest,
+  ProjectInfoDto,
+  ProjectInitRequest,
+  ProjectMarkerDto,
+} from "./projects.ts";
 import { AgentExecutionDto, SessionDto } from "./sessions.ts";
 import {
   TransitionCandidateDto,
@@ -36,6 +43,11 @@ export const contractSchemas: Readonly<Record<string, z.core.$ZodType>> = {
   ModelDto,
   RoleDto,
   TaskTypeDto,
+  ProjectMarkerDto,
+  ProjectInitRequest,
+  ProjectInfoDto,
+  ProjectDiscoveryRequest,
+  ProjectDiscoveryDto,
 };
 
 /**

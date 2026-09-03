@@ -6,6 +6,7 @@ import {
   COMPATIBILITY_STATUSES,
   CORE_ERROR_CODES,
   LOADING_TIERS,
+  PROJECT_DISCOVERY_STATUSES,
   RESOLUTION_REASON_KINDS,
   TRANSITION_KINDS,
 } from "../src/index.ts";
@@ -26,6 +27,7 @@ describe("frozen contract enum values", () => {
     ["CORE_ERROR_CODES", CORE_ERROR_CODES, ["invalid_request", "not_found", "conflict", "unavailable", "incompatible_contract", "internal"]],
     ["COMPATIBILITY_STATUSES", COMPATIBILITY_STATUSES, ["compatible", "incompatible"]],
     ["TRANSITION_KINDS", TRANSITION_KINDS, ["advance", "retry", "reject", "return"]],
+    ["PROJECT_DISCOVERY_STATUSES", PROJECT_DISCOVERY_STATUSES, ["initialized", "uninitialized", "invalid", "mismatch"]],
   ])("keeps %s stable", (_name, members, expected) => {
     expect(
       [...members],

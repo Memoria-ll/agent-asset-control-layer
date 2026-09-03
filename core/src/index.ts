@@ -3,6 +3,13 @@ import { coreFailure, type CoreFailure } from "@aacl/core-domain";
 import { createRequestListener } from "./http/listener.ts";
 import type { Logger } from "./logging/logger.ts";
 import { resolveCoreSettings, type CoreEnv } from "./config/settings.ts";
+import {
+  createProjectRegistry,
+  defaultProjectRegistryPath,
+  type ProjectRegistryOptions,
+} from "./projects/registry.ts";
+
+export type StartFailureStage = "settings" | "project-registry" | "listen";
 
 export type StartOutcome =
   | {
@@ -10,7 +17,7 @@ export type StartOutcome =
       readonly address: { readonly host: string; readonly port: number };
       readonly close: () => Promise<void>;
     }
-  | { readonly ok: false; readonly failure: CoreFailure };
+  | { readonly ok: false; readonly stage: StartFailureStage; readonly failure: CoreFailure };
 
 const errorCodeOf = (error: unknown): string => {
   if (typeof error === "object" && error !== null && "code" in error) {
@@ -23,9 +30,23 @@ const errorCodeOf = (error: unknown): string => {
 export const startCore = async (options: {
   readonly env: CoreEnv;
   readonly logger: Logger;
+  readonly projectRegistryPath?: string;
+  readonly projectRegistryOptions?: ProjectRegistryOptions;
 }): Promise<StartOutcome> => {
   const settings = resolveCoreSettings(options.env);
-  if (!settings.ok) return settings;
+  if (!settings.ok) return { ok: false, stage: "settings", failure: settings.failure };
+
+  const registry = createProjectRegistry(
+    options.projectRegistryPath ?? defaultProjectRegistryPath(),
+    options.projectRegistryOptions,
+  );
+  const reconciled = await registry.reconcile();
+  if (!reconciled.ok) return { ok: false, stage: "project-registry", failure: reconciled.failure };
+  if (reconciled.value.status === "degraded") {
+    options.logger.log("warn", "core.project_registry_reconcile_degraded", {
+      reason: reconciled.value.reason,
+    });
+  }
 
   const server = createServer(createRequestListener({ logger: options.logger }));
   const listenResult = await new Promise<StartOutcome>((resolve) => {
@@ -38,6 +59,7 @@ export const startCore = async (options: {
       const code = errorCodeOf(error);
       resolve({
         ok: false,
+        stage: "listen",
         failure: coreFailure(
           "unavailable",
           `Core could not listen on ${settings.settings.host}:${settings.settings.port}; code ${code}.`,
@@ -53,6 +75,7 @@ export const startCore = async (options: {
         // This TCP listen call cannot produce a non-TCP address, so this branch has no red test seam.
         resolve({
           ok: false,
+          stage: "listen",
           failure: coreFailure(
             "internal",
             "Core started without a TCP address.",
@@ -115,3 +138,18 @@ export type {
   WorkflowStateStore,
   WorkflowStateStoreOptions,
 } from "./workflow/filesystem-state-store.ts";
+
+export { createProjectService } from "./projects/service.ts";
+export type {
+  ProjectService,
+  ProjectServiceOptions,
+} from "./projects/service.ts";
+
+export {
+  createProjectRegistry,
+  defaultProjectRegistryPath,
+} from "./projects/registry.ts";
+export type {
+  ProjectRegistry,
+  RegistryObservation,
+} from "./projects/registry.ts";

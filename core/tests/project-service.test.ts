@@ -1,0 +1,541 @@
+import { lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, describe, expect, it } from "vitest";
+import { parseProjectMarkerDto } from "@aacl/shared";
+import { createProjectRegistry, defaultProjectRegistryPath } from "../src/projects/registry.ts";
+import { createProjectService } from "../src/projects/service.ts";
+
+const scratch: string[] = [];
+
+const makeScratch = async (): Promise<string> => {
+  const directory = await mkdtemp(join(tmpdir(), "aacl-project-test-"));
+  scratch.push(directory);
+  return directory;
+};
+
+afterEach(async () => {
+  await Promise.all(scratch.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+const setup = async (suffix = "fixed-id") => {
+  const root = await makeScratch();
+  const projectRoot = join(root, "project");
+  const registryPath = join(root, "state", "project-registry.json");
+  await mkdir(projectRoot);
+  const registry = createProjectRegistry(registryPath);
+  const service = createProjectService({ registry, newProjectSuffix: () => suffix });
+  return { root, projectRoot, registryPath, registry, service };
+};
+
+const replaceAaclWithSymlink = async (projectRoot: string): Promise<void> => {
+  const projectDirectory = join(projectRoot, ".aacl");
+  const replacementDirectory = join(projectRoot, ".aacl-replacement");
+  await mkdir(replacementDirectory);
+  await writeFile(join(replacementDirectory, "project.json"), JSON.stringify({
+    schemaVersion: 1,
+    projectId: "project-replacement",
+  }), "utf8");
+  await rename(projectDirectory, `${projectDirectory}-original`);
+  await symlink(replacementDirectory, projectDirectory, "dir");
+};
+
+const replaceAaclWithDirectory = async (projectRoot: string): Promise<void> => {
+  const projectDirectory = join(projectRoot, ".aacl");
+  const replacementDirectory = join(projectRoot, ".aacl-replacement");
+  await mkdir(replacementDirectory);
+  await writeFile(join(replacementDirectory, "project.json"), JSON.stringify({
+    schemaVersion: 1,
+    projectId: "project-replacement",
+  }), "utf8");
+  await rename(projectDirectory, `${projectDirectory}-original`);
+  await rename(replacementDirectory, projectDirectory);
+};
+
+const replaceAaclWithEmptyDirectory = async (projectRoot: string): Promise<void> => {
+  const projectDirectory = join(projectRoot, ".aacl");
+  await rename(projectDirectory, `${projectDirectory}-original`);
+  await mkdir(projectDirectory);
+};
+
+describe("Project initialization and discovery", () => {
+  it("initializes explicitly and remains idempotent", async () => {
+    const { projectRoot, registryPath, service } = await setup();
+
+    const first = await service.initialize(projectRoot);
+    const second = await service.initialize(projectRoot);
+
+    expect(first).toEqual({
+      ok: true,
+      value: { projectId: "project-fixed-id", projectRoot },
+    });
+    expect(second).toEqual(first);
+    const marker = parseProjectMarkerDto(JSON.parse(
+      await readFile(join(projectRoot, ".aacl", "project.json"), "utf8"),
+    ));
+    expect(marker).toEqual({ schemaVersion: 1, projectId: "project-fixed-id" });
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(registry.entries).toEqual([{
+      workspacePath: projectRoot,
+      projectRoot,
+      projectId: "project-fixed-id",
+      state: "bound",
+    }]);
+  });
+
+  it("rebinds the same marker identity after the workspace path moves", async () => {
+    const { root, projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    const movedRoot = join(root, "moved-project");
+    await rename(projectRoot, movedRoot);
+    const nestedWorkspace = join(movedRoot, "packages", "one");
+    await mkdir(nestedWorkspace, { recursive: true });
+
+    const discovered = await service.discover(nestedWorkspace);
+
+    expect(discovered).toEqual({
+      ok: true,
+      value: {
+        status: "initialized",
+        workspacePath: nestedWorkspace,
+        projectRoot: movedRoot,
+        projectId: "project-fixed-id",
+      },
+    });
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(registry.entries.map((entry: any) => entry.projectId)).toEqual([
+      "project-fixed-id",
+      "project-fixed-id",
+    ]);
+    expect(registry.entries[1].workspacePath).toBe(movedRoot);
+  });
+
+  it("can explicitly initialize a nested Project after discovering its parent", async () => {
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    const nested = join(projectRoot, "packages", "one");
+    await mkdir(nested, { recursive: true });
+    await service.discover(nested);
+
+    const nestedService = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "nested-id",
+    });
+    const initialized = await nestedService.initialize(nested);
+
+    expect(initialized).toEqual({
+      ok: true,
+      value: { projectId: "project-nested-id", projectRoot: nested },
+    });
+    expect(parseProjectMarkerDto(JSON.parse(
+      await readFile(join(nested, ".aacl", "project.json"), "utf8"),
+    )).projectId).toBe("project-nested-id");
+  });
+
+  it("leaves an uninitialized workspace untouched", async () => {
+    const { projectRoot, registryPath, service } = await setup();
+
+    expect(await service.discover(projectRoot)).toEqual({
+      ok: true,
+      value: { status: "uninitialized", workspacePath: projectRoot },
+    });
+    await expect(readFile(join(projectRoot, ".aacl", "project.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("classifies missing and non-directory workspace paths as invalid requests", async () => {
+    const { root, service } = await setup();
+    const missing = await service.discover(join(root, "missing"));
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error("Expected a missing workspace failure");
+    expect(missing.failure.code).toBe("invalid_request");
+    expect(missing.failure.details?.[0]?.code).toBe("invalid_workspace_path");
+
+    const filePath = join(root, "workspace-file");
+    await writeFile(filePath, "not a directory\n", "utf8");
+    const nested = await service.discover(join(filePath, "child"));
+    expect(nested.ok).toBe(false);
+    if (nested.ok) throw new Error("Expected a non-directory workspace failure");
+    expect(nested.failure.code).toBe("invalid_request");
+    expect(nested.failure.details?.[0]?.code).toBe("invalid_workspace_path");
+  });
+
+  it("classifies an injected workspace stat failure as unavailable", async () => {
+    const { projectRoot, registryPath } = await setup();
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      statPath: async () => { throw error; },
+    });
+
+    const result = await service.discover(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected an unavailable workspace failure");
+    expect(result.failure.code).toBe("unavailable");
+    expect(result.failure.details?.[0]?.code).toBe("unavailable");
+  });
+
+  it("stops at the nearest invalid marker instead of falling through to a parent", async () => {
+    const { projectRoot, service } = await setup();
+    await service.initialize(projectRoot);
+    const nested = join(projectRoot, "packages", "one");
+    await mkdir(join(nested, ".aacl"), { recursive: true });
+    await writeFile(join(nested, ".aacl", "project.json"), "not-json\n", "utf8");
+
+    const discovered = await service.discover(nested);
+
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) throw new Error(discovered.failure.message);
+    expect(discovered.value.status).toBe("invalid");
+    if (discovered.value.status !== "invalid") throw new Error("Expected invalid discovery");
+    expect(discovered.value.projectRoot).toBe(nested);
+    expect(discovered.value.failure.details?.[0]?.code).toBe("invalid_json");
+  });
+
+  it("reports a marker with an invalid identity instead of treating it as initialized", async () => {
+    const { projectRoot, service } = await setup();
+    await mkdir(join(projectRoot, ".aacl"), { recursive: true });
+    await writeFile(join(projectRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "INVALID",
+    }), "utf8");
+
+    const discovered = await service.discover(projectRoot);
+
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok || discovered.value.status !== "invalid") {
+      throw new Error("Expected invalid discovery");
+    }
+    expect(discovered.value.failure.details?.[0]?.code).toBe("invalid_marker");
+  });
+
+  it("records and reports a marker/registry mismatch without overwriting the registered identity", async () => {
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    await writeFile(join(projectRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "project-replaced",
+    }), "utf8");
+
+    const discovered = await service.discover(projectRoot);
+
+    expect(discovered).toEqual({
+      ok: true,
+      value: {
+        status: "mismatch",
+        workspacePath: projectRoot,
+        projectRoot,
+        markerProjectId: "project-replaced",
+        registryProjectId: "project-fixed-id",
+      },
+    });
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(registry.entries[0]).toMatchObject({
+      projectId: "project-fixed-id",
+      markerProjectId: "project-replaced",
+      state: "mismatch",
+    });
+  });
+
+  it("rejects initialization when .aacl is replaced after reading the Marker", async () => {
+    if (process.platform === "win32") return;
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    const registryBefore = await readFile(registryPath, "utf8");
+    const guarded = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      afterMarkerDirectoryFreshStat: async () => replaceAaclWithSymlink(projectRoot),
+    });
+
+    const result = await guarded.initialize(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected a replaced Project directory failure");
+    expect(result.failure.details?.[0]?.code).toBe("invalid_project_directory");
+    expect(await readFile(registryPath, "utf8")).toBe(registryBefore);
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+  });
+
+  it("rejects discovery when .aacl is replaced after reading the Marker", async () => {
+    if (process.platform === "win32") return;
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    const registryBefore = await readFile(registryPath, "utf8");
+    const guarded = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      afterMarkerDirectoryFreshStat: async () => replaceAaclWithSymlink(projectRoot),
+    });
+
+    const result = await guarded.discover(projectRoot);
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        status: "invalid",
+        workspacePath: projectRoot,
+        projectRoot,
+        failure: {
+          code: "invalid_request",
+          message: "The .aacl path is not a regular directory.",
+          details: [{
+            path: ["projectRoot"],
+            code: "invalid_project_directory",
+            message: "The .aacl path is not a regular directory.",
+          }],
+        },
+      },
+    });
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+    expect(await readFile(registryPath, "utf8")).toBe(registryBefore);
+  });
+
+  it("does not persist binding when the Marker source is replaced during Registry persistence", async () => {
+    if (process.platform === "win32") return;
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    const registryBefore = await readFile(registryPath, "utf8");
+    const guarded = createProjectService({
+      registry: createProjectRegistry(registryPath, {
+        beforeWrite: async () => replaceAaclWithSymlink(projectRoot),
+      }),
+    });
+
+    const result = await guarded.initialize(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected a source guard failure");
+    expect(result.failure.code).toBe("unavailable");
+    expect(result.failure.details?.[0]?.code).toBe("unavailable");
+    expect(await readFile(registryPath, "utf8")).toBe(registryBefore);
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+  });
+
+  it("recovers a pending binding from the marker on the next discovery", async () => {
+    const { projectRoot, registryPath, registry } = await setup();
+    const interrupted = createProjectService({
+      registry,
+      newProjectSuffix: () => "crash-id",
+      afterMarkerWritten: async () => { throw new Error("simulated crash"); },
+    });
+    await expect(interrupted.initialize(projectRoot)).rejects.toThrow("simulated crash");
+    let document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0].state).toBe("pending");
+
+    const recovered = await createProjectService({ registry }).discover(projectRoot);
+
+    expect(recovered).toEqual({
+      ok: true,
+      value: {
+        status: "initialized",
+        workspacePath: projectRoot,
+        projectRoot,
+        projectId: "project-crash-id",
+      },
+    });
+    document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0].state).toBe("bound");
+  });
+
+  it("does not create .aacl when the Registry cannot be prepared", async () => {
+    const root = await makeScratch();
+    const projectRoot = join(root, "project");
+    const registryPath = join(root, "state", "project-registry.json");
+    await mkdir(projectRoot);
+    await mkdir(join(root, "state"));
+    await writeFile(registryPath, "{}\n", "utf8");
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "registry-failure",
+    });
+
+    const result = await service.initialize(projectRoot);
+
+    expect(result.ok).toBe(false);
+    await expect(lstat(join(projectRoot, ".aacl"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("replaces a stale bound entry with a newly generated identity", async () => {
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    await unlink(join(projectRoot, ".aacl", "project.json"));
+    const retry = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "replacement-id",
+    });
+
+    const result = await retry.initialize(projectRoot);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { projectId: "project-replacement-id", projectRoot },
+    });
+    const marker = parseProjectMarkerDto(JSON.parse(
+      await readFile(join(projectRoot, ".aacl", "project.json"), "utf8"),
+    ));
+    expect(marker.projectId).toBe("project-replacement-id");
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toMatchObject({
+      projectId: "project-replacement-id",
+      state: "bound",
+    });
+  });
+
+  it("replaces a stale mismatch entry after the conflicting Marker is removed", async () => {
+    const { projectRoot, registryPath, service } = await setup();
+    await service.initialize(projectRoot);
+    await writeFile(join(projectRoot, ".aacl", "project.json"), JSON.stringify({
+      schemaVersion: 1,
+      projectId: "project-conflicting",
+    }), "utf8");
+    const retry = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "mismatch-recovery",
+    });
+
+    const mismatch = await retry.initialize(projectRoot);
+    expect(mismatch.ok).toBe(false);
+    if (mismatch.ok) throw new Error("Expected the existing Marker mismatch");
+    expect(mismatch.failure.code).toBe("conflict");
+    expect(mismatch.failure.details?.[0]?.code).toBe("project_id_mismatch");
+
+    await unlink(join(projectRoot, ".aacl", "project.json"));
+    const recovered = await retry.initialize(projectRoot);
+
+    expect(recovered).toEqual({
+      ok: true,
+      value: { projectId: "project-mismatch-recovery", projectRoot },
+    });
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toEqual({
+      workspacePath: projectRoot,
+      projectRoot,
+      projectId: "project-mismatch-recovery",
+      state: "bound",
+    });
+  });
+
+  it("does not write or bind a Marker after the prepared directory is replaced before temp open", async () => {
+    if (process.platform === "win32") return;
+    const { projectRoot, registryPath } = await setup("write-before-open");
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "write-before-open",
+      beforeMarkerTemporaryOpen: async () => replaceAaclWithSymlink(projectRoot),
+    });
+
+    const result = await service.initialize(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected the replaced write directory failure");
+    expect(result.failure.details?.[0]?.code).toBe("unavailable");
+    expect((await lstat(join(projectRoot, ".aacl"))).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(await readFile(join(projectRoot, ".aacl-replacement", "project.json"), "utf8"))).toEqual({
+      schemaVersion: 1,
+      projectId: "project-replacement",
+    });
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toMatchObject({
+      projectId: "project-write-before-open",
+      state: "pending",
+    });
+  });
+
+  it("does not bind a Marker after the directory is replaced after the hard link", async () => {
+    if (process.platform === "win32") return;
+    const { projectRoot, registryPath } = await setup("write-after-link");
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "write-after-link",
+      afterMarkerLink: async () => replaceAaclWithEmptyDirectory(projectRoot),
+    });
+
+    const result = await service.initialize(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected the replaced linked directory failure");
+    expect(result.failure.details?.[0]?.code).toBe("unavailable");
+    expect((await lstat(join(projectRoot, ".aacl"))).isDirectory()).toBe(true);
+    expect(await readdir(join(projectRoot, ".aacl"))).toEqual([]);
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toMatchObject({
+      projectId: "project-write-after-link",
+      state: "pending",
+    });
+  });
+
+  it("does not bind a replacement directory after a Marker write commits", async () => {
+    if (process.platform === "win32") return;
+    const { projectRoot, registryPath } = await setup("write-after-commit");
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "write-after-commit",
+      afterMarkerWritten: async () => replaceAaclWithDirectory(projectRoot),
+    });
+
+    const result = await service.initialize(projectRoot);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected the replacement directory failure");
+    expect(result.failure.details?.[0]?.code).toBe("invalid_project_directory");
+    expect(await readFile(join(projectRoot, ".aacl", "project.json"), "utf8")).toContain("project-replacement");
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toMatchObject({
+      projectId: "project-write-after-commit",
+      state: "pending",
+    });
+  });
+
+  it("continues binding after Marker link succeeds but temporary cleanup fails", async () => {
+    const { projectRoot, registryPath } = await setup("cleanup-failure");
+    const service = createProjectService({
+      registry: createProjectRegistry(registryPath),
+      newProjectSuffix: () => "cleanup-failure",
+      unlinkPath: async () => { throw new Error("simulated cleanup failure"); },
+    });
+
+    const result = await service.initialize(projectRoot);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { projectId: "project-cleanup-failure", projectRoot },
+    });
+    expect(JSON.parse(await readFile(join(projectRoot, ".aacl", "project.json"), "utf8"))).toEqual({
+      schemaVersion: 1,
+      projectId: "project-cleanup-failure",
+    });
+    const document = JSON.parse(await readFile(registryPath, "utf8")) as any;
+    expect(document.entries[0]).toMatchObject({
+      projectId: "project-cleanup-failure",
+      state: "bound",
+    });
+  });
+
+  it("keeps the global Registry outside the .aacl discovery sentinel", async () => {
+    const home = await makeScratch();
+    const projectRoot = join(home, "project");
+    const siblingRoot = join(home, "sibling");
+    await mkdir(projectRoot);
+    await mkdir(siblingRoot);
+    const service = createProjectService({
+      registry: createProjectRegistry(defaultProjectRegistryPath(home)),
+      newProjectSuffix: () => "home-project",
+    });
+    await service.initialize(projectRoot);
+
+    const discovered = await service.discover(siblingRoot);
+
+    expect(discovered).toEqual({
+      ok: true,
+      value: { status: "uninitialized", workspacePath: siblingRoot },
+    });
+  });
+
+  it("rejects a random suffix outside the portable project-id alphabet", async () => {
+    const { projectRoot, service } = await setup("UPPER_case");
+    const result = await service.initialize(projectRoot);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected invalid suffix");
+    expect(result.failure.details?.[0]?.code).toBe("invalid_project_id_suffix");
+  });
+});

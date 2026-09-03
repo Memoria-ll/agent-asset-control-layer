@@ -6,11 +6,13 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "start": "node src/main.ts"
+    "start": "node src/main.ts",
+    "project:init": "node src/project-cli.ts init"
   },
   "dependencies": {
     "@aacl/core-domain": "workspace:*",
-    "@aacl/shared": "workspace:*"
+    "@aacl/shared": "workspace:*",
+    "fs-native-extensions": "1.5.1"
   },
   "devDependencies": {
     "@types/node": "^24.13.3"
