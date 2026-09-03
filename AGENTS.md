@@ -257,6 +257,13 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
 ここに置く — 違反する側の編集者はその箱の `ledger.md` を読まないため、箱に置くと
 **まさに違反が起きる瞬間に見えない**。
 
+**発火点は「現時点の呼び出し箇所」ではなく「その義務を負いうる編集の場所」で数える。**
+`core/src/index.ts` から export される面の consumer 向け注意（呼び出し側が前提にすべき
+非対称、caller が埋める欄）は、箱外の呼び出しが今 0 件でも箱をまたぐ事実として
+ここに置く — 公開契約の consumer は箱の外にしか存在しえず、最初の呼び出しを書く編集が
+まさに注意を必要とする編集だからである。同様に、未着手の issue が発火点になる事実
+（「#4 が配線するとき」「保存欄が決まってから」）は、その issue が触る箱で数える。
+
 箱の一覧:
 
 - `core/src/ledger.md`
@@ -378,6 +385,21 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   registry に登録しただけでは検査されないので、nested の `additionalProperties` は
   個別 assertion で pin する (#7)
 
+- **managed root の同一性判定は `resolve()` による字句正規化までしか見ていない。** symlink 別名と
+  大小非区別 FS の綴り違いは別 root として受理され、同じ物理ファイルが 2 つの論理 source として
+  list される。duplicate 検査は `rootId` で絞っているので診断も出ない。#4 の override / disable は
+  「同じ id を別 root で宣言する」で成立させるので、**この重複は実在しない override 候補として
+  #4 の判定に直接混入する**。完全な identity 判定は #60 (#58)
+
+- **`save` が受理する `relativePath` は Windows でも成立する名前に限る**（禁止文字 `< > " | ? *`、
+  制御文字、末尾のピリオド/空白、予約デバイス名 `CON` / `PRN` / `AUX` / `NUL` / `CONIN$` /
+  `CONOUT$` / `COM1-9` / `COM¹²³` / `LPT1-9` / `LPT¹²³` を、末尾空白を落とした stem の
+  完全一致で拒否）。**数字は 1 始まりで、`COM0` / `LPT0` は予約ではないので受理する。**
+  **`list` にはこの制限が効かない** — 正本は
+  human-readable filesystem なので、手で置かれた名前はそのまま読む。したがって
+  「list に出た asset の `relativePath` を、そのまま save に渡し直せるとは限らない」。
+  read-modify-write する消費側はこの非対称を前提にすること (#58)
+
 ### Invariants / identity keys
 
 - **`AssetRevision` は `sha256:${sha256Hex(serializeCanonicalAsset(asset))}`
@@ -398,3 +420,8 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   `core-domain/tests/asset-type-contracts.test.ts` の source scan が機械判定する
   （**走査対象は `scope-resolver.ts` 1 ファイルのみ** — `workflow.ts` や `catalog.ts` には
   正当な type 比較がある） (#75)
+
+- **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
+  検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
+  `metadata.*` は `isLowerKebabToken` を満たす任意キーを受理する開いた名前空間で、許可値集合が
+  まだ存在しないため。保存欄が決まってから有効化する (#87) (#75)

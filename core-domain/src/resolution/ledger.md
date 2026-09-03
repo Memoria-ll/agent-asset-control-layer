@@ -68,11 +68,6 @@
   前提にした規則なので、絞り込み後に判定すると cross-Type 関係が
   `operation_conflict` や無検出に化ける (#75)
 
-- **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
-  検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
-  `metadata.*` は `isLowerKebabToken` を満たす任意キーを受理する開いた名前空間で、許可値集合が
-  まだ存在しないため。保存欄が決まってから有効化する (#87) (#75)
-
 - **exclusive winner は「他のどの候補にも負けない候補が一意ならそれ、いなければ conflict」で
   選ぶ。候補を段階的に脱落させる形にしない。** directory 特則（両者が directory 一致なら
   priority → 最深 path → specificity）と一般 key（specificity → 軸 precedence → depth →
