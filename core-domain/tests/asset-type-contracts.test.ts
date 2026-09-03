@@ -18,6 +18,7 @@ import type {
   ResolutionSource,
   ResolutionResult,
 } from "../src/index.ts";
+import type { CapabilityId } from "../src/capabilities.ts";
 
 type GlobOptions = {
   readonly eager?: boolean;
@@ -329,6 +330,39 @@ describe("asset type contracts", () => {
       "policy-input": ["policy"],
       "guardrail-input": ["guardrail"],
     });
+  });
+
+  it("allows capability dependencies only for skills in the default registry", () => {
+    expect(Object.fromEntries(
+      Object.entries(DEFAULT_ASSET_TYPE_CONTRACTS).map(([assetType, contract]) => [assetType, contract.allowsCapabilityDependencies]),
+    )).toEqual({
+      rule: false,
+      knowledge: false,
+      skill: true,
+      workflow: false,
+      role: false,
+      "task-type": false,
+      policy: false,
+      guardrail: false,
+    });
+  });
+
+  it("rejects capability dependencies for a non-skill candidate", () => {
+    const base = candidateFromDocument(assetDocument("rule-with-capability", "rule"), add());
+    const candidate = {
+      ...base,
+      rule: {
+        ...base.rule,
+        capabilityDependencies: [{ strength: "required" as const, capability: { capabilityId: "capability" as CapabilityId } }],
+      },
+    };
+    const result = resolve([candidate]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.some((item) => item.code === "capability_dependencies_not_allowed")).toBe(true);
+    }
   });
 
   it("keeps asset type branching out of the shared resolver source", () => {
