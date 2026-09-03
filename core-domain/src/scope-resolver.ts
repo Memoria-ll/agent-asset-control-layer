@@ -76,8 +76,7 @@ type NormalizedCandidate = {
   readonly candidate: AssetCandidate;
 };
 
-type MatchedCandidate = NormalizedCandidate & {
-  readonly matchedAxes: readonly ResolutionAxis[];
+type RankedCandidate = NormalizedCandidate & {
   readonly rank: ResolutionRank;
 };
 
@@ -93,14 +92,15 @@ type ScopeMatchDecision =
     };
 
 type ExclusiveDecision =
-  | { readonly kind: "winner"; readonly candidate: MatchedCandidate }
+  | { readonly kind: "winner"; readonly candidate: RankedCandidate }
   | { readonly kind: "conflict"; readonly conflict: ResolutionConflict };
 
 export type ResolutionRank = {
-  readonly sourcePrecedence: 0 | 1 | 2;
   readonly explicitPriority: number;
   readonly matchingAxisCount: number;
+  readonly scopePrecedence: readonly number[];
   readonly directoryDepth: number;
+  readonly sourceLayerPrecedence: 0 | 1 | 2;
 };
 
 export type CandidateReason =
@@ -249,7 +249,7 @@ type DependencyOutcome =
  * candidates is preferred; a global asset that must survive a personal override
  * declares itself mandatory, and the hard rule then holds regardless of rank.
  */
-const sourcePrecedence = (layer: ResolutionSourceLayer): 0 | 1 | 2 => {
+const sourceLayerPrecedence = (layer: ResolutionSourceLayer): 0 | 1 | 2 => {
   switch (layer) {
     case "global": return 0;
     case "personal": return 1;
@@ -329,7 +329,7 @@ const chooseCanonicalDuplicateRepresentative = (
   const first = candidates[0];
   if (first === undefined) throw new Error("Cannot choose a representative from an empty candidate list.");
   return candidates.slice(1).reduce((best, current) => {
-    const layerOrder = sourcePrecedence(current.candidate.source.layer) - sourcePrecedence(best.candidate.source.layer);
+    const layerOrder = sourceLayerPrecedence(current.candidate.source.layer) - sourceLayerPrecedence(best.candidate.source.layer);
     if (layerOrder < 0) return best;
     if (layerOrder > 0) return current;
     return codeUnitCompare(current.candidate.source.sourceId, best.candidate.source.sourceId) < 0 ? current : best;
@@ -360,7 +360,7 @@ const isSameIdOverlayPair = (
     operation.targetAssetId === issuer.candidate.assetId &&
     target.candidate.assetId === issuer.candidate.assetId &&
     target.candidate.source.layer !== issuer.candidate.source.layer &&
-    sourcePrecedence(target.candidate.source.layer) < sourcePrecedence(issuer.candidate.source.layer);
+    sourceLayerPrecedence(target.candidate.source.layer) < sourceLayerPrecedence(issuer.candidate.source.layer);
 };
 
 const hasUnresolvedIdentityPair = (
@@ -369,18 +369,66 @@ const hasUnresolvedIdentityPair = (
   group.slice(leftIndex + 1).some((right) =>
     !isSameIdOverlayPair(left, right) && !isSameIdOverlayPair(right, left)));
 
-const compareResolutionRank = (left: ResolutionRank, right: ResolutionRank): number => {
-  if (left.sourcePrecedence !== right.sourcePrecedence) return left.sourcePrecedence - right.sourcePrecedence;
-  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
-  if (left.matchingAxisCount !== right.matchingAxisCount) return left.matchingAxisCount - right.matchingAxisCount;
-  return left.directoryDepth - right.directoryDepth;
+/**
+ * The default scope precedence, keyed by the resolver axis vocabulary rather than the
+ * on-disk one.
+ *
+ * `stageId` is 45 because the requirement's precedence table has no Stage row: the same
+ * section lists its resolution inputs as Project / Workflow Stage / Task Type, which puts
+ * Stage between Workflow and Task Type. The gap at 20 belongs to a team axis that the
+ * scope input does not carry, so no request can reach it.
+ */
+const SCOPE_PRECEDENCE: Readonly<Record<ResolutionAxis, number>> = {
+  projectId: 30,
+  workflowId: 40,
+  stageId: 45,
+  taskTypeId: 50,
+  roleId: 60,
+  providerId: 70,
+  runtimeId: 80,
+  modelId: 90,
+  directory: 100,
 };
 
-const sameResolutionRank = (left: ResolutionRank, right: ResolutionRank): boolean =>
-  left.sourcePrecedence === right.sourcePrecedence &&
-  left.explicitPriority === right.explicitPriority &&
-  left.matchingAxisCount === right.matchingAxisCount &&
-  left.directoryDepth === right.directoryDepth;
+const compareScopePrecedence = (left: readonly number[], right: readonly number[]): number => {
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftRank = left[index] ?? -1;
+    const rightRank = right[index] ?? -1;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+  }
+  return 0;
+};
+
+const compareRank = (left: ResolutionRank, right: ResolutionRank): number => {
+  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
+  if (left.matchingAxisCount !== right.matchingAxisCount) return left.matchingAxisCount - right.matchingAxisCount;
+  const vector = compareScopePrecedence(left.scopePrecedence, right.scopePrecedence);
+  if (vector !== 0) return vector;
+  if (left.directoryDepth !== right.directoryDepth) return left.directoryDepth - right.directoryDepth;
+  return left.sourceLayerPrecedence - right.sourceLayerPrecedence;
+};
+
+const compareDirectoryRank = (left: ResolutionRank, right: ResolutionRank): number => {
+  if (left.explicitPriority !== right.explicitPriority) return left.explicitPriority - right.explicitPriority;
+  if (left.directoryDepth !== right.directoryDepth) return left.directoryDepth - right.directoryDepth;
+  return left.matchingAxisCount - right.matchingAxisCount;
+};
+
+const matchesDirectoryAxis = (rank: ResolutionRank): boolean =>
+  // Do not use directoryDepth > 0: a root directory match has depth 0.
+  rank.scopePrecedence.includes(SCOPE_PRECEDENCE.directory);
+
+const beatsCandidate = (left: ResolutionRank, right: ResolutionRank): boolean =>
+  matchesDirectoryAxis(left) && matchesDirectoryAxis(right)
+    ? compareDirectoryRank(left, right) > 0
+    : compareRank(left, right) > 0;
+
+const selectUnbeaten = <Item extends { readonly rank: ResolutionRank }>(
+  items: readonly Item[],
+): readonly Item[] =>
+  // Do not reduce through partial winners: directory precedence is non-transitive across mixed pairs.
+  items.filter((item) => !items.some((other) => other !== item && beatsCandidate(other.rank, item.rank)));
 
 const directorySegments = (value: string): readonly string[] => value === "/" ? [] : value.slice(1).split("/");
 
@@ -397,7 +445,6 @@ const matchesScope = (
 ): ScopeMatchDecision => {
   const mismatchedAxes: ResolutionAxis[] = [];
   const matchedAxes: ResolutionAxis[] = [];
-  let matchingAxisCount = 0;
   let directoryDepth = 0;
 
   for (const axis of RESOLUTION_AXES) {
@@ -423,7 +470,6 @@ const matchesScope = (
     if (!selectors.includes(requestValue)) mismatchedAxes.push(axis);
     else {
       matchedAxes.push(axis);
-      matchingAxisCount += 1;
     }
   }
 
@@ -432,29 +478,26 @@ const matchesScope = (
     matched: true,
     matchedAxes,
     rank: {
-      sourcePrecedence: sourcePrecedence(candidate.candidate.source.layer),
       explicitPriority: candidate.candidate.rule.explicitPriority ?? -1,
-      matchingAxisCount,
+      matchingAxisCount: matchedAxes.length,
+      scopePrecedence: matchedAxes.map((axis) => SCOPE_PRECEDENCE[axis]).sort((left, right) => right - left),
       directoryDepth,
+      sourceLayerPrecedence: sourceLayerPrecedence(candidate.candidate.source.layer),
     },
   };
 };
 
-const selectExclusiveWinner = (candidates: readonly MatchedCandidate[]): ExclusiveDecision => {
+const selectExclusiveWinner = (candidates: readonly RankedCandidate[]): ExclusiveDecision => {
   const first = candidates[0];
   if (first === undefined) throw new Error("Cannot select an exclusive winner from an empty group.");
-  const bestRank = candidates.reduce((best, current) =>
-    compareResolutionRank(current.rank, best) > 0 ? current.rank : best, first.rank);
-  const tied = candidates.filter((candidate) => sameResolutionRank(candidate.rank, bestRank));
-  if (tied.length === 1) return { kind: "winner", candidate: tied[0] as MatchedCandidate };
-  const sameMeaning = tied.every((candidate) => sameCandidateMeaning(first, candidate));
-  if (sameMeaning) return { kind: "winner", candidate: tied[0] as MatchedCandidate };
+  const unbeaten = selectUnbeaten(candidates);
+  if (unbeaten.length === 1) return { kind: "winner", candidate: unbeaten[0] as RankedCandidate };
   return {
     kind: "conflict",
     conflict: {
       kind: "exclusive_tie",
       mergeGroup: first.candidate.rule.mergeGroup as string,
-      involvedAssetIds: canonicalIds(tied.map((candidate) => candidate.candidate.assetId)),
+      involvedAssetIds: canonicalIds((unbeaten.length === 0 ? candidates : unbeaten).map((candidate) => candidate.candidate.assetId)),
     },
   };
 };
@@ -694,7 +737,7 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
   if (left.rank !== undefined && right.rank === undefined) return -1;
   if (left.rank === undefined && right.rank !== undefined) return 1;
   if (left.rank !== undefined && right.rank !== undefined) {
-    const rankOrder = compareResolutionRank(right.rank, left.rank);
+    const rankOrder = compareRank(right.rank, left.rank);
     if (rankOrder !== 0) return rankOrder;
   }
   const assetOrder = codeUnitCompare(String(left.candidate.assetId), String(right.candidate.assetId));
@@ -767,7 +810,8 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
 
 const conflictExplanation = (conflict: ResolutionConflict): string => {
   switch (conflict.kind) {
-    case "exclusive_tie": return "Exclusive candidates have the same resolution rank.";
+    // Covers a cycle as well as an equal rank: neither leaves a candidate that beats all others.
+    case "exclusive_tie": return "Exclusive candidates have no single highest-ranked candidate.";
     case "mandatory_conflict": return "Mandatory candidates cannot be resolved together.";
     case "operation_conflict": return "Conflicting operations target the same asset.";
     case "duplicate_identity": return "Candidates with the same asset identity have different meanings.";
@@ -1000,26 +1044,9 @@ const resolveScopeFixedPoint = (
       }
       continue;
     }
-    const decision = selectExclusiveWinner(group.map((state) => ({
-      candidate: state.candidate,
-      matchedAxes: state.reason.kind === "included" ? state.reason.matchedAxes : [],
-      rank: state.rank!,
-    })));
-    if (decision.kind === "conflict") {
-      addConflict(decision.conflict);
-      for (const state of group) state.reason = resolutionConflictReason(decision.conflict, state.rank);
-    } else {
-      const winner = decision.candidate;
-      for (const state of group) {
-        if (state.candidate === winner.candidate) continue;
-        state.reason = {
-          kind: "overridden",
-          overriddenBy: winner.candidate.assetId,
-          mergeGroup,
-          winnerRank: winner.rank,
-        };
-      }
-    }
+    // Non-mandatory exclusive selection is derived in the fixed-point loop below.
+    // Keeping every matched candidate here allows a dynamic winner to be replaced
+    // by a lower-ranked candidate when its availability changes.
   }
 
   const stateById = new Map<string, CandidateState[]>();
@@ -1029,12 +1056,17 @@ const resolveScopeFixedPoint = (
     stateById.set(String(state.candidate.assetId), group);
   }
   const invalidById = new Set(invalidStates.map((state) => String(state.candidate.assetId)));
-  const baseReasons = new Map(states.map((state) => [state, state.reason] as const));
-  const baseIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
-  const operationIssuers = [...baseIncluded]
+  const staticReasons = new Map(states.map((state) => [state, state.reason] as const));
+  const staticIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
+  let baseReasons = new Map(staticReasons);
+  let baseIncluded = new Set(staticIncluded);
+  let operationIssuers: readonly CandidateState[] = [...baseIncluded]
     .filter((state) => state.candidate.rule.operation.kind !== "add")
     .sort(compareCandidatesForOutput);
-  const operationIssuerSet = new Set(operationIssuers);
+  let operationIssuerSet = new Set(operationIssuers);
+  const selectionExcluded = new Set<CandidateState>();
+  const selectionEvidence = new Map<CandidateState, CandidateReason>();
+  const unstableExclusiveGroups = new Map<string, ResolutionConflict>();
 
   type FixedStatus =
     | { readonly kind: "included" }
@@ -1112,7 +1144,24 @@ const resolveScopeFixedPoint = (
     state: CandidateState,
     statuses: ReadonlyMap<CandidateState, FixedStatus>,
   ): FixedStatus | undefined => {
-    if (baseIncluded.has(state)) return statuses.get(state);
+    // A target can be selected by a surviving issuer after its own selection
+    // was excluded.  The operation status describes the current graph and
+    // must supersede stale selection evidence for dependency classification.
+    const currentStatus = statuses.get(state);
+    if (currentStatus !== undefined) return currentStatus;
+    const evidence = selectionEvidence.get(state);
+    if (evidence?.kind === "disabled") return { kind: "disabled", disabledBy: evidence.disabledBy };
+    if (evidence?.kind === "overridden") {
+      return {
+        kind: "overridden",
+        overriddenBy: evidence.overriddenBy,
+        mergeGroup: evidence.mergeGroup,
+        winnerRank: evidence.winnerRank,
+      };
+    }
+    if (evidence?.kind === "excluded" && evidence.cause === "resolution_conflict") {
+      return { kind: "conflict", conflict: evidence.conflict };
+    }
     const reason = baseReasons.get(state);
     if (reason?.kind === "disabled") return { kind: "disabled", disabledBy: reason.disabledBy };
     if (reason?.kind === "overridden") {
@@ -1459,6 +1508,15 @@ const resolveScopeFixedPoint = (
     ): CandidateState[] => {
       const candidates = matchedTargets.filter((state) => {
         if (baseIncluded.has(state)) return true;
+        const selectionReason = selectionEvidence.get(state);
+        if (
+          selectionExcluded.has(state) &&
+          selectionReason !== undefined &&
+          (!(selectionReason.kind === "excluded" && selectionReason.cause === "resolution_conflict") ||
+            (issuer.candidate.rule.mergeMode === "exclusive" &&
+              state.candidate.rule.mergeMode === "exclusive" &&
+              issuer.candidate.rule.mergeGroup === state.candidate.rule.mergeGroup))
+        ) return true;
         const reason = baseReasons.get(state);
         return reason?.kind === "overridden" && reason.overriddenBy === issuer.candidate.assetId;
       });
@@ -1544,20 +1602,20 @@ const resolveScopeFixedPoint = (
         if (issuerOrder !== 0) return issuerOrder;
         return codeUnitCompare(left.kind, right.kind);
       });
-      const first = actions[0]!;
-      const bestRank = actions.reduce((best, action) =>
-        compareResolutionRank(action.issuer.rank!, best) > 0 ? action.issuer.rank! : best, first.issuer.rank!);
-      const best = actions.filter((action) => sameResolutionRank(action.issuer.rank!, bestRank));
-      const allDisable = best.every((action) => action.kind === "disable");
-      if (best.length > 1 && !allDisable) {
+      const best = selectUnbeaten(actions.map((action) => ({ action, rank: action.issuer.rank! }))).map(({ action }) => action);
+      // A precedence cycle leaves no unbeaten action, but issuers that all disable are not
+      // contradictory: coalesce them on output order rather than leaving the target enabled.
+      const contenders = best.length === 0 ? actions : best;
+      const allDisable = contenders.every((action) => action.kind === "disable");
+      if (contenders.length > 1 && !allDisable) {
         const conflict = makeOperationConflict(target.candidate.assetId, [target.candidate.assetId, ...actions.map((action) => action.issuer.candidate.assetId)]);
         operationConflicts.push({ conflict, issuers: actions.map((action) => action.issuer) });
         for (const action of actions) addIssuerConflict(action.issuer, conflict);
         continue;
       }
       const winner = allDisable
-        ? best.slice().sort((left, right) => compareCandidatesForOutput(left.issuer, right.issuer))[0]!
-        : best[0]!;
+        ? contenders.slice().sort((left, right) => compareCandidatesForOutput(left.issuer, right.issuer))[0]!
+        : contenders[0]!;
       selectedActions.push(winner);
       chosenByTarget.set(target, winner);
       for (const action of actions) {
@@ -1648,199 +1706,486 @@ const resolveScopeFixedPoint = (
   const samePlan = (left: ReadonlySet<CandidateState>, right: ReadonlySet<CandidateState>): boolean =>
     left.size === right.size && [...left].every((state) => right.has(state));
 
-  const forcedConflicts = new Map<CandidateState, ResolutionConflict>();
-  const operationConflictCandidates = (pass: OperationPass): ReadonlyMap<CandidateState, ResolutionConflict> => {
-    const candidates = new Map<CandidateState, ResolutionConflict>();
-    for (const entry of pass.operationConflicts) {
-      for (const issuer of entry.issuers) {
-        if (pass.statuses.get(issuer)?.kind === "conflict" && pass.dependency.get(issuer)?.ok === true) {
-          candidates.set(issuer, entry.conflict);
+  const runCurrentOperation = (): {
+    readonly pass: OperationPass;
+    readonly forcedConflicts: ReadonlyMap<CandidateState, ResolutionConflict>;
+  } => {
+    const forcedConflicts = new Map<CandidateState, ResolutionConflict>();
+    const operationConflictCandidates = (pass: OperationPass): ReadonlyMap<CandidateState, ResolutionConflict> => {
+      const candidates = new Map<CandidateState, ResolutionConflict>();
+      for (const entry of pass.operationConflicts) {
+        for (const issuer of entry.issuers) {
+          if (pass.statuses.get(issuer)?.kind === "conflict" && pass.dependency.get(issuer)?.ok === true) {
+            candidates.set(issuer, entry.conflict);
+          }
         }
       }
-    }
-    for (const failure of pass.failures) {
-      if (pass.statuses.get(failure.issuer)?.kind === "conflict" && pass.dependency.get(failure.issuer)?.ok === true) {
-        candidates.set(failure.issuer, failure.conflict);
-      }
-    }
-    return candidates;
-  };
-  const tryStablePlanAfterExcluding = (
-    excluded: CandidateState,
-  ): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
-    let trialPlan = new Set(operationIssuers.filter((issuer) => issuer !== excluded && !forcedConflicts.has(issuer)));
-    const trialSeen = new Set<string>();
-    for (;;) {
-      const key = planKey(trialPlan);
-      if (trialSeen.has(key)) return undefined;
-      trialSeen.add(key);
-      const trialPass = evaluatePlan(trialPlan, forcedConflicts);
-      if (trialPass.cycles.length > 0 || operationConflictCandidates(trialPass).size > 0) return undefined;
-      if (samePlan(trialPass.nextPlan, trialPlan)) return { plan: trialPlan, pass: trialPass };
-      trialPlan = new Set(trialPass.nextPlan);
-    }
-  };
-  const tryAcyclicNoRequirementPlan = (): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
-    if (operationIssuers.some((issuer) => issuer.candidate.rule.requires.length > 0)) return undefined;
-    const allPass = evaluatePlan(new Set(operationIssuers), forcedConflicts);
-    if (allPass.cycles.length > 0 || allPass.operationConflicts.length > 0 || allPass.failures.length > 0) return undefined;
-    // Availability is part of operation graph discovery.  An issuer whose
-    // dependency closure failed cannot participate in either a cycle or the
-    // topological blocking pass, even when its provisional action was selected.
-    const eligibleActions = allPass.selectedActions.filter((action) => allPass.dependency.get(action.issuer)?.ok === true);
-
-    const actionCountByIssuer = new Map<CandidateState, number>();
-    const actionCountByTargetId = new Map<string, number>();
-    for (const action of eligibleActions) {
-      actionCountByIssuer.set(action.issuer, (actionCountByIssuer.get(action.issuer) ?? 0) + 1);
-      const targetId = String(action.target.candidate.assetId);
-      actionCountByTargetId.set(targetId, (actionCountByTargetId.get(targetId) ?? 0) + 1);
-    }
-    if ([...actionCountByIssuer.values()].some((count) => count !== 1) || [...actionCountByTargetId.values()].some((count) => count !== 1)) {
-      return undefined;
-    }
-
-    const outgoing = new Map<CandidateState, CandidateState[]>();
-    for (const issuer of operationIssuers) outgoing.set(issuer, []);
-    for (const action of eligibleActions) {
-      if (!operationIssuerSet.has(action.target)) continue;
-      outgoing.get(action.issuer)!.push(action.target);
-    }
-    const components = stronglyConnectedComponents(operationIssuers, outgoing, compareCandidatesForOutput);
-    if (components.some((component) => component.length > 1 || (outgoing.get(component[0]!) ?? []).includes(component[0]!))) return undefined;
-
-    const remainingIncoming = new Map<CandidateState, number>();
-    for (const issuer of operationIssuers) remainingIncoming.set(issuer, 0);
-    for (const targets of outgoing.values()) for (const target of targets) remainingIncoming.set(target, remainingIncoming.get(target)! + 1);
-    const ready: CandidateState[] = [];
-    const less = (left: CandidateState, right: CandidateState): boolean => compareCandidatesForOutput(left, right) < 0;
-    const pushReady = (value: CandidateState): void => {
-      ready.push(value);
-      let index = ready.length - 1;
-      while (index > 0) {
-        const parent = Math.floor((index - 1) / 2);
-        if (!less(value, ready[parent]!)) break;
-        ready[index] = ready[parent]!;
-        index = parent;
-      }
-      ready[index] = value;
-    };
-    const popReady = (): CandidateState | undefined => {
-      const first = ready[0];
-      const last = ready.pop();
-      if (first === undefined) return undefined;
-      if (last !== undefined && ready.length > 0) {
-        let index = 0;
-        while (true) {
-          const left = index * 2 + 1;
-          if (left >= ready.length) break;
-          const right = left + 1;
-          const child = right < ready.length && less(ready[right]!, ready[left]!) ? right : left;
-          if (!less(ready[child]!, last)) break;
-          ready[index] = ready[child]!;
-          index = child;
+      for (const failure of pass.failures) {
+        if (pass.statuses.get(failure.issuer)?.kind === "conflict" && pass.dependency.get(failure.issuer)?.ok === true) {
+          candidates.set(failure.issuer, failure.conflict);
         }
-        ready[index] = last;
       }
-      return first;
+      return candidates;
     };
-    for (const issuer of operationIssuers) if (remainingIncoming.get(issuer) === 0) pushReady(issuer);
-    const active = new Set<CandidateState>();
-    const blocked = new Set<CandidateState>();
-    let processed = 0;
-    for (;;) {
-      const issuer = popReady();
-      if (issuer === undefined) break;
-      processed += 1;
-      if (!blocked.has(issuer)) {
-        active.add(issuer);
-        for (const target of outgoing.get(issuer) ?? []) blocked.add(target);
+    const tryStablePlanAfterExcluding = (
+      excluded: CandidateState,
+    ): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
+      let trialPlan = new Set(operationIssuers.filter((issuer) => issuer !== excluded && !forcedConflicts.has(issuer)));
+      const trialSeen = new Set<string>();
+      for (;;) {
+        const key = planKey(trialPlan);
+        if (trialSeen.has(key)) return undefined;
+        trialSeen.add(key);
+        const trialPass = evaluatePlan(trialPlan, forcedConflicts);
+        if (trialPass.cycles.length > 0 || operationConflictCandidates(trialPass).size > 0) return undefined;
+        if (samePlan(trialPass.nextPlan, trialPlan)) return { plan: trialPlan, pass: trialPass };
+        trialPlan = new Set(trialPass.nextPlan);
       }
-      for (const target of outgoing.get(issuer) ?? []) {
-        const incoming = remainingIncoming.get(target)! - 1;
-        remainingIncoming.set(target, incoming);
-        if (incoming === 0) pushReady(target);
-      }
-    }
-    if (processed !== operationIssuers.length) return undefined;
-    const pass = evaluatePlan(active, forcedConflicts);
-    if (pass.cycles.length > 0 || operationConflictCandidates(pass).size > 0 || !samePlan(pass.nextPlan, active)) return undefined;
-    return { plan: active, pass };
-  };
+    };
+    const tryAcyclicNoRequirementPlan = (): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
+      if (operationIssuers.some((issuer) => issuer.candidate.rule.requires.length > 0)) return undefined;
+      const allPass = evaluatePlan(new Set(operationIssuers), forcedConflicts);
+      if (allPass.cycles.length > 0 || allPass.operationConflicts.length > 0 || allPass.failures.length > 0) return undefined;
+      // Availability is part of operation graph discovery.  An issuer whose
+      // dependency closure failed cannot participate in either a cycle or the
+      // topological blocking pass, even when its provisional action was selected.
+      const eligibleActions = allPass.selectedActions.filter((action) => allPass.dependency.get(action.issuer)?.ok === true);
 
-  let finalPass: OperationPass | undefined = tryAcyclicNoRequirementPlan()?.pass;
-  if (finalPass === undefined) {
-    let plan = new Set(operationIssuers);
-    const seenPlans = new Map<string, OperationPass>();
-    for (;;) {
-      const currentKey = planKey(plan);
-      const pass = evaluatePlan(plan, forcedConflicts);
-      if (pass.cycles.length > 0) {
-        for (const cycle of pass.cycles) for (const issuer of cycle.issuers) forcedConflicts.set(issuer, cycle.conflict);
-        plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
-        seenPlans.clear();
-        continue;
+      const actionCountByIssuer = new Map<CandidateState, number>();
+      const actionCountByTargetId = new Map<string, number>();
+      for (const action of eligibleActions) {
+        actionCountByIssuer.set(action.issuer, (actionCountByIssuer.get(action.issuer) ?? 0) + 1);
+        const targetId = String(action.target.candidate.assetId);
+        actionCountByTargetId.set(targetId, (actionCountByTargetId.get(targetId) ?? 0) + 1);
+      }
+      if ([...actionCountByIssuer.values()].some((count) => count !== 1) || [...actionCountByTargetId.values()].some((count) => count !== 1)) {
+        return undefined;
       }
 
-      // Operation validation/group conflicts are stable exclusions.  Pin them
-      // before another pass so a failed operation cannot change category after
-      // its target state changes.
-      const operationConflictSet = operationConflictCandidates(pass);
-      if (operationConflictSet.size > 0) {
-        for (const [issuer, conflict] of operationConflictSet) forcedConflicts.set(issuer, conflict);
-        plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
-        seenPlans.clear();
-        continue;
+      const outgoing = new Map<CandidateState, CandidateState[]>();
+      for (const issuer of operationIssuers) outgoing.set(issuer, []);
+      for (const action of eligibleActions) {
+        if (!operationIssuerSet.has(action.target)) continue;
+        outgoing.get(action.issuer)!.push(action.target);
       }
-      const nextKey = planKey(pass.nextPlan);
-      const priorPass = seenPlans.get(nextKey);
-      if (samePlan(pass.nextPlan, plan)) {
-        finalPass = pass;
-        break;
+      const components = stronglyConnectedComponents(operationIssuers, outgoing, compareCandidatesForOutput);
+      if (components.some((component) => component.length > 1 || (outgoing.get(component[0]!) ?? []).includes(component[0]!))) return undefined;
+
+      const remainingIncoming = new Map<CandidateState, number>();
+      for (const issuer of operationIssuers) remainingIncoming.set(issuer, 0);
+      for (const targets of outgoing.values()) for (const target of targets) remainingIncoming.set(target, remainingIncoming.get(target)! + 1);
+      const ready: CandidateState[] = [];
+      const less = (left: CandidateState, right: CandidateState): boolean => compareCandidatesForOutput(left, right) < 0;
+      const pushReady = (value: CandidateState): void => {
+        ready.push(value);
+        let index = ready.length - 1;
+        while (index > 0) {
+          const parent = Math.floor((index - 1) / 2);
+          if (!less(value, ready[parent]!)) break;
+          ready[index] = ready[parent]!;
+          index = parent;
+        }
+        ready[index] = value;
+      };
+      const popReady = (): CandidateState | undefined => {
+        const first = ready[0];
+        const last = ready.pop();
+        if (first === undefined) return undefined;
+        if (last !== undefined && ready.length > 0) {
+          let index = 0;
+          while (true) {
+            const left = index * 2 + 1;
+            if (left >= ready.length) break;
+            const right = left + 1;
+            const child = right < ready.length && less(ready[right]!, ready[left]!) ? right : left;
+            if (!less(ready[child]!, last)) break;
+            ready[index] = ready[child]!;
+            index = child;
+          }
+          ready[index] = last;
+        }
+        return first;
+      };
+      for (const issuer of operationIssuers) if (remainingIncoming.get(issuer) === 0) pushReady(issuer);
+      const active = new Set<CandidateState>();
+      const blocked = new Set<CandidateState>();
+      let processed = 0;
+      for (;;) {
+        const issuer = popReady();
+        if (issuer === undefined) break;
+        processed += 1;
+        if (!blocked.has(issuer)) {
+          active.add(issuer);
+          for (const target of outgoing.get(issuer) ?? []) blocked.add(target);
+        }
+        for (const target of outgoing.get(issuer) ?? []) {
+          const incoming = remainingIncoming.get(target)! - 1;
+          remainingIncoming.set(target, incoming);
+          if (incoming === 0) pushReady(target);
+        }
       }
-      if (priorPass !== undefined) {
-        // A dependency/operation feedback loop has no canonical traversal order.
-        // First try each failing issuer as a pure exclusion; retain a conflict
-        // only when no exclusion reaches a stable plan.
-        const feedbackIssuers = operationIssuers.filter((issuer) =>
-          (pass.statuses.get(issuer)?.kind === "included" && pass.dependency.get(issuer)?.ok === false) ||
-          (priorPass.statuses.get(issuer)?.kind === "included" && priorPass.dependency.get(issuer)?.ok === false) ||
-          pass.failures.some((failure) => failure.issuer === issuer) ||
-          priorPass.failures.some((failure) => failure.issuer === issuer),
-        ).sort(compareCandidatesForOutput);
-        const stableTrial = feedbackIssuers
-          .map((issuer) => tryStablePlanAfterExcluding(issuer))
-          .find((trial): trial is { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } => trial !== undefined);
-        if (stableTrial !== undefined) {
-          plan = new Set(stableTrial.plan);
+      if (processed !== operationIssuers.length) return undefined;
+      const pass = evaluatePlan(active, forcedConflicts);
+      if (pass.cycles.length > 0 || operationConflictCandidates(pass).size > 0 || !samePlan(pass.nextPlan, active)) return undefined;
+      return { plan: active, pass };
+    };
+
+    let finalPass: OperationPass | undefined = tryAcyclicNoRequirementPlan()?.pass;
+    if (finalPass === undefined) {
+      let plan = new Set(operationIssuers);
+      const seenPlans = new Map<string, OperationPass>();
+      for (;;) {
+        const currentKey = planKey(plan);
+        const pass = evaluatePlan(plan, forcedConflicts);
+        if (pass.cycles.length > 0) {
+          for (const cycle of pass.cycles) for (const issuer of cycle.issuers) forcedConflicts.set(issuer, cycle.conflict);
+          plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
           seenPlans.clear();
           continue;
         }
-        const fallback = feedbackIssuers.length > 0
-          ? feedbackIssuers
-          : operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)).slice(-1);
-        for (const issuer of fallback) {
-          const operation = issuer.candidate.rule.operation;
-          if (operation.kind === "add") continue;
-          const failure = [...pass.failures, ...priorPass.failures].find((item) => item.issuer === issuer);
-          forcedConflicts.set(issuer, failure?.conflict ?? makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]));
+
+        // Operation validation/group conflicts are stable exclusions.  Pin them
+        // before another pass so a failed operation cannot change category after
+        // its target state changes.
+        const operationConflictSet = operationConflictCandidates(pass);
+        if (operationConflictSet.size > 0) {
+          for (const [issuer, conflict] of operationConflictSet) forcedConflicts.set(issuer, conflict);
+          plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
+          seenPlans.clear();
+          continue;
         }
-        if (fallback.length === 0) {
+        const nextKey = planKey(pass.nextPlan);
+        const priorPass = seenPlans.get(nextKey);
+        if (samePlan(pass.nextPlan, plan)) {
           finalPass = pass;
           break;
         }
-        plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
-        seenPlans.clear();
+        if (priorPass !== undefined) {
+          // A dependency/operation feedback loop has no canonical traversal order.
+          // First try each failing issuer as a pure exclusion; retain a conflict
+          // only when no exclusion reaches a stable plan.
+          const feedbackIssuers = operationIssuers.filter((issuer) =>
+            (pass.statuses.get(issuer)?.kind === "included" && pass.dependency.get(issuer)?.ok === false) ||
+            (priorPass.statuses.get(issuer)?.kind === "included" && priorPass.dependency.get(issuer)?.ok === false) ||
+            pass.failures.some((failure) => failure.issuer === issuer) ||
+            priorPass.failures.some((failure) => failure.issuer === issuer),
+          ).sort(compareCandidatesForOutput);
+          const stableTrial = feedbackIssuers
+            .map((issuer) => tryStablePlanAfterExcluding(issuer))
+            .find((trial): trial is { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } => trial !== undefined);
+          if (stableTrial !== undefined) {
+            plan = new Set(stableTrial.plan);
+            seenPlans.clear();
+            continue;
+          }
+          const fallback = feedbackIssuers.length > 0
+            ? feedbackIssuers
+            : operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)).slice(-1);
+          for (const issuer of fallback) {
+            const operation = issuer.candidate.rule.operation;
+            if (operation.kind === "add") continue;
+            const failure = [...pass.failures, ...priorPass.failures].find((item) => item.issuer === issuer);
+            forcedConflicts.set(issuer, failure?.conflict ?? makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]));
+          }
+          if (fallback.length === 0) {
+            finalPass = pass;
+            break;
+          }
+          plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
+          seenPlans.clear();
+          continue;
+        }
+        seenPlans.set(currentKey, pass);
+        plan = new Set(pass.nextPlan);
+      }
+    }
+    if (finalPass === undefined) throw new Error("Scope operation fixed point was not reached.");
+    return { pass: finalPass, forcedConflicts };
+  };
+
+  type SelectionPass = {
+    readonly included: ReadonlySet<CandidateState>;
+    readonly reasons: ReadonlyMap<CandidateState, CandidateReason>;
+    readonly operationIssuers: readonly CandidateState[];
+    readonly exclusiveWinners: readonly CandidateState[];
+    readonly conflicts: readonly ResolutionConflict[];
+  };
+  const candidateKey = (state: CandidateState): string =>
+    `${String(state.candidate.assetId)}\u0000${String(state.candidate.revision)}\u0000${state.candidate.source.layer}\u0000${state.candidate.source.sourceId}`;
+  const selectCurrent = (): SelectionPass => {
+    const reasons = new Map(staticReasons);
+    const included = new Set<CandidateState>(
+      [...staticIncluded].filter((state) => !selectionExcluded.has(state)),
+    );
+    const exclusiveWinners: CandidateState[] = [];
+    const selectionConflicts: ResolutionConflict[] = [];
+    const groups = new Map<string, CandidateState[]>();
+    for (const state of staticIncluded) {
+      if (state.candidate.rule.mergeMode !== "exclusive") continue;
+      const group = groups.get(state.candidate.rule.mergeGroup) ?? [];
+      group.push(state);
+      groups.set(state.candidate.rule.mergeGroup, group);
+    }
+    for (const [mergeGroup, group] of groups) {
+      const unstableConflict = unstableExclusiveGroups.get(mergeGroup);
+      if (unstableConflict !== undefined) {
+        selectionConflicts.push(unstableConflict);
+        for (const state of group) {
+          included.delete(state);
+          reasons.set(state, resolutionConflictReason(unstableConflict, state.rank));
+        }
         continue;
       }
-      seenPlans.set(currentKey, pass);
-      plan = new Set(pass.nextPlan);
+      const candidates = group.filter((state) => !selectionExcluded.has(state));
+      const mandatory = candidates.filter((state) => state.candidate.rule.mandatory);
+      if (mandatory.length > 0) {
+        const winner = mandatory[0]!;
+        exclusiveWinners.push(winner);
+        included.add(winner);
+        for (const state of candidates) {
+          if (state === winner) continue;
+          included.delete(state);
+          reasons.set(state, {
+            kind: "overridden",
+            overriddenBy: winner.candidate.assetId,
+            mergeGroup,
+            winnerRank: winner.rank!,
+          });
+        }
+        continue;
+      }
+      if (candidates.length === 0) {
+        const groupIds = new Set(group.map((state) => String(state.candidate.assetId)));
+        const dependencyFeedback = group.every((state) => {
+          const evidence = selectionEvidence.get(state);
+          // A tie represents a selection cycle only when every failure is
+          // peer-related.  Independent failures keep the candidates
+          // unavailable even if a peer requirement also failed.
+          return evidence?.kind === "unavailable" &&
+            evidence.failedRequirements.length > 0 &&
+            evidence.failedRequirements.every((requiredId) => groupIds.has(String(requiredId)));
+        });
+        if (dependencyFeedback) {
+          const conflict: ResolutionConflict = {
+            kind: "exclusive_tie",
+            mergeGroup,
+            involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+          };
+          selectionConflicts.push(conflict);
+          for (const state of group) reasons.set(state, resolutionConflictReason(conflict, state.rank));
+        }
+        continue;
+      }
+      const decision = selectExclusiveWinner(candidates.map((state) => ({
+        candidate: state.candidate,
+        rank: state.rank!,
+      })));
+      if (decision.kind === "conflict") {
+        selectionConflicts.push(decision.conflict);
+        for (const state of candidates) {
+          included.delete(state);
+          reasons.set(state, resolutionConflictReason(decision.conflict, state.rank));
+        }
+        continue;
+      }
+      const winner = candidates.find((state) => state.candidate === decision.candidate.candidate);
+      if (winner === undefined) throw new Error("Exclusive selection returned an unknown candidate.");
+      exclusiveWinners.push(winner);
+      included.add(winner);
+      for (const state of candidates) {
+        if (state === winner) continue;
+        included.delete(state);
+        reasons.set(state, {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup,
+          winnerRank: winner.rank!,
+        });
+      }
+    }
+    const currentOperationIssuers = [...included]
+      .filter((state) => state.candidate.rule.operation.kind !== "add")
+      .sort(compareCandidatesForOutput);
+    return {
+      included,
+      reasons,
+      operationIssuers: currentOperationIssuers,
+      exclusiveWinners,
+      conflicts: selectionConflicts,
+    };
+  };
+  const dynamicReason = (state: CandidateState, pass: OperationPass): CandidateReason | undefined => {
+    const status = pass.statuses.get(state);
+    if (status?.kind === "disabled") return { kind: "disabled", disabledBy: status.disabledBy };
+    if (status?.kind === "overridden") return {
+      kind: "overridden",
+      overriddenBy: status.overriddenBy,
+      mergeGroup: status.mergeGroup,
+      winnerRank: status.winnerRank,
+    };
+    if (status?.kind === "conflict") return resolutionConflictReason(status.conflict, state.rank);
+    const outcome = pass.dependency.get(state);
+    if (outcome !== undefined && !outcome.ok) return {
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: outcome.cause,
+      failedRequirements: [...outcome.failedRequirements],
+    };
+    return undefined;
+  };
+  const currentUnavailableReason = (
+    state: CandidateState,
+    pass: OperationPass,
+  ): CandidateReason | undefined => {
+    const failures: { readonly id: AssetId; readonly cause: DependencyCause }[] = [];
+    for (const requiredId of state.candidate.rule.requires) {
+      const activeTargets = [...baseIncluded].filter((candidate) =>
+        candidate.candidate.assetId === requiredId &&
+        pass.statuses.get(candidate)?.kind === "included"
+      );
+      if (activeTargets.length === 1) {
+        const outcome = pass.dependency.get(activeTargets[0]!);
+        if (outcome !== undefined && !outcome.ok) failures.push({ id: requiredId, cause: outcome.cause });
+        continue;
+      }
+      const candidatesForId = stateById.get(String(requiredId)) ?? [];
+      const matchedCandidates = candidatesForId.filter((candidate) => candidate.matched);
+      let cause: DependencyCause;
+      if (activeTargets.length > 1) cause = "requirement_invalid";
+      else if (matchedCandidates.length > 0) {
+        const kinds = matchedCandidates.map((candidate) => statusForState(candidate, pass.statuses)?.kind);
+        if (kinds.every((kind) => kind === "disabled")) cause = "requirement_disabled";
+        else if (kinds.every((kind) => kind === "overridden")) cause = "requirement_overridden";
+        else cause = "requirement_invalid";
+      } else if (invalidById.has(String(requiredId))) cause = "requirement_invalid";
+      else if (candidatesForId.length === 0) cause = "missing_requirement";
+      else cause = "requirement_out_of_scope";
+      failures.push({ id: requiredId, cause });
+    }
+    failures.sort((left, right) => codeUnitCompare(left.id, right.id));
+    if (failures.length === 0) return undefined;
+    return {
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: failures[0]!.cause,
+      failedRequirements: failures.map((failure) => failure.id),
+    };
+  };
+
+  let finalSelection = selectCurrent();
+  let operationResult: { readonly pass: OperationPass; readonly forcedConflicts: ReadonlyMap<CandidateState, ResolutionConflict> } | undefined;
+  const seenSelections = new Set<string>();
+  for (;;) {
+    finalSelection = selectCurrent();
+    for (const conflict of finalSelection.conflicts) {
+      if (conflict.kind !== "exclusive_tie") continue;
+      for (const state of staticIncluded) {
+        if (state.candidate.rule.mergeMode !== "exclusive" || state.candidate.rule.mergeGroup !== conflict.mergeGroup) continue;
+        if (!conflict.involvedAssetIds.includes(state.candidate.assetId)) continue;
+        selectionEvidence.set(state, resolutionConflictReason(conflict, state.rank));
+      }
+    }
+    const selectionKey = [...selectionExcluded].map(candidateKey).sort(codeUnitCompare).join("\u0001") +
+      "\u0002" + [...finalSelection.included].map(candidateKey).sort(codeUnitCompare).join("\u0001");
+    if (seenSelections.has(selectionKey)) break;
+    seenSelections.add(selectionKey);
+    baseReasons = new Map(finalSelection.reasons);
+    baseIncluded = new Set(finalSelection.included);
+    operationIssuers = finalSelection.operationIssuers;
+    operationIssuerSet = new Set(operationIssuers);
+    operationResult = runCurrentOperation();
+    let changed = false;
+    for (const winner of finalSelection.exclusiveWinners) {
+      if (winner.candidate.rule.mergeMode !== "exclusive") {
+        throw new Error("Exclusive selection returned a non-exclusive winner.");
+      }
+      if (winner.candidate.rule.mandatory) continue;
+      const evidence = dynamicReason(winner, operationResult.pass);
+      if (evidence === undefined) continue;
+      // Preserve an operation conflict as evidence even when this is the last
+      // selectable candidate.  An exclusive tie is synthesized below only
+      // after an earlier exclusion loses support in the current operation graph.
+      selectionExcluded.add(winner);
+      selectionEvidence.set(winner, evidence);
+      changed = true;
+    }
+    for (const state of selectionExcluded) {
+      const evidence = selectionEvidence.get(state);
+      if (evidence === undefined || evidence.kind === "excluded") continue;
+      const status = operationResult.pass.statuses.get(state);
+      let stillSupported: boolean;
+      if (evidence.kind === "disabled") stillSupported = status?.kind === "disabled";
+      else if (evidence.kind === "overridden") stillSupported = status?.kind === "overridden";
+      else if (evidence.kind === "unavailable") {
+        const currentEvidence = currentUnavailableReason(state, operationResult.pass);
+        stillSupported = currentEvidence !== undefined;
+        if (currentEvidence !== undefined) selectionEvidence.set(state, currentEvidence);
+      } else continue;
+      if (stillSupported || state.candidate.rule.mergeMode !== "exclusive") continue;
+      const mergeGroup = state.candidate.rule.mergeGroup;
+      if (unstableExclusiveGroups.has(mergeGroup)) continue;
+      const group = [...staticIncluded].filter((candidate) =>
+        candidate.candidate.rule.mergeMode === "exclusive" &&
+        candidate.candidate.rule.mergeGroup === mergeGroup
+      );
+      const conflict: ResolutionConflict = {
+        kind: "exclusive_tie",
+        mergeGroup,
+        involvedAssetIds: canonicalIds(group.map((candidate) => candidate.candidate.assetId)),
+      };
+      unstableExclusiveGroups.set(mergeGroup, conflict);
+      for (const candidate of group) selectionEvidence.delete(candidate);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  if (operationResult === undefined) throw new Error("Scope operation fixed point was not reached.");
+  const finalPass = operationResult.pass;
+  const forcedConflicts = operationResult.forcedConflicts;
+  for (const state of selectionExcluded) {
+    const evidence = selectionEvidence.get(state);
+    const status = finalPass.statuses.get(state);
+    if (status?.kind === "disabled") {
+      selectionEvidence.set(state, { kind: "disabled", disabledBy: status.disabledBy });
+      continue;
+    }
+    if (status?.kind === "overridden") {
+      selectionEvidence.set(state, {
+        kind: "overridden",
+        overriddenBy: status.overriddenBy,
+        mergeGroup: status.mergeGroup,
+        winnerRank: status.winnerRank,
+      });
+      continue;
+    }
+    if (evidence?.kind === "excluded" && evidence.cause === "resolution_conflict") {
+      if (state.candidate.rule.mergeMode !== "exclusive") continue;
+      const winner = finalSelection.exclusiveWinners.find((candidate) =>
+        candidate.candidate.rule.mergeGroup === state.candidate.rule.mergeGroup
+      );
+      if (
+        winner !== undefined &&
+        winner.candidate.rule.mergeMode === "exclusive" &&
+        finalPass.statuses.get(winner)?.kind === "included"
+      ) {
+        selectionEvidence.set(state, {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup: winner.candidate.rule.mergeGroup,
+          winnerRank: winner.rank!,
+        });
+      }
+      continue;
     }
   }
-  if (finalPass === undefined) throw new Error("Scope operation fixed point was not reached.");
 
   const finalReasons = new Map<CandidateState, CandidateReason>();
   for (const state of states) {
+    const evidence = selectionEvidence.get(state);
+    if (evidence !== undefined) {
+      finalReasons.set(state, evidence);
+      continue;
+    }
     if (!baseIncluded.has(state)) {
       finalReasons.set(state, baseReasons.get(state)!);
       continue;
@@ -1876,6 +2221,11 @@ const resolveScopeFixedPoint = (
       }
     }
   }
+  for (const reason of finalReasons.values()) {
+    if (reason.kind === "excluded" && reason.cause === "resolution_conflict") {
+      addConflict(reason.conflict);
+    }
+  }
 
   // Only conflicts whose issuer remains a resolution conflict survive.  A
   // failed operation on a candidate disabled by another surviving operation
@@ -1890,6 +2240,7 @@ const resolveScopeFixedPoint = (
       return reason?.kind === "excluded" && reason.cause === "resolution_conflict";
     })) addConflict(entry.conflict);
   }
+  for (const conflict of finalSelection.conflicts) addConflict(conflict);
 
   for (const state of states) {
     const reason = finalReasons.get(state)!;
