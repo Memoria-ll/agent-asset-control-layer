@@ -1173,6 +1173,95 @@ scope.project: [acme]
     }
   });
 
+  it("case 10-l: retains a fallback operation conflict when the old winner has an independent dependency failure", () => {
+    const oldWinner = candidateFromDocument(assetDocument("asset-old-winner", "requires: [asset-missing]\n"), exclusive("g", { explicitPriority: 2 }));
+    const fallback = candidateFromDocument(assetDocument("asset-fallback"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const target = candidateFromDocument(assetDocument("asset-target"), { ...add(), mergeGroup: "g" });
+    const competingIssuer = candidateFromDocument(assetDocument("asset-competing"), {
+      ...add(),
+      explicitPriority: 2,
+      mergeGroup: "g",
+      operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+    });
+
+    for (const candidates of permutations([oldWinner, fallback, target, competingIssuer])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([{
+        kind: "operation_conflict",
+        targetAssetId: "asset-target",
+        involvedAssetIds: ["asset-competing", "asset-fallback", "asset-target"],
+      }]);
+      expect(reason(result, "asset-old-winner")).toEqual({
+        kind: "unavailable",
+        availability: "unavailable",
+        cause: "missing_requirement",
+        failedRequirements: ["asset-missing"],
+      });
+      expect(reason(result, "asset-fallback")).toMatchObject({
+        kind: "excluded",
+        cause: "resolution_conflict",
+      });
+      expect(reason(result, "asset-competing")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it("case 10-m: classifies a requirement from a reselected target by its current disabled status", () => {
+    const oldWinner = candidateFromDocument(assetDocument("asset-old-winner"), {
+      ...exclusive("g", { explicitPriority: 2 }),
+      operation: { kind: "override", targetAssetId: "asset-missing" as AssetId },
+    });
+    const fallback = candidateFromDocument(assetDocument("asset-fallback"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-old-winner" as AssetId },
+    });
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-old-winner]\n"), add());
+
+    for (const candidates of permutations([oldWinner, fallback, dependent])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-old-winner")).toEqual({ kind: "disabled", disabledBy: "asset-fallback" });
+      expect(reason(result, "asset-fallback")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-dependent")).toEqual({
+        kind: "unavailable",
+        availability: "unavailable",
+        cause: "requirement_disabled",
+        failedRequirements: ["asset-old-winner"],
+      });
+    }
+  });
+
+  it("case 10-n: keeps a surviving disabler actionable when the remaining exclusive tie omits the old winner", () => {
+    const oldWinner = candidateFromDocument(assetDocument("asset-old-winner"), exclusive("g", { explicitPriority: 2 }));
+    const tieLeft = candidateFromDocument(assetDocument("asset-tie-left"), exclusive("g", { explicitPriority: 1 }));
+    const tieRight = candidateFromDocument(assetDocument("asset-tie-right"), exclusive("g", { explicitPriority: 1 }));
+    const disabler = candidateFromDocument(assetDocument("asset-disabler"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-old-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([oldWinner, tieLeft, tieRight, disabler])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([{
+        kind: "exclusive_tie",
+        mergeGroup: "g",
+        involvedAssetIds: ["asset-tie-left", "asset-tie-right"],
+      }]);
+      expect(reason(result, "asset-old-winner")).toEqual({ kind: "disabled", disabledBy: "asset-disabler" });
+      expect(reason(result, "asset-disabler")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-tie-left")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-tie-right")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
+  });
+
   it.each(["case 11", "case 11-b"]) ("%s: leaves a non-total exclusive rank as a conflict", (caseName) => {
     const fields = caseName === "case 11" ? "" : "scope.role: [reviewer]\n";
     const candidates = [

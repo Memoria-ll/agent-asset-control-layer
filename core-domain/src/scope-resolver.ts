@@ -1036,7 +1036,11 @@ const resolveScopeFixedPoint = (
     state: CandidateState,
     statuses: ReadonlyMap<CandidateState, FixedStatus>,
   ): FixedStatus | undefined => {
-    if (baseIncluded.has(state)) return statuses.get(state);
+    // A target can be selected by a surviving issuer after its own selection
+    // was excluded.  The operation status describes the current graph and
+    // must supersede stale selection evidence for dependency classification.
+    const currentStatus = statuses.get(state);
+    if (currentStatus !== undefined) return currentStatus;
     const evidence = selectionEvidence.get(state);
     if (evidence?.kind === "disabled") return { kind: "disabled", disabledBy: evidence.disabledBy };
     if (evidence?.kind === "overridden") {
@@ -1862,6 +1866,7 @@ const resolveScopeFixedPoint = (
       if (conflict.kind !== "exclusive_tie") continue;
       for (const state of staticIncluded) {
         if (state.candidate.rule.mergeMode !== "exclusive" || state.candidate.rule.mergeGroup !== conflict.mergeGroup) continue;
+        if (!conflict.involvedAssetIds.includes(state.candidate.assetId)) continue;
         selectionEvidence.set(state, resolutionConflictReason(conflict, state.rank));
       }
     }
@@ -1879,39 +1884,12 @@ const resolveScopeFixedPoint = (
       if (winner.candidate.rule.mergeMode !== "exclusive") {
         throw new Error("Exclusive selection returned a non-exclusive winner.");
       }
-      const mergeGroup = winner.candidate.rule.mergeGroup;
       if (winner.candidate.rule.mandatory) continue;
       const evidence = dynamicReason(winner, operationResult.pass);
       if (evidence === undefined) continue;
-      if (evidence.kind === "excluded" && evidence.cause === "resolution_conflict") {
-        const alternatives = [...staticIncluded].filter((state) =>
-          state !== winner &&
-          state.candidate.rule.mergeMode === "exclusive" &&
-          state.candidate.rule.mergeGroup === mergeGroup &&
-          !selectionExcluded.has(state)
-        );
-        if (alternatives.length === 0) {
-          const previouslyExcluded = [...selectionExcluded].some((state) =>
-            state.candidate.rule.mergeMode === "exclusive" &&
-            state.candidate.rule.mergeGroup === mergeGroup
-          );
-          if (previouslyExcluded) {
-            const group = [...staticIncluded].filter((state) =>
-              state.candidate.rule.mergeMode === "exclusive" &&
-              state.candidate.rule.mergeGroup === mergeGroup
-            );
-            const conflict: ResolutionConflict = {
-              kind: "exclusive_tie",
-              mergeGroup,
-              involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
-            };
-            unstableExclusiveGroups.set(mergeGroup, conflict);
-            for (const state of group) selectionEvidence.delete(state);
-            changed = true;
-          }
-          continue;
-        }
-      }
+      // Preserve an operation conflict as evidence even when this is the last
+      // selectable candidate.  An exclusive tie is synthesized below only
+      // after an earlier exclusion loses support in the current operation graph.
       selectionExcluded.add(winner);
       selectionEvidence.set(winner, evidence);
       changed = true;
