@@ -689,6 +689,7 @@ const missingStageRequirements = (
 
   const capabilities = available.capabilities;
   const seenCapabilities = new Set<string>();
+  // requiredCapabilityRefs name CapabilityId values; the shared string gate cannot apply catalog or strength semantics while artifact requirements share it.
   for (const ref of [...(target.requiredCapabilityRefs ?? []), ...(extra.requiredCapabilityRefs ?? [])]) {
     if (seenCapabilities.has(ref)) continue;
     seenCapabilities.add(ref);

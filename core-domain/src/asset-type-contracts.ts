@@ -34,6 +34,7 @@ export type AssetTypeContract = {
   readonly allowedOperationKinds: readonly AssetOperationKind[];
   readonly mergePolicy: AssetTypeMergePolicy;
   readonly executionProfile: AssetTypeExecutionProfile;
+  readonly allowsCapabilityDependencies: boolean;
 };
 
 /**
@@ -51,19 +52,21 @@ const ALL_OPERATION_KINDS: readonly AssetOperationKind[] = ["add", "override", "
 const contract = (
   allowsExclusive: boolean,
   executionProfile: AssetTypeExecutionProfile,
+  allowsCapabilityDependencies: boolean,
 ): AssetTypeContract => ({
   allowedOperationKinds: ALL_OPERATION_KINDS,
   mergePolicy: { defaultMode: "additive", allowsExclusive },
   executionProfile,
+  allowsCapabilityDependencies,
 });
 
 export const DEFAULT_ASSET_TYPE_CONTRACTS: AssetTypeContractRegistry = {
-  rule: contract(true, "instruction-body"),
-  knowledge: contract(true, "instruction-body"),
-  skill: contract(true, "runtime-callable"),
-  workflow: contract(true, "workflow-definition"),
-  role: contract(false, "catalog-definition"),
-  "task-type": contract(false, "catalog-definition"),
-  policy: contract(false, "policy-input"),
-  guardrail: contract(false, "guardrail-input"),
+  rule: contract(true, "instruction-body", false),
+  knowledge: contract(true, "instruction-body", false),
+  skill: contract(true, "runtime-callable", true),
+  workflow: contract(true, "workflow-definition", false),
+  role: contract(false, "catalog-definition", false),
+  "task-type": contract(false, "catalog-definition", false),
+  policy: contract(false, "policy-input", false),
+  guardrail: contract(false, "guardrail-input", false),
 };

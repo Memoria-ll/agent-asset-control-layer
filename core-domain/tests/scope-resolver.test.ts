@@ -6,6 +6,7 @@ import {
 } from "@aacl/shared";
 import type { AssetId, AssetRevision, AssetType, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
 import {
+  buildCapabilityCatalog,
   parseAssetDocument,
   resolveScope,
   toResolutionConflictDetails,
@@ -17,6 +18,11 @@ import type {
   AssetCandidate,
   CandidateReason,
   CanonicalAsset,
+  CapabilityDependency,
+  CapabilityFeatureId,
+  CapabilityId,
+  CapabilityOffer,
+  CapabilityResolutionContext,
   ResolutionAxis,
   ResolutionEvaluation,
   ResolutionMerge,
@@ -32,6 +38,7 @@ type ResolutionDirectives = {
   readonly operation: ResolutionOperation;
   readonly mergeMode: ResolutionMerge["mergeMode"];
   readonly mergeGroup?: string;
+  readonly capabilityDependencies?: readonly CapabilityDependency[];
 };
 
 type FixtureMetadata = {
@@ -45,9 +52,34 @@ const expectOk = <Value>(result: { readonly ok: boolean; readonly value?: Value;
   return result.value;
 };
 
-const assetDocument = (id: string, fields = ""): string => `---
+const capabilityId = (value: string): CapabilityId => value as CapabilityId;
+const capabilityFeatureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
+
+const capabilityReference = (value: string, features?: readonly string[]) => ({
+  capabilityId: capabilityId(value),
+  ...(features === undefined ? {} : { features: features.map(capabilityFeatureId) }),
+});
+
+const capabilityOffer = (value: string, features: readonly string[] = []): CapabilityOffer => ({
+  capabilityId: capabilityId(value),
+  features: features.map(capabilityFeatureId),
+});
+
+const capabilityContext = (
+  definitions: readonly { readonly id: string; readonly features?: readonly string[] }[],
+  offers: readonly CapabilityOffer[],
+): CapabilityResolutionContext => ({
+  catalog: expectOk(buildCapabilityCatalog(definitions.map(({ id, features }) => ({
+    capabilityId: capabilityId(id),
+    displayName: id,
+    features: (features ?? []).map(capabilityFeatureId),
+  })))),
+  offers,
+});
+
+const assetDocument = (id: string, fields = "", type: AssetType = "rule"): string => `---
 id: ${id}
-type: rule
+type: ${type}
 tier: core
 ${fields}---
 `;
@@ -86,6 +118,7 @@ const candidateFromCanonicalAsset = (
       operation: directives.operation,
       ...(directives.explicitPriority === undefined ? {} : { explicitPriority: directives.explicitPriority }),
       requires: asset.requires,
+      ...(directives.capabilityDependencies === undefined ? {} : { capabilityDependencies: directives.capabilityDependencies }),
       ...merge,
     },
   };
@@ -104,13 +137,18 @@ const candidateFromDocument = (
 const resolve = (
   scope: ResolutionScopeInput,
   candidates: readonly AssetCandidate[],
+  capabilityContextValue?: CapabilityResolutionContext,
 ) => resolveScope({
   scope: parseResolveRequest({ scope }).scope,
   snapshot: { candidates },
+  ...(capabilityContextValue === undefined ? {} : { capabilityContext: capabilityContextValue }),
 });
 
-const resultValue = (scope: ResolutionScopeInput, candidates: readonly AssetCandidate[]): ResolutionResult =>
-  expectOk(resolve(scope, candidates));
+const resultValue = (
+  scope: ResolutionScopeInput,
+  candidates: readonly AssetCandidate[],
+  capabilityContextValue?: CapabilityResolutionContext,
+): ResolutionResult => expectOk(resolve(scope, candidates, capabilityContextValue));
 
 const evaluation = (result: ResolutionResult, assetId: string): ResolutionEvaluation => {
   const found = result.evaluations.find((item) => item.candidate.assetId === assetId);
@@ -908,6 +946,384 @@ scope.project: [acme]
     expect(result.conflicts).toHaveLength(0);
     expect(reason(result, "asset-target").kind).toBe("included");
     expect(reason(result, "asset-loser")).toMatchObject({ kind: "overridden", overriddenBy: "asset-winner" });
+  });
+
+  it("case 10-c: reselects an exclusive loser after the winner is disabled", () => {
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const loser = candidateFromDocument(assetDocument("asset-loser"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const winner = candidateFromDocument(assetDocument("asset-winner"), exclusive("g", { explicitPriority: 2 }));
+    const disableWinner = candidateFromDocument(assetDocument("asset-disable-winner"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([target, loser, winner, disableWinner])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-winner")).toEqual({ kind: "disabled", disabledBy: "asset-disable-winner" });
+      expect(reason(result, "asset-loser")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-loser" });
+    }
+  });
+
+  it("case 10-d: reselects after an exclusive winner is overridden", () => {
+    const target = candidateFromDocument(assetDocument("asset-target"), { ...add(), mergeGroup: "g" });
+    const loser = candidateFromDocument(assetDocument("asset-loser"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const winner = candidateFromDocument(assetDocument("asset-winner"), exclusive("g", { explicitPriority: 2 }));
+    const overrideWinner = candidateFromDocument(assetDocument("asset-override-winner"), {
+      ...add(),
+      mergeGroup: "g",
+      operation: { kind: "override", targetAssetId: "asset-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([target, loser, winner, overrideWinner])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-winner")).toMatchObject({ kind: "overridden", overriddenBy: "asset-override-winner" });
+      expect(reason(result, "asset-loser")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "asset-loser" });
+    }
+  });
+
+  it("case 10-e: reselects a healthy lower candidate after winner dependency failure", () => {
+    const target = candidateFromDocument(assetDocument("asset-target"), add());
+    const loser = candidateFromDocument(assetDocument("asset-loser"), exclusive("g", { explicitPriority: 1 }));
+    const winner = candidateFromDocument(assetDocument("asset-winner", "requires: [asset-missing]\n"), exclusive("g", { explicitPriority: 2 }));
+
+    for (const candidates of permutations([target, loser, winner])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-winner")).toEqual({
+        kind: "unavailable",
+        availability: "unavailable",
+        cause: "missing_requirement",
+        failedRequirements: ["asset-missing"],
+      });
+      expect(reason(result, "asset-loser")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-target")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it("case 10-e-1: lets the surviving lower issuer update the old winner provenance", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner", "requires: [asset-missing]\n"), exclusive("g", { explicitPriority: 2 }));
+    const lower = candidateFromDocument(assetDocument("asset-lower"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([winner, lower])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-winner")).toEqual({ kind: "disabled", disabledBy: "asset-lower" });
+      expect(reason(result, "asset-lower")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it("case 10-f: reports a canonical conflict for a selection/dependency feedback cycle", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner", "requires: [asset-loser]\n"), exclusive("g", { explicitPriority: 2 }));
+    const loser = candidateFromDocument(assetDocument("asset-loser", "requires: [asset-winner]\n"), exclusive("g", { explicitPriority: 1 }));
+    const expectedConflict = {
+      kind: "exclusive_tie" as const,
+      mergeGroup: "g",
+      involvedAssetIds: ["asset-loser", "asset-winner"] as const,
+    };
+
+    for (const candidates of permutations([winner, loser])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([expectedConflict]);
+      expect(reason(result, "asset-winner")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-loser")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
+  });
+
+  it("case 10-g: retains an exclusive winner operation conflict when no fallback exists", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner"), {
+      ...exclusive("g"),
+      operation: { kind: "override", targetAssetId: "asset-missing" as AssetId },
+    });
+    const result = resultValue({}, [winner]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{
+      kind: "operation_conflict",
+      targetAssetId: "asset-missing",
+      involvedAssetIds: ["asset-missing", "asset-winner"],
+    }]);
+    expect(reason(result, "asset-winner")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+  });
+
+  it("case 10-g-1: reselects after a non-mandatory winner operation conflict", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner"), {
+      ...exclusive("g", { explicitPriority: 2 }),
+      operation: { kind: "override", targetAssetId: "asset-missing" as AssetId },
+    });
+    const lower = candidateFromDocument(assetDocument("asset-lower"), exclusive("g", { explicitPriority: 1 }));
+
+    for (const candidates of permutations([winner, lower])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-winner")).toMatchObject({ kind: "overridden", overriddenBy: "asset-lower" });
+      expect(reason(result, "asset-lower")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it.each(["disable", "override"] as const)("case 10-g-2: lets a fallback winner %s the old conflict winner", (operationKind) => {
+    const winner = candidateFromDocument(assetDocument("asset-winner"), {
+      ...exclusive("g", { explicitPriority: 2 }),
+      operation: { kind: "disable", targetAssetId: "asset-missing" as AssetId },
+    });
+    const lower = candidateFromDocument(assetDocument("asset-lower"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: operationKind, targetAssetId: "asset-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([winner, lower])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-winner")).toMatchObject(operationKind === "disable"
+        ? { kind: "disabled", disabledBy: "asset-lower" }
+        : { kind: "overridden", overriddenBy: "asset-lower" });
+      expect(reason(result, "asset-lower")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it("case 10-g-3: retains the winner operation conflict when every fallback is unavailable", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner"), {
+      ...exclusive("g", { explicitPriority: 2 }),
+      operation: { kind: "disable", targetAssetId: "asset-missing-target" as AssetId },
+    });
+    const lower = candidateFromDocument(
+      assetDocument("asset-lower", "requires: [asset-missing-requirement]\n"),
+      exclusive("g", { explicitPriority: 1 }),
+    );
+    const expectedConflict = {
+      kind: "operation_conflict" as const,
+      targetAssetId: "asset-missing-target" as AssetId,
+      involvedAssetIds: ["asset-missing-target", "asset-winner"] as const,
+    };
+
+    for (const candidates of permutations([winner, lower])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([expectedConflict]);
+      expect(reason(result, "asset-winner")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-lower")).toMatchObject({
+        kind: "unavailable",
+        cause: "missing_requirement",
+        failedRequirements: ["asset-missing-requirement"],
+      });
+    }
+  });
+
+  it("case 10-h: protects a mandatory exclusive winner from fallback", () => {
+    const mandatory = candidateFromDocument(assetDocument("asset-mandatory"), exclusive("g", { mandatory: true }));
+    const lower = candidateFromDocument(assetDocument("asset-lower"), exclusive("g", { explicitPriority: 1 }));
+    const disable = candidateFromDocument(assetDocument("asset-disable-mandatory"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-mandatory" as AssetId },
+    });
+    const expectedConflict = { kind: "mandatory_conflict" as const, involvedAssetIds: ["asset-disable-mandatory", "asset-mandatory"] as const };
+
+    for (const candidates of permutations([mandatory, lower, disable])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([expectedConflict]);
+      expect(reason(result, "asset-mandatory")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-lower")).toMatchObject({ kind: "overridden", overriddenBy: "asset-mandatory" });
+      expect(reason(result, "asset-disable-mandatory")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
+  });
+
+  it("case 10-i: reselects after an operation cycle and reports only the final graph conflict", () => {
+    const cycleWinner = candidateFromDocument(assetDocument("asset-cycle-winner"), {
+      ...exclusive("g", { explicitPriority: 2 }),
+      operation: { kind: "disable", targetAssetId: "asset-cycle-peer" as AssetId },
+    });
+    const lower = candidateFromDocument(assetDocument("asset-cycle-lower"), exclusive("g", { explicitPriority: 1 }));
+    const peer = candidateFromDocument(assetDocument("asset-cycle-peer"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-cycle-winner" as AssetId },
+    });
+    const expectedConflict = {
+      kind: "operation_conflict" as const,
+      targetAssetId: "asset-cycle-winner" as AssetId,
+      involvedAssetIds: ["asset-cycle-peer", "asset-cycle-winner"] as const,
+    };
+
+    for (const candidates of permutations([cycleWinner, lower, peer])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([expectedConflict]);
+      expect(reason(result, "asset-cycle-winner")).toMatchObject({ kind: "overridden", overriddenBy: "asset-cycle-lower" });
+      expect(reason(result, "asset-cycle-peer")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-cycle-lower")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it("case 10-j: reports no stable selection when fallback satisfies the old winner requirement", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner", "requires: [asset-lower]\n"), exclusive("g", { explicitPriority: 2 }));
+    const lower = candidateFromDocument(assetDocument("asset-lower"), exclusive("g", { explicitPriority: 1 }));
+    const expectedConflict = {
+      kind: "exclusive_tie" as const,
+      mergeGroup: "g",
+      involvedAssetIds: ["asset-lower", "asset-winner"] as const,
+    };
+
+    for (const candidates of permutations([winner, lower])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([expectedConflict]);
+      expect(reason(result, "asset-winner")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-lower")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
+  });
+
+  it("case 10-o: keeps independent dependency failures out of selection feedback", () => {
+    const left = candidateFromDocument(
+      assetDocument("asset-left", "requires: [asset-right, asset-missing-left]\n"),
+      exclusive("g", { explicitPriority: 2 }),
+    );
+    const right = candidateFromDocument(
+      assetDocument("asset-right", "requires: [asset-left, asset-missing-right]\n"),
+      exclusive("g", { explicitPriority: 1 }),
+    );
+
+    for (const candidates of permutations([left, right])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-left")).toMatchObject({
+        kind: "unavailable",
+        failedRequirements: ["asset-missing-left", "asset-right"],
+      });
+      expect(reason(result, "asset-right")).toMatchObject({
+        kind: "unavailable",
+        failedRequirements: ["asset-left", "asset-missing-right"],
+      });
+    }
+  });
+
+  it("case 10-k: does not retain disable provenance from an issuer removed by fallback", () => {
+    const winner = candidateFromDocument(assetDocument("asset-winner"), exclusive("g", { explicitPriority: 2 }));
+    const lower = candidateFromDocument(assetDocument("asset-lower"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-disabler" as AssetId },
+    });
+    const disabler = candidateFromDocument(assetDocument("asset-disabler"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([winner, lower, disabler])) {
+      const result = resultValue({}, candidates);
+      expect(result.outcome).toBe("conflicted");
+      expect(reason(result, "asset-winner")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-winner")).not.toMatchObject({ kind: "disabled", disabledBy: "asset-disabler" });
+      expect(reason(result, "asset-lower")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
+  });
+
+  it("case 10-l: retains a fallback operation conflict when the old winner has an independent dependency failure", () => {
+    const oldWinner = candidateFromDocument(assetDocument("asset-old-winner", "requires: [asset-missing]\n"), exclusive("g", { explicitPriority: 2 }));
+    const fallback = candidateFromDocument(assetDocument("asset-fallback"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+    });
+    const target = candidateFromDocument(assetDocument("asset-target"), { ...add(), mergeGroup: "g" });
+    const competingIssuer = candidateFromDocument(assetDocument("asset-competing"), {
+      ...add(),
+      explicitPriority: 2,
+      mergeGroup: "g",
+      operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+    });
+
+    for (const candidates of permutations([oldWinner, fallback, target, competingIssuer])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([{
+        kind: "operation_conflict",
+        targetAssetId: "asset-target",
+        involvedAssetIds: ["asset-competing", "asset-fallback", "asset-target"],
+      }]);
+      expect(reason(result, "asset-old-winner")).toEqual({
+        kind: "unavailable",
+        availability: "unavailable",
+        cause: "missing_requirement",
+        failedRequirements: ["asset-missing"],
+      });
+      expect(reason(result, "asset-fallback")).toMatchObject({
+        kind: "excluded",
+        cause: "resolution_conflict",
+      });
+      expect(reason(result, "asset-competing")).toMatchObject({ kind: "included" });
+    }
+  });
+
+  it("case 10-m: classifies a requirement from a reselected target by its current disabled status", () => {
+    const oldWinner = candidateFromDocument(assetDocument("asset-old-winner"), {
+      ...exclusive("g", { explicitPriority: 2 }),
+      operation: { kind: "override", targetAssetId: "asset-missing" as AssetId },
+    });
+    const fallback = candidateFromDocument(assetDocument("asset-fallback"), {
+      ...exclusive("g", { explicitPriority: 1 }),
+      operation: { kind: "disable", targetAssetId: "asset-old-winner" as AssetId },
+    });
+    const dependent = candidateFromDocument(assetDocument("asset-dependent", "requires: [asset-old-winner]\n"), add());
+
+    for (const candidates of permutations([oldWinner, fallback, dependent])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("resolved");
+      expect(result.conflicts).toEqual([]);
+      expect(reason(result, "asset-old-winner")).toEqual({ kind: "disabled", disabledBy: "asset-fallback" });
+      expect(reason(result, "asset-fallback")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-dependent")).toEqual({
+        kind: "unavailable",
+        availability: "unavailable",
+        cause: "requirement_disabled",
+        failedRequirements: ["asset-old-winner"],
+      });
+    }
+  });
+
+  it("case 10-n: keeps a surviving disabler actionable when the remaining exclusive tie omits the old winner", () => {
+    const oldWinner = candidateFromDocument(assetDocument("asset-old-winner"), exclusive("g", { explicitPriority: 2 }));
+    const tieLeft = candidateFromDocument(assetDocument("asset-tie-left"), exclusive("g", { explicitPriority: 1 }));
+    const tieRight = candidateFromDocument(assetDocument("asset-tie-right"), exclusive("g", { explicitPriority: 1 }));
+    const disabler = candidateFromDocument(assetDocument("asset-disabler"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-old-winner" as AssetId },
+    });
+
+    for (const candidates of permutations([oldWinner, tieLeft, tieRight, disabler])) {
+      const result = resultValue({}, candidates);
+
+      expect(result.outcome).toBe("conflicted");
+      expect(result.conflicts).toEqual([{
+        kind: "exclusive_tie",
+        mergeGroup: "g",
+        involvedAssetIds: ["asset-tie-left", "asset-tie-right"],
+      }]);
+      expect(reason(result, "asset-old-winner")).toEqual({ kind: "disabled", disabledBy: "asset-disabler" });
+      expect(reason(result, "asset-disabler")).toMatchObject({ kind: "included" });
+      expect(reason(result, "asset-tie-left")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+      expect(reason(result, "asset-tie-right")).toMatchObject({ kind: "excluded", cause: "resolution_conflict" });
+    }
   });
 
   it.each(["case 11", "case 11-b"]) ("%s: leaves a non-total exclusive rank as a conflict", (caseName) => {
@@ -1883,5 +2299,281 @@ scope.project: [acme]
     expect("resolvedAt" in result).toBe(false);
     expect("cost" in result).toBe(false);
     expect("body" in result).toBe(false);
+  });
+
+  it("S1: marks a missing required capability unavailable", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-required", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-required") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-required" }], []));
+
+    expect(reason(result, "skill-required")).toMatchObject({
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: "capability_unavailable",
+      failedCapabilities: [capabilityId("cap-required")],
+    });
+  });
+
+  it("S2: retains a candidate with an optional capability degradation", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-optional", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "optional", capability: capabilityReference("cap-optional") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-optional" }], []));
+
+    expect(reason(result, "skill-optional")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{ capabilityId: capabilityId("cap-optional"), strength: "optional" }],
+      degradedInfo: { reasons: [expect.stringContaining("cap-optional")] },
+    });
+  });
+
+  it("S3: retains a candidate with a preferred capability degradation", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-preferred", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "preferred", capability: capabilityReference("cap-preferred") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-preferred" }], []));
+
+    expect(reason(result, "skill-preferred")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{ capabilityId: capabilityId("cap-preferred"), strength: "preferred" }],
+    });
+  });
+
+  it("S4: records adoption of a fallback for a required capability", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-fallback", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [
+        { strength: "required", capability: capabilityReference("cap-primary") },
+        { strength: "fallback", capability: capabilityReference("cap-fallback"), fallbackFor: capabilityReference("cap-primary") },
+      ],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-fallback" }, { id: "cap-primary" }],
+      [capabilityOffer("cap-fallback")],
+    ));
+
+    expect(reason(result, "skill-fallback")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{
+        capabilityId: capabilityId("cap-primary"),
+        strength: "required",
+        fallbackCapabilityId: capabilityId("cap-fallback"),
+      }],
+      degradedInfo: { reasons: [expect.stringContaining("cap-fallback")] },
+    });
+  });
+
+  it("S5: marks a required capability unavailable when its fallback is also absent", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-no-fallback", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [
+        { strength: "required", capability: capabilityReference("cap-primary") },
+        { strength: "fallback", capability: capabilityReference("cap-fallback"), fallbackFor: capabilityReference("cap-primary") },
+      ],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-fallback" }, { id: "cap-primary" }],
+      [],
+    ));
+
+    expect(reason(result, "skill-no-fallback")).toMatchObject({
+      kind: "unavailable",
+      cause: "capability_unavailable",
+      failedCapabilities: [capabilityId("cap-fallback"), capabilityId("cap-primary")],
+    });
+  });
+
+  it("S6: treats an omitted capability context as an empty offer set", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-no-context", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-required") }],
+    });
+
+    expect(reason(resultValue({}, [candidate]), "skill-no-context")).toMatchObject({
+      kind: "unavailable",
+      cause: "capability_unavailable",
+    });
+  });
+
+  it("S7: does not apply an operation from a hard-failed capability issuer", () => {
+    const issuer = candidateFromDocument(assetDocument("skill-hard-issuer", "", "skill"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-required") }],
+    });
+    const target = candidateFromDocument(assetDocument("asset-target", "", "skill"), add());
+    const result = resultValue({}, [issuer, target], capabilityContext([{ id: "cap-required" }], []));
+
+    expect(reason(result, "skill-hard-issuer")).toMatchObject({ kind: "unavailable" });
+    expect(reason(result, "asset-target")).toMatchObject({ kind: "included" });
+  });
+
+  it("S8: applies an operation from a soft-degraded capability issuer", () => {
+    const issuer = candidateFromDocument(assetDocument("skill-soft-issuer", "", "skill"), {
+      ...add(),
+      operation: { kind: "disable", targetAssetId: "asset-target" as AssetId },
+      capabilityDependencies: [{ strength: "optional", capability: capabilityReference("cap-optional") }],
+    });
+    const target = candidateFromDocument(assetDocument("asset-target", "", "skill"), add());
+    const result = resultValue({}, [issuer, target], capabilityContext([{ id: "cap-optional" }], []));
+
+    expect(reason(result, "skill-soft-issuer")).toMatchObject({ kind: "included", degradedCapabilities: [{ strength: "optional" }] });
+    expect(reason(result, "asset-target")).toEqual({ kind: "disabled", disabledBy: "skill-soft-issuer" });
+  });
+
+  it("S9: records a mandatory capability failure as a conflict", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-mandatory", "", "skill"), {
+      ...add(),
+      mandatory: true,
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-mandatory") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext([{ id: "cap-mandatory" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{
+      kind: "capability_failure",
+      failedCapabilities: [capabilityId("cap-mandatory")],
+      involvedAssetIds: ["skill-mandatory"],
+    }]);
+  });
+
+  it("S10: does not combine features from separate offers", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-partial-offers", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["read", "write"]) }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read"]), capabilityOffer("cap-feature", ["write"])],
+    ));
+
+    expect(reason(result, "skill-partial-offers")).toMatchObject({ kind: "unavailable", cause: "capability_unavailable" });
+  });
+
+  it("S11: treats same-identity candidates with different capability relations as a conflict", () => {
+    const source = { layer: "global" as const, sourceId: "same-source" };
+    const optional = candidateFromDocument(assetDocument("skill-same-identity", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "optional", capability: capabilityReference("cap-a") }],
+    }, { revision: "same-revision", source });
+    const preferred = candidateFromDocument(assetDocument("skill-same-identity", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "preferred", capability: capabilityReference("cap-a") }],
+    }, { revision: "same-revision", source });
+    const result = resultValue({}, [preferred, optional], capabilityContext([{ id: "cap-a" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ kind: "duplicate_identity", assetId: "skill-same-identity", involvedAssetIds: ["skill-same-identity"] }]);
+    expect(result.evaluations).toHaveLength(2);
+    expect(result.evaluations.every((item) => item.reason.kind === "excluded" && item.reason.cause === "resolution_conflict")).toBe(true);
+  });
+
+  it("S12: rejects capability dependencies on a type outside the capability policy", () => {
+    const candidate = candidateFromDocument(assetDocument("rule-with-capability", "", "rule"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-rule") }],
+    });
+    const result = resolve({}, [candidate]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.some((item) => item.code === "capability_dependencies_not_allowed")).toBe(true);
+    }
+  });
+
+  it("S13: rejects an undeclared capability feature on an in-scope candidate", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-in-scope", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["writ"]) }],
+    });
+    const result = resolve({}, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read", "write"])],
+    ));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual([
+        "snapshot", "candidate", "skill-in-scope", "rule", "capabilityDependencies", "0", "capability", "features",
+      ]);
+    }
+  });
+
+  it("S14: rejects an undeclared capability feature on a candidate outside the scope", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-out-of-scope", "scope.role: [author]\n", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-feature", ["writ"]) }],
+    });
+    const result = resolve({ roleId: "reviewer" }, [candidate], capabilityContext(
+      [{ id: "cap-feature", features: ["read", "write"] }],
+      [capabilityOffer("cap-feature", ["read", "write"])],
+    ));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.some((item) => item.code === "unknown_capability_feature")).toBe(true);
+    }
+  });
+
+  it("S15: roots capability context diagnostics at the input field", () => {
+    const result = resolve({}, [], capabilityContext([{ id: "cap-a" }], [capabilityOffer("cap-b")]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => item.path)).toContainEqual([
+        "capabilityContext", "offers", "0", "capabilityId",
+      ]);
+    }
+  });
+
+  it("S16: propagates a capability failure across a dependency cycle", () => {
+    const mandatory = candidateFromDocument(assetDocument("skill-a", "requires: [skill-b]\n", "skill"), {
+      ...add(),
+      mandatory: true,
+    });
+    const cycleMember = candidateFromDocument(assetDocument("skill-b", "requires: [skill-a]\n", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-cycle") }],
+    });
+    const result = resultValue({}, [mandatory, cycleMember], capabilityContext([{ id: "cap-cycle" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "capability_failure", failedCapabilities: [capabilityId("cap-cycle")], involvedAssetIds: ["skill-a"] },
+      { kind: "dependency_cycle", involvedAssetIds: ["skill-a", "skill-b"] },
+    ]));
+    expect(reason(result, "skill-a")).toMatchObject({
+      kind: "unavailable",
+      cause: "requirement_cycle",
+      failedCapabilities: [capabilityId("cap-cycle")],
+    });
+  });
+
+  it("S17: propagates a capability failure a single cycle member requires from outside", () => {
+    const mandatory = candidateFromDocument(assetDocument("skill-a", "requires: [skill-b]\n", "skill"), {
+      ...add(),
+      mandatory: true,
+    });
+    const cycleMember = candidateFromDocument(assetDocument("skill-b", "requires: [skill-a, skill-c]\n", "skill"), add());
+    const outside = candidateFromDocument(assetDocument("skill-c", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-outside") }],
+    });
+    const result = resultValue({}, [mandatory, cycleMember, outside], capabilityContext([{ id: "cap-outside" }], []));
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual(expect.arrayContaining([
+      { kind: "capability_failure", failedCapabilities: [capabilityId("cap-outside")], involvedAssetIds: ["skill-a"] },
+    ]));
+    expect(reason(result, "skill-a")).toMatchObject({
+      kind: "unavailable",
+      failedCapabilities: [capabilityId("cap-outside")],
+    });
   });
 });

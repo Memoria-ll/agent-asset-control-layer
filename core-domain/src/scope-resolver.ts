@@ -3,6 +3,7 @@ import type {
   AssetId,
   AssetRevision,
   AssetType,
+  DegradedInfo,
   ConflictDto,
   CoreErrorDetail,
   LoadingTier,
@@ -11,6 +12,17 @@ import type {
 } from "@aacl/shared";
 import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
+import {
+  evaluateCapabilityDependenciesInValidatedContext,
+  validateCapabilityContext,
+} from "./capabilities.ts";
+import type {
+  CapabilityDegradation,
+  CapabilityDependency,
+  CapabilityDependencyOutcome,
+  CapabilityId,
+  CapabilityResolutionContext,
+} from "./capabilities.ts";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import {
   normalizeResolutionDirectory,
@@ -44,6 +56,7 @@ export type ResolutionRule = {
   readonly operation: ResolutionOperation;
   readonly explicitPriority?: number;
   readonly requires: readonly AssetId[];
+  readonly capabilityDependencies?: readonly CapabilityDependency[];
 } & ResolutionMerge;
 
 export type AssetCandidate = {
@@ -95,6 +108,8 @@ export type CandidateReason =
       readonly kind: "included";
       readonly matchedAxes: readonly ResolutionAxis[];
       readonly rank: ResolutionRank;
+      readonly degradedInfo?: DegradedInfo;
+      readonly degradedCapabilities?: readonly CapabilityDegradation[];
     }
   | {
       readonly kind: "excluded";
@@ -131,8 +146,10 @@ export type CandidateReason =
         | "requirement_disabled"
         | "requirement_overridden"
         | "requirement_cycle"
-        | "requirement_invalid";
+        | "requirement_invalid"
+        | "capability_unavailable";
       readonly failedRequirements: readonly AssetId[];
+      readonly failedCapabilities?: readonly CapabilityId[];
     };
 
 export type ResolutionConflict =
@@ -167,12 +184,18 @@ export type ResolutionConflict =
   | {
       readonly kind: "asset_type_conflict";
       readonly involvedAssetIds: readonly AssetId[];
+    }
+  | {
+      readonly kind: "capability_failure";
+      readonly failedCapabilities: readonly CapabilityId[];
+      readonly involvedAssetIds: readonly AssetId[];
     };
 
 export type ResolveScopeInput = {
   readonly scope: ResolutionScopeInput;
   readonly snapshot: ResolutionSnapshot;
   readonly contracts?: AssetTypeContractRegistry;
+  readonly capabilityContext?: CapabilityResolutionContext;
 };
 
 export type ResolutionEvaluation = {
@@ -200,14 +223,20 @@ type DependencyCause =
   | "requirement_disabled"
   | "requirement_overridden"
   | "requirement_cycle"
-  | "requirement_invalid";
+  | "requirement_invalid"
+  | "capability_unavailable";
 
 type DependencyOutcome =
-  | { readonly ok: true }
+  | {
+      readonly ok: true;
+      readonly degradedInfo?: DegradedInfo;
+      readonly degradedCapabilities?: readonly CapabilityDegradation[];
+    }
   | {
       readonly ok: false;
       readonly cause: DependencyCause;
       readonly failedRequirements: readonly AssetId[];
+      readonly failedCapabilities?: readonly CapabilityId[];
       readonly cycleIds?: readonly AssetId[];
       readonly nonCycleFailedRequirements: readonly AssetId[];
     };
@@ -246,6 +275,7 @@ const conflictKey = (conflict: ResolutionConflict): string => {
     case "operation_conflict": return `${conflict.kind}:${conflict.targetAssetId}:${conflict.involvedAssetIds.join("\u0000")}`;
     case "duplicate_identity": return `${conflict.kind}:${conflict.assetId}:${conflict.involvedAssetIds.join("\u0000")}`;
     case "dependency_failure": return `${conflict.kind}:${conflict.failedRequirement}:${conflict.involvedAssetIds.join("\u0000")}`;
+    case "capability_failure": return `${conflict.kind}:${conflict.failedCapabilities.join("\u0000")}:${conflict.involvedAssetIds.join("\u0000")}`;
     default: return `${conflict.kind}:${conflict.involvedAssetIds.join("\u0000")}`;
   }
 };
@@ -254,6 +284,21 @@ const canonicalIds = (ids: readonly AssetId[]): readonly AssetId[] => sortedUniq
 
 const sameOperation = (left: ResolutionOperation, right: ResolutionOperation): boolean =>
   left.kind === right.kind && (left.kind === "add" || right.kind === "add" || left.targetAssetId === right.targetAssetId);
+
+const capabilityReferenceKey = (reference: { readonly capabilityId: CapabilityId; readonly features?: readonly string[] }): string =>
+  JSON.stringify([reference.capabilityId, reference.features === undefined ? null : reference.features]);
+
+const capabilityDependencyKey = (dependency: CapabilityDependency): string =>
+  dependency.strength === "fallback"
+    ? `${dependency.strength}\u0000${capabilityReferenceKey(dependency.capability)}\u0000${capabilityReferenceKey(dependency.fallbackFor)}`
+    : `${dependency.strength}\u0000${capabilityReferenceKey(dependency.capability)}`;
+
+const canonicalCapabilityDependencyKeys = (
+  dependencies: readonly CapabilityDependency[] | undefined,
+): readonly string[] => (dependencies ?? []).map(capabilityDependencyKey).sort(codeUnitCompare);
+
+const sameStringLists = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
 
 const sameCandidateMeaning = (
   left: NormalizedCandidate,
@@ -265,6 +310,10 @@ const sameCandidateMeaning = (
   if (leftRule.mandatory !== rightRule.mandatory || !sameOperation(leftRule.operation, rightRule.operation)) return false;
   if (leftRule.explicitPriority !== rightRule.explicitPriority || leftRule.mergeMode !== rightRule.mergeMode) return false;
   if (leftRule.mergeGroup !== rightRule.mergeGroup || !compareStringLists(leftRule.requires, rightRule.requires)) return false;
+  if (!sameStringLists(
+    canonicalCapabilityDependencyKeys(leftRule.capabilityDependencies),
+    canonicalCapabilityDependencyKeys(rightRule.capabilityDependencies),
+  )) return false;
   for (const axis of RESOLUTION_AXES) {
     const leftHas = Object.prototype.hasOwnProperty.call(leftRule.selectors, axis);
     const rightHas = Object.prototype.hasOwnProperty.call(rightRule.selectors, axis);
@@ -551,6 +600,7 @@ const validateStringList = (
 const validateCandidate = (
   candidate: NormalizedCandidate,
   contracts: AssetTypeContractRegistry,
+  capabilityContext: CapabilityResolutionContext | undefined,
 ): readonly CoreErrorDetail[] => {
   const details: CoreErrorDetail[] = [];
   const value = candidate.candidate as unknown as Record<string, unknown>;
@@ -592,6 +642,30 @@ const validateCandidate = (
   }
   if (!Array.isArray(rule.requires)) details.push(detail([...path, "rule", "requires"], "invalid_value", "Requires must be a list."));
   else validateStringList(rule.requires, [...path, "rule", "requires"], details, true);
+
+  const capabilityDependencies = rule.capabilityDependencies;
+  if (capabilityDependencies !== undefined) {
+    // The catalog is passed here, not only where the included candidates are evaluated:
+    // a dependency naming a feature its definition does not declare is invalid
+    // configuration of the snapshot, and scope decides which candidates apply — not
+    // which ones are well-formed.
+    const capabilityResult = evaluateCapabilityDependenciesInValidatedContext(
+      capabilityDependencies as unknown as readonly CapabilityDependency[],
+      capabilityContext,
+    );
+    if (!capabilityResult.ok) {
+      for (const capabilityDetail of capabilityResult.failure.details ?? []) {
+        const relativePath = capabilityDetail.path[0] === "dependencies"
+          ? capabilityDetail.path.slice(1)
+          : capabilityDetail.path;
+        details.push(detail(
+          [...path, "rule", "capabilityDependencies", ...relativePath],
+          capabilityDetail.code,
+          capabilityDetail.message,
+        ));
+      }
+    }
+  }
 
   const selectors = rule.selectors;
   if (!isRecord(selectors)) {
@@ -639,6 +713,13 @@ const validateCandidate = (
         [...path, "rule", "mergeMode"],
         "merge_mode_not_allowed",
         "The asset type does not allow an exclusive merge.",
+      ));
+    }
+    if (Array.isArray(capabilityDependencies) && capabilityDependencies.length > 0 && !contract.allowsCapabilityDependencies) {
+      details.push(detail(
+        [...path, "rule", "capabilityDependencies"],
+        "capability_dependencies_not_allowed",
+        "The asset type does not allow capability dependencies.",
       ));
     }
   }
@@ -703,6 +784,14 @@ const compareCandidatesForOutput = (left: CandidateState, right: CandidateState)
     const requirementOrder = codeUnitCompare(leftRule.requires[index] as string, rightRule.requires[index] as string);
     if (requirementOrder !== 0) return requirementOrder;
   }
+  const leftCapabilityDependencies = canonicalCapabilityDependencyKeys(leftRule.capabilityDependencies);
+  const rightCapabilityDependencies = canonicalCapabilityDependencyKeys(rightRule.capabilityDependencies);
+  const capabilityDependencyLengthOrder = leftCapabilityDependencies.length - rightCapabilityDependencies.length;
+  if (capabilityDependencyLengthOrder !== 0) return capabilityDependencyLengthOrder;
+  for (let index = 0; index < leftCapabilityDependencies.length; index += 1) {
+    const dependencyOrder = codeUnitCompare(leftCapabilityDependencies[index]!, rightCapabilityDependencies[index]!);
+    if (dependencyOrder !== 0) return dependencyOrder;
+  }
   for (const axis of RESOLUTION_AXES) {
     const leftSelectors = leftRule.selectors[axis];
     const rightSelectors = rightRule.selectors[axis];
@@ -729,12 +818,18 @@ const conflictExplanation = (conflict: ResolutionConflict): string => {
     case "dependency_cycle": return "Asset requirements contain a cycle.";
     case "dependency_failure": return "A mandatory asset requirement could not be satisfied.";
     case "asset_type_conflict": return "Candidates of different asset types cannot be combined.";
+    case "capability_failure": return `Mandatory capability dependencies could not be satisfied: ${conflict.failedCapabilities.join(", ")}.`;
   }
 };
 
 export const toResolutionReasonDto = (reason: CandidateReason): ResolutionReason => {
   switch (reason.kind) {
-    case "included": return { kind: "included", explanation: "The candidate matched the requested scope." };
+    case "included": return {
+      kind: "included",
+      explanation: reason.degradedInfo === undefined
+        ? "The candidate matched the requested scope."
+        : `The candidate matched the requested scope. ${reason.degradedInfo.reasons.join(" ")}`,
+    };
     case "excluded": {
       if (reason.cause === "scope_mismatch") return { kind: "excluded", explanation: "The candidate did not match the requested scope." };
       if (reason.cause === "invalid_directory") return { kind: "excluded", explanation: "The candidate has an invalid directory selector." };
@@ -784,6 +879,19 @@ const resolveScopeFixedPoint = (
     return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
   }
   const contracts = input.contracts ?? DEFAULT_ASSET_TYPE_CONTRACTS;
+  const capabilityContextResult = input.capabilityContext === undefined
+    ? undefined
+    : validateCapabilityContext(input.capabilityContext);
+  if (capabilityContextResult !== undefined && !capabilityContextResult.ok) {
+    // The helper reports against its own input, so its paths name `catalog` / `offers`,
+    // neither of which is a field of ResolveScopeInput.  Rooting them at the field the
+    // caller passed is what lets a consumer find the offending value.
+    return invalidRequest((capabilityContextResult.failure.details ?? []).map((item) =>
+      detail(["capabilityContext", ...item.path], item.code, item.message)));
+  }
+  const capabilityContext = capabilityContextResult === undefined || !capabilityContextResult.ok
+    ? undefined
+    : capabilityContextResult.value;
 
   const conflicts = new Map<string, ResolutionConflict>();
   const addConflict = (conflict: ResolutionConflict): void => {
@@ -809,7 +917,7 @@ const resolveScopeFixedPoint = (
   // invalid-directory evaluation, and it must not be dereferenced below.
   for (const rawCandidate of input.snapshot.candidates) {
     const candidate = rawCandidate as AssetCandidate;
-    const structuralDetails = validateCandidate({ candidate }, contracts);
+    const structuralDetails = validateCandidate({ candidate }, contracts, capabilityContext);
     if (structuralDetails.length > 0) {
       validationDetails.push(...structuralDetails);
       continue;
@@ -936,25 +1044,9 @@ const resolveScopeFixedPoint = (
       }
       continue;
     }
-    const decision = selectExclusiveWinner(group.map((state) => ({
-      candidate: state.candidate,
-      rank: state.rank!,
-    })));
-    if (decision.kind === "conflict") {
-      addConflict(decision.conflict);
-      for (const state of group) state.reason = resolutionConflictReason(decision.conflict, state.rank);
-    } else {
-      const winner = decision.candidate;
-      for (const state of group) {
-        if (state.candidate === winner.candidate) continue;
-        state.reason = {
-          kind: "overridden",
-          overriddenBy: winner.candidate.assetId,
-          mergeGroup,
-          winnerRank: winner.rank,
-        };
-      }
-    }
+    // Non-mandatory exclusive selection is derived in the fixed-point loop below.
+    // Keeping every matched candidate here allows a dynamic winner to be replaced
+    // by a lower-ranked candidate when its availability changes.
   }
 
   const stateById = new Map<string, CandidateState[]>();
@@ -964,12 +1056,17 @@ const resolveScopeFixedPoint = (
     stateById.set(String(state.candidate.assetId), group);
   }
   const invalidById = new Set(invalidStates.map((state) => String(state.candidate.assetId)));
-  const baseReasons = new Map(states.map((state) => [state, state.reason] as const));
-  const baseIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
-  const operationIssuers = [...baseIncluded]
+  const staticReasons = new Map(states.map((state) => [state, state.reason] as const));
+  const staticIncluded = new Set(states.filter((state) => state.reason.kind === "included"));
+  let baseReasons = new Map(staticReasons);
+  let baseIncluded = new Set(staticIncluded);
+  let operationIssuers: readonly CandidateState[] = [...baseIncluded]
     .filter((state) => state.candidate.rule.operation.kind !== "add")
     .sort(compareCandidatesForOutput);
-  const operationIssuerSet = new Set(operationIssuers);
+  let operationIssuerSet = new Set(operationIssuers);
+  const selectionExcluded = new Set<CandidateState>();
+  const selectionEvidence = new Map<CandidateState, CandidateReason>();
+  const unstableExclusiveGroups = new Map<string, ResolutionConflict>();
 
   type FixedStatus =
     | { readonly kind: "included" }
@@ -1047,7 +1144,24 @@ const resolveScopeFixedPoint = (
     state: CandidateState,
     statuses: ReadonlyMap<CandidateState, FixedStatus>,
   ): FixedStatus | undefined => {
-    if (baseIncluded.has(state)) return statuses.get(state);
+    // A target can be selected by a surviving issuer after its own selection
+    // was excluded.  The operation status describes the current graph and
+    // must supersede stale selection evidence for dependency classification.
+    const currentStatus = statuses.get(state);
+    if (currentStatus !== undefined) return currentStatus;
+    const evidence = selectionEvidence.get(state);
+    if (evidence?.kind === "disabled") return { kind: "disabled", disabledBy: evidence.disabledBy };
+    if (evidence?.kind === "overridden") {
+      return {
+        kind: "overridden",
+        overriddenBy: evidence.overriddenBy,
+        mergeGroup: evidence.mergeGroup,
+        winnerRank: evidence.winnerRank,
+      };
+    }
+    if (evidence?.kind === "excluded" && evidence.cause === "resolution_conflict") {
+      return { kind: "conflict", conflict: evidence.conflict };
+    }
     const reason = baseReasons.get(state);
     if (reason?.kind === "disabled") return { kind: "disabled", disabledBy: reason.disabledBy };
     if (reason?.kind === "overridden") {
@@ -1067,11 +1181,70 @@ const resolveScopeFixedPoint = (
   type DependencyNode = {
     readonly edges: readonly { readonly requiredId: AssetId; readonly target: CandidateState }[];
     readonly directFailures: readonly { readonly id: AssetId; readonly cause: DependencyCause }[];
+    readonly capabilityOutcome?: CapabilityDependencyOutcome;
   };
+
+  // Neither a candidate's capability dependencies nor the capability context change
+  // across operation passes, so each outcome is settled once here rather than per pass —
+  // otherwise every pass re-normalizes the dependencies of every candidate.
+  const capabilityOutcomeByState = new Map<CandidateState, CapabilityDependencyOutcome>();
+  for (const state of baseIncluded) {
+    const dependencies = state.candidate.rule.capabilityDependencies;
+    if (dependencies === undefined) continue;
+    const capabilityResult = evaluateCapabilityDependenciesInValidatedContext(dependencies, capabilityContext);
+    // Structural validation above ran with this same catalog, so a failure here would
+    // mean the two disagree rather than that the snapshot is invalid.
+    if (!capabilityResult.ok) throw new Error("Validated capability dependencies must evaluate successfully.");
+    capabilityOutcomeByState.set(state, capabilityResult.value);
+  }
 
   const dependencyOutcomes = (
     statuses: ReadonlyMap<CandidateState, FixedStatus>,
   ): ReadonlyMap<CandidateState, DependencyOutcome> => {
+    const dependencyOutcomeFromCapability = (outcome: CapabilityDependencyOutcome): DependencyOutcome =>
+      outcome.ok
+        ? {
+            ok: true,
+            ...(outcome.degradation === undefined ? {} : { degradedInfo: outcome.degradation }),
+            ...(outcome.degradedCapabilities === undefined ? {} : { degradedCapabilities: outcome.degradedCapabilities }),
+          }
+        : {
+            ok: false,
+            cause: "capability_unavailable",
+            failedRequirements: [],
+            failedCapabilities: outcome.failedCapabilities,
+            nonCycleFailedRequirements: [],
+          };
+
+    const degradationOrder = (left: CapabilityDegradation, right: CapabilityDegradation): number => {
+      const idOrder = codeUnitCompare(left.capabilityId, right.capabilityId);
+      if (idOrder !== 0) return idOrder;
+      const strengthOrder = codeUnitCompare(left.strength, right.strength);
+      if (strengthOrder !== 0) return strengthOrder;
+      return codeUnitCompare(left.fallbackCapabilityId ?? "", right.fallbackCapabilityId ?? "");
+    };
+    const mergeDegradation = (
+      sources: readonly DependencyOutcome[],
+    ): Pick<Extract<DependencyOutcome, { readonly ok: true }>, "degradedInfo" | "degradedCapabilities"> => {
+      const degradedCapabilities = sources.flatMap((source) => source.ok ? [...(source.degradedCapabilities ?? [])] : []);
+      const reasons = sources.flatMap((source) => source.ok ? [...(source.degradedInfo?.reasons ?? [])] : []);
+      const orderedDegradations = degradedCapabilities.sort(degradationOrder);
+      const uniqueDegradations: CapabilityDegradation[] = [];
+      for (const degradation of orderedDegradations) {
+        const previous = uniqueDegradations.at(-1);
+        if (previous !== undefined && degradationOrder(previous, degradation) === 0) continue;
+        uniqueDegradations.push(degradation);
+      }
+      const uniqueReasons = [...new Set(reasons)].sort(codeUnitCompare);
+      if (uniqueDegradations.length === 0) return {};
+      // A degraded outcome must retain a reason because DegradedInfo rejects empty lists.
+      if (uniqueReasons.length === 0) throw new Error("A degraded capability outcome must include a reason.");
+      return {
+        degradedCapabilities: uniqueDegradations,
+        degradedInfo: { reasons: uniqueReasons },
+      };
+    };
+
     const activeById = new Map<string, CandidateState[]>();
     for (const state of baseIncluded) {
       if (statuses.get(state)?.kind !== "included") continue;
@@ -1112,7 +1285,12 @@ const resolveScopeFixedPoint = (
           edges.push({ requiredId, target: targets[0]! });
         }
       }
-      dependencyNodes.set(state, { edges, directFailures });
+      const capabilityOutcome = capabilityOutcomeByState.get(state);
+      dependencyNodes.set(state, {
+        edges,
+        directFailures,
+        ...(capabilityOutcome === undefined ? {} : { capabilityOutcome }),
+      });
       outgoing.set(state, edges.map((edge) => edge.target));
     }
 
@@ -1209,19 +1387,47 @@ const resolveScopeFixedPoint = (
         : undefined;
       const componentHasNonCycleFailure = component.some((state) => {
         const node = dependencyNodes.get(state)!;
-        return node.directFailures.some((failure) => failure.cause !== "requirement_cycle") ||
+        return node.capabilityOutcome?.ok === false ||
+          node.directFailures.some((failure) => failure.cause !== "requirement_cycle") ||
           node.edges.some((edge) => {
             if (componentStates.has(edge.target)) return false;
             const outcome = outcomes.get(edge.target);
-            return outcome !== undefined && !outcome.ok && outcome.nonCycleFailedRequirements.length > 0;
+            return outcome !== undefined && !outcome.ok && (
+              outcome.nonCycleFailedRequirements.length > 0 ||
+              (outcome.failedCapabilities?.length ?? 0) > 0
+            );
           });
+      });
+      // Every state of a component reaches every other, so a capability the component
+      // cannot satisfy is unsatisfied for all of its members — whether the requirement
+      // sits on a member itself or on something a single member requires from outside.
+      // Both arrive here, so each member carries the whole set rather than only the part
+      // its own edges happen to touch.  Components this one depends on are materialized
+      // first and already closed over their own reach, so this single pass is the fixed
+      // point; a member's own external edges are re-walked below only for the per-edge
+      // requirement diagnostics, which are not shared across the component.
+      const componentFailedCapabilities = component.flatMap((state) => {
+        const node = dependencyNodes.get(state)!;
+        const own = node.capabilityOutcome?.ok === false ? [...node.capabilityOutcome.failedCapabilities] : [];
+        const required = node.edges.flatMap((edge) => {
+          if (componentStates.has(edge.target)) return [];
+          const outcome = outcomes.get(edge.target);
+          return outcome === undefined || outcome.ok ? [] : [...(outcome.failedCapabilities ?? [])];
+        });
+        return [...own, ...required];
       });
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
         const failures = [...node.directFailures];
+        const capabilityFailure = node.capabilityOutcome?.ok === false
+          ? node.capabilityOutcome
+          : undefined;
+        const failedCapabilities = [...componentFailedCapabilities];
         const nonCycleFailedRequirements = node.directFailures
           .filter((failure) => failure.cause !== "requirement_cycle")
           .map((failure) => failure.id);
+        const outcomeSources: DependencyOutcome[] = [];
+        if (node.capabilityOutcome !== undefined) outcomeSources.push(dependencyOutcomeFromCapability(node.capabilityOutcome));
         let cycleIds = componentCycleIds;
         if (componentCycleIds !== undefined) {
           for (const edge of node.edges) {
@@ -1233,22 +1439,33 @@ const resolveScopeFixedPoint = (
         for (const edge of node.edges) {
           if (componentStates.has(edge.target)) continue;
           const outcome = outcomes.get(edge.target);
-          if (outcome === undefined || outcome.ok) continue;
+          if (outcome === undefined) continue;
+          if (outcome.ok) {
+            outcomeSources.push(outcome);
+            continue;
+          }
           failures.push({ id: edge.requiredId, cause: outcome.cause });
           if (outcome.cycleIds !== undefined) {
             cycleIds = cycleIds === undefined ? outcome.cycleIds : canonicalIds([...cycleIds, ...outcome.cycleIds]);
           }
-          if (outcome.nonCycleFailedRequirements.length > 0) nonCycleFailedRequirements.push(edge.requiredId);
+          if (outcome.nonCycleFailedRequirements.length > 0 || (outcome.failedCapabilities?.length ?? 0) > 0) {
+            nonCycleFailedRequirements.push(edge.requiredId);
+          }
         }
         failures.sort((left, right) => codeUnitCompare(left.id, right.id));
         nonCycleFailedRequirements.sort(codeUnitCompare);
-        if (failures.length === 0) {
-          outcomes.set(state, { ok: true });
+        const uniqueFailedCapabilities = [...new Set(failedCapabilities)].sort(codeUnitCompare);
+        if (failures.length === 0 && capabilityFailure === undefined) {
+          outcomes.set(state, { ok: true, ...mergeDegradation(outcomeSources) });
         } else {
+          const cause = capabilityFailure === undefined
+            ? failures[0]!.cause
+            : "capability_unavailable";
           outcomes.set(state, {
             ok: false,
-            cause: failures[0]!.cause,
+            cause,
             failedRequirements: failures.map((failure) => failure.id),
+            ...(uniqueFailedCapabilities.length === 0 ? {} : { failedCapabilities: uniqueFailedCapabilities }),
             ...(cycleIds === undefined ? {} : { cycleIds }),
             nonCycleFailedRequirements: canonicalIds(nonCycleFailedRequirements),
           });
@@ -1291,6 +1508,15 @@ const resolveScopeFixedPoint = (
     ): CandidateState[] => {
       const candidates = matchedTargets.filter((state) => {
         if (baseIncluded.has(state)) return true;
+        const selectionReason = selectionEvidence.get(state);
+        if (
+          selectionExcluded.has(state) &&
+          selectionReason !== undefined &&
+          (!(selectionReason.kind === "excluded" && selectionReason.cause === "resolution_conflict") ||
+            (issuer.candidate.rule.mergeMode === "exclusive" &&
+              state.candidate.rule.mergeMode === "exclusive" &&
+              issuer.candidate.rule.mergeGroup === state.candidate.rule.mergeGroup))
+        ) return true;
         const reason = baseReasons.get(state);
         return reason?.kind === "overridden" && reason.overriddenBy === issuer.candidate.assetId;
       });
@@ -1480,199 +1706,486 @@ const resolveScopeFixedPoint = (
   const samePlan = (left: ReadonlySet<CandidateState>, right: ReadonlySet<CandidateState>): boolean =>
     left.size === right.size && [...left].every((state) => right.has(state));
 
-  const forcedConflicts = new Map<CandidateState, ResolutionConflict>();
-  const operationConflictCandidates = (pass: OperationPass): ReadonlyMap<CandidateState, ResolutionConflict> => {
-    const candidates = new Map<CandidateState, ResolutionConflict>();
-    for (const entry of pass.operationConflicts) {
-      for (const issuer of entry.issuers) {
-        if (pass.statuses.get(issuer)?.kind === "conflict" && pass.dependency.get(issuer)?.ok === true) {
-          candidates.set(issuer, entry.conflict);
+  const runCurrentOperation = (): {
+    readonly pass: OperationPass;
+    readonly forcedConflicts: ReadonlyMap<CandidateState, ResolutionConflict>;
+  } => {
+    const forcedConflicts = new Map<CandidateState, ResolutionConflict>();
+    const operationConflictCandidates = (pass: OperationPass): ReadonlyMap<CandidateState, ResolutionConflict> => {
+      const candidates = new Map<CandidateState, ResolutionConflict>();
+      for (const entry of pass.operationConflicts) {
+        for (const issuer of entry.issuers) {
+          if (pass.statuses.get(issuer)?.kind === "conflict" && pass.dependency.get(issuer)?.ok === true) {
+            candidates.set(issuer, entry.conflict);
+          }
         }
       }
-    }
-    for (const failure of pass.failures) {
-      if (pass.statuses.get(failure.issuer)?.kind === "conflict" && pass.dependency.get(failure.issuer)?.ok === true) {
-        candidates.set(failure.issuer, failure.conflict);
-      }
-    }
-    return candidates;
-  };
-  const tryStablePlanAfterExcluding = (
-    excluded: CandidateState,
-  ): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
-    let trialPlan = new Set(operationIssuers.filter((issuer) => issuer !== excluded && !forcedConflicts.has(issuer)));
-    const trialSeen = new Set<string>();
-    for (;;) {
-      const key = planKey(trialPlan);
-      if (trialSeen.has(key)) return undefined;
-      trialSeen.add(key);
-      const trialPass = evaluatePlan(trialPlan, forcedConflicts);
-      if (trialPass.cycles.length > 0 || operationConflictCandidates(trialPass).size > 0) return undefined;
-      if (samePlan(trialPass.nextPlan, trialPlan)) return { plan: trialPlan, pass: trialPass };
-      trialPlan = new Set(trialPass.nextPlan);
-    }
-  };
-  const tryAcyclicNoRequirementPlan = (): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
-    if (operationIssuers.some((issuer) => issuer.candidate.rule.requires.length > 0)) return undefined;
-    const allPass = evaluatePlan(new Set(operationIssuers), forcedConflicts);
-    if (allPass.cycles.length > 0 || allPass.operationConflicts.length > 0 || allPass.failures.length > 0) return undefined;
-    // Availability is part of operation graph discovery.  An issuer whose
-    // dependency closure failed cannot participate in either a cycle or the
-    // topological blocking pass, even when its provisional action was selected.
-    const eligibleActions = allPass.selectedActions.filter((action) => allPass.dependency.get(action.issuer)?.ok === true);
-
-    const actionCountByIssuer = new Map<CandidateState, number>();
-    const actionCountByTargetId = new Map<string, number>();
-    for (const action of eligibleActions) {
-      actionCountByIssuer.set(action.issuer, (actionCountByIssuer.get(action.issuer) ?? 0) + 1);
-      const targetId = String(action.target.candidate.assetId);
-      actionCountByTargetId.set(targetId, (actionCountByTargetId.get(targetId) ?? 0) + 1);
-    }
-    if ([...actionCountByIssuer.values()].some((count) => count !== 1) || [...actionCountByTargetId.values()].some((count) => count !== 1)) {
-      return undefined;
-    }
-
-    const outgoing = new Map<CandidateState, CandidateState[]>();
-    for (const issuer of operationIssuers) outgoing.set(issuer, []);
-    for (const action of eligibleActions) {
-      if (!operationIssuerSet.has(action.target)) continue;
-      outgoing.get(action.issuer)!.push(action.target);
-    }
-    const components = stronglyConnectedComponents(operationIssuers, outgoing, compareCandidatesForOutput);
-    if (components.some((component) => component.length > 1 || (outgoing.get(component[0]!) ?? []).includes(component[0]!))) return undefined;
-
-    const remainingIncoming = new Map<CandidateState, number>();
-    for (const issuer of operationIssuers) remainingIncoming.set(issuer, 0);
-    for (const targets of outgoing.values()) for (const target of targets) remainingIncoming.set(target, remainingIncoming.get(target)! + 1);
-    const ready: CandidateState[] = [];
-    const less = (left: CandidateState, right: CandidateState): boolean => compareCandidatesForOutput(left, right) < 0;
-    const pushReady = (value: CandidateState): void => {
-      ready.push(value);
-      let index = ready.length - 1;
-      while (index > 0) {
-        const parent = Math.floor((index - 1) / 2);
-        if (!less(value, ready[parent]!)) break;
-        ready[index] = ready[parent]!;
-        index = parent;
-      }
-      ready[index] = value;
-    };
-    const popReady = (): CandidateState | undefined => {
-      const first = ready[0];
-      const last = ready.pop();
-      if (first === undefined) return undefined;
-      if (last !== undefined && ready.length > 0) {
-        let index = 0;
-        while (true) {
-          const left = index * 2 + 1;
-          if (left >= ready.length) break;
-          const right = left + 1;
-          const child = right < ready.length && less(ready[right]!, ready[left]!) ? right : left;
-          if (!less(ready[child]!, last)) break;
-          ready[index] = ready[child]!;
-          index = child;
+      for (const failure of pass.failures) {
+        if (pass.statuses.get(failure.issuer)?.kind === "conflict" && pass.dependency.get(failure.issuer)?.ok === true) {
+          candidates.set(failure.issuer, failure.conflict);
         }
-        ready[index] = last;
       }
-      return first;
+      return candidates;
     };
-    for (const issuer of operationIssuers) if (remainingIncoming.get(issuer) === 0) pushReady(issuer);
-    const active = new Set<CandidateState>();
-    const blocked = new Set<CandidateState>();
-    let processed = 0;
-    for (;;) {
-      const issuer = popReady();
-      if (issuer === undefined) break;
-      processed += 1;
-      if (!blocked.has(issuer)) {
-        active.add(issuer);
-        for (const target of outgoing.get(issuer) ?? []) blocked.add(target);
+    const tryStablePlanAfterExcluding = (
+      excluded: CandidateState,
+    ): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
+      let trialPlan = new Set(operationIssuers.filter((issuer) => issuer !== excluded && !forcedConflicts.has(issuer)));
+      const trialSeen = new Set<string>();
+      for (;;) {
+        const key = planKey(trialPlan);
+        if (trialSeen.has(key)) return undefined;
+        trialSeen.add(key);
+        const trialPass = evaluatePlan(trialPlan, forcedConflicts);
+        if (trialPass.cycles.length > 0 || operationConflictCandidates(trialPass).size > 0) return undefined;
+        if (samePlan(trialPass.nextPlan, trialPlan)) return { plan: trialPlan, pass: trialPass };
+        trialPlan = new Set(trialPass.nextPlan);
       }
-      for (const target of outgoing.get(issuer) ?? []) {
-        const incoming = remainingIncoming.get(target)! - 1;
-        remainingIncoming.set(target, incoming);
-        if (incoming === 0) pushReady(target);
-      }
-    }
-    if (processed !== operationIssuers.length) return undefined;
-    const pass = evaluatePlan(active, forcedConflicts);
-    if (pass.cycles.length > 0 || operationConflictCandidates(pass).size > 0 || !samePlan(pass.nextPlan, active)) return undefined;
-    return { plan: active, pass };
-  };
+    };
+    const tryAcyclicNoRequirementPlan = (): { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } | undefined => {
+      if (operationIssuers.some((issuer) => issuer.candidate.rule.requires.length > 0)) return undefined;
+      const allPass = evaluatePlan(new Set(operationIssuers), forcedConflicts);
+      if (allPass.cycles.length > 0 || allPass.operationConflicts.length > 0 || allPass.failures.length > 0) return undefined;
+      // Availability is part of operation graph discovery.  An issuer whose
+      // dependency closure failed cannot participate in either a cycle or the
+      // topological blocking pass, even when its provisional action was selected.
+      const eligibleActions = allPass.selectedActions.filter((action) => allPass.dependency.get(action.issuer)?.ok === true);
 
-  let finalPass: OperationPass | undefined = tryAcyclicNoRequirementPlan()?.pass;
-  if (finalPass === undefined) {
-    let plan = new Set(operationIssuers);
-    const seenPlans = new Map<string, OperationPass>();
-    for (;;) {
-      const currentKey = planKey(plan);
-      const pass = evaluatePlan(plan, forcedConflicts);
-      if (pass.cycles.length > 0) {
-        for (const cycle of pass.cycles) for (const issuer of cycle.issuers) forcedConflicts.set(issuer, cycle.conflict);
-        plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
-        seenPlans.clear();
-        continue;
+      const actionCountByIssuer = new Map<CandidateState, number>();
+      const actionCountByTargetId = new Map<string, number>();
+      for (const action of eligibleActions) {
+        actionCountByIssuer.set(action.issuer, (actionCountByIssuer.get(action.issuer) ?? 0) + 1);
+        const targetId = String(action.target.candidate.assetId);
+        actionCountByTargetId.set(targetId, (actionCountByTargetId.get(targetId) ?? 0) + 1);
+      }
+      if ([...actionCountByIssuer.values()].some((count) => count !== 1) || [...actionCountByTargetId.values()].some((count) => count !== 1)) {
+        return undefined;
       }
 
-      // Operation validation/group conflicts are stable exclusions.  Pin them
-      // before another pass so a failed operation cannot change category after
-      // its target state changes.
-      const operationConflictSet = operationConflictCandidates(pass);
-      if (operationConflictSet.size > 0) {
-        for (const [issuer, conflict] of operationConflictSet) forcedConflicts.set(issuer, conflict);
-        plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
-        seenPlans.clear();
-        continue;
+      const outgoing = new Map<CandidateState, CandidateState[]>();
+      for (const issuer of operationIssuers) outgoing.set(issuer, []);
+      for (const action of eligibleActions) {
+        if (!operationIssuerSet.has(action.target)) continue;
+        outgoing.get(action.issuer)!.push(action.target);
       }
-      const nextKey = planKey(pass.nextPlan);
-      const priorPass = seenPlans.get(nextKey);
-      if (samePlan(pass.nextPlan, plan)) {
-        finalPass = pass;
-        break;
+      const components = stronglyConnectedComponents(operationIssuers, outgoing, compareCandidatesForOutput);
+      if (components.some((component) => component.length > 1 || (outgoing.get(component[0]!) ?? []).includes(component[0]!))) return undefined;
+
+      const remainingIncoming = new Map<CandidateState, number>();
+      for (const issuer of operationIssuers) remainingIncoming.set(issuer, 0);
+      for (const targets of outgoing.values()) for (const target of targets) remainingIncoming.set(target, remainingIncoming.get(target)! + 1);
+      const ready: CandidateState[] = [];
+      const less = (left: CandidateState, right: CandidateState): boolean => compareCandidatesForOutput(left, right) < 0;
+      const pushReady = (value: CandidateState): void => {
+        ready.push(value);
+        let index = ready.length - 1;
+        while (index > 0) {
+          const parent = Math.floor((index - 1) / 2);
+          if (!less(value, ready[parent]!)) break;
+          ready[index] = ready[parent]!;
+          index = parent;
+        }
+        ready[index] = value;
+      };
+      const popReady = (): CandidateState | undefined => {
+        const first = ready[0];
+        const last = ready.pop();
+        if (first === undefined) return undefined;
+        if (last !== undefined && ready.length > 0) {
+          let index = 0;
+          while (true) {
+            const left = index * 2 + 1;
+            if (left >= ready.length) break;
+            const right = left + 1;
+            const child = right < ready.length && less(ready[right]!, ready[left]!) ? right : left;
+            if (!less(ready[child]!, last)) break;
+            ready[index] = ready[child]!;
+            index = child;
+          }
+          ready[index] = last;
+        }
+        return first;
+      };
+      for (const issuer of operationIssuers) if (remainingIncoming.get(issuer) === 0) pushReady(issuer);
+      const active = new Set<CandidateState>();
+      const blocked = new Set<CandidateState>();
+      let processed = 0;
+      for (;;) {
+        const issuer = popReady();
+        if (issuer === undefined) break;
+        processed += 1;
+        if (!blocked.has(issuer)) {
+          active.add(issuer);
+          for (const target of outgoing.get(issuer) ?? []) blocked.add(target);
+        }
+        for (const target of outgoing.get(issuer) ?? []) {
+          const incoming = remainingIncoming.get(target)! - 1;
+          remainingIncoming.set(target, incoming);
+          if (incoming === 0) pushReady(target);
+        }
       }
-      if (priorPass !== undefined) {
-        // A dependency/operation feedback loop has no canonical traversal order.
-        // First try each failing issuer as a pure exclusion; retain a conflict
-        // only when no exclusion reaches a stable plan.
-        const feedbackIssuers = operationIssuers.filter((issuer) =>
-          (pass.statuses.get(issuer)?.kind === "included" && pass.dependency.get(issuer)?.ok === false) ||
-          (priorPass.statuses.get(issuer)?.kind === "included" && priorPass.dependency.get(issuer)?.ok === false) ||
-          pass.failures.some((failure) => failure.issuer === issuer) ||
-          priorPass.failures.some((failure) => failure.issuer === issuer),
-        ).sort(compareCandidatesForOutput);
-        const stableTrial = feedbackIssuers
-          .map((issuer) => tryStablePlanAfterExcluding(issuer))
-          .find((trial): trial is { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } => trial !== undefined);
-        if (stableTrial !== undefined) {
-          plan = new Set(stableTrial.plan);
+      if (processed !== operationIssuers.length) return undefined;
+      const pass = evaluatePlan(active, forcedConflicts);
+      if (pass.cycles.length > 0 || operationConflictCandidates(pass).size > 0 || !samePlan(pass.nextPlan, active)) return undefined;
+      return { plan: active, pass };
+    };
+
+    let finalPass: OperationPass | undefined = tryAcyclicNoRequirementPlan()?.pass;
+    if (finalPass === undefined) {
+      let plan = new Set(operationIssuers);
+      const seenPlans = new Map<string, OperationPass>();
+      for (;;) {
+        const currentKey = planKey(plan);
+        const pass = evaluatePlan(plan, forcedConflicts);
+        if (pass.cycles.length > 0) {
+          for (const cycle of pass.cycles) for (const issuer of cycle.issuers) forcedConflicts.set(issuer, cycle.conflict);
+          plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
           seenPlans.clear();
           continue;
         }
-        const fallback = feedbackIssuers.length > 0
-          ? feedbackIssuers
-          : operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)).slice(-1);
-        for (const issuer of fallback) {
-          const operation = issuer.candidate.rule.operation;
-          if (operation.kind === "add") continue;
-          const failure = [...pass.failures, ...priorPass.failures].find((item) => item.issuer === issuer);
-          forcedConflicts.set(issuer, failure?.conflict ?? makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]));
+
+        // Operation validation/group conflicts are stable exclusions.  Pin them
+        // before another pass so a failed operation cannot change category after
+        // its target state changes.
+        const operationConflictSet = operationConflictCandidates(pass);
+        if (operationConflictSet.size > 0) {
+          for (const [issuer, conflict] of operationConflictSet) forcedConflicts.set(issuer, conflict);
+          plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
+          seenPlans.clear();
+          continue;
         }
-        if (fallback.length === 0) {
+        const nextKey = planKey(pass.nextPlan);
+        const priorPass = seenPlans.get(nextKey);
+        if (samePlan(pass.nextPlan, plan)) {
           finalPass = pass;
           break;
         }
-        plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
-        seenPlans.clear();
+        if (priorPass !== undefined) {
+          // A dependency/operation feedback loop has no canonical traversal order.
+          // First try each failing issuer as a pure exclusion; retain a conflict
+          // only when no exclusion reaches a stable plan.
+          const feedbackIssuers = operationIssuers.filter((issuer) =>
+            (pass.statuses.get(issuer)?.kind === "included" && pass.dependency.get(issuer)?.ok === false) ||
+            (priorPass.statuses.get(issuer)?.kind === "included" && priorPass.dependency.get(issuer)?.ok === false) ||
+            pass.failures.some((failure) => failure.issuer === issuer) ||
+            priorPass.failures.some((failure) => failure.issuer === issuer),
+          ).sort(compareCandidatesForOutput);
+          const stableTrial = feedbackIssuers
+            .map((issuer) => tryStablePlanAfterExcluding(issuer))
+            .find((trial): trial is { readonly plan: ReadonlySet<CandidateState>; readonly pass: OperationPass } => trial !== undefined);
+          if (stableTrial !== undefined) {
+            plan = new Set(stableTrial.plan);
+            seenPlans.clear();
+            continue;
+          }
+          const fallback = feedbackIssuers.length > 0
+            ? feedbackIssuers
+            : operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)).slice(-1);
+          for (const issuer of fallback) {
+            const operation = issuer.candidate.rule.operation;
+            if (operation.kind === "add") continue;
+            const failure = [...pass.failures, ...priorPass.failures].find((item) => item.issuer === issuer);
+            forcedConflicts.set(issuer, failure?.conflict ?? makeOperationConflict(operation.targetAssetId, [issuer.candidate.assetId, operation.targetAssetId]));
+          }
+          if (fallback.length === 0) {
+            finalPass = pass;
+            break;
+          }
+          plan = new Set(operationIssuers.filter((issuer) => !forcedConflicts.has(issuer)));
+          seenPlans.clear();
+          continue;
+        }
+        seenPlans.set(currentKey, pass);
+        plan = new Set(pass.nextPlan);
+      }
+    }
+    if (finalPass === undefined) throw new Error("Scope operation fixed point was not reached.");
+    return { pass: finalPass, forcedConflicts };
+  };
+
+  type SelectionPass = {
+    readonly included: ReadonlySet<CandidateState>;
+    readonly reasons: ReadonlyMap<CandidateState, CandidateReason>;
+    readonly operationIssuers: readonly CandidateState[];
+    readonly exclusiveWinners: readonly CandidateState[];
+    readonly conflicts: readonly ResolutionConflict[];
+  };
+  const candidateKey = (state: CandidateState): string =>
+    `${String(state.candidate.assetId)}\u0000${String(state.candidate.revision)}\u0000${state.candidate.source.layer}\u0000${state.candidate.source.sourceId}`;
+  const selectCurrent = (): SelectionPass => {
+    const reasons = new Map(staticReasons);
+    const included = new Set<CandidateState>(
+      [...staticIncluded].filter((state) => !selectionExcluded.has(state)),
+    );
+    const exclusiveWinners: CandidateState[] = [];
+    const selectionConflicts: ResolutionConflict[] = [];
+    const groups = new Map<string, CandidateState[]>();
+    for (const state of staticIncluded) {
+      if (state.candidate.rule.mergeMode !== "exclusive") continue;
+      const group = groups.get(state.candidate.rule.mergeGroup) ?? [];
+      group.push(state);
+      groups.set(state.candidate.rule.mergeGroup, group);
+    }
+    for (const [mergeGroup, group] of groups) {
+      const unstableConflict = unstableExclusiveGroups.get(mergeGroup);
+      if (unstableConflict !== undefined) {
+        selectionConflicts.push(unstableConflict);
+        for (const state of group) {
+          included.delete(state);
+          reasons.set(state, resolutionConflictReason(unstableConflict, state.rank));
+        }
         continue;
       }
-      seenPlans.set(currentKey, pass);
-      plan = new Set(pass.nextPlan);
+      const candidates = group.filter((state) => !selectionExcluded.has(state));
+      const mandatory = candidates.filter((state) => state.candidate.rule.mandatory);
+      if (mandatory.length > 0) {
+        const winner = mandatory[0]!;
+        exclusiveWinners.push(winner);
+        included.add(winner);
+        for (const state of candidates) {
+          if (state === winner) continue;
+          included.delete(state);
+          reasons.set(state, {
+            kind: "overridden",
+            overriddenBy: winner.candidate.assetId,
+            mergeGroup,
+            winnerRank: winner.rank!,
+          });
+        }
+        continue;
+      }
+      if (candidates.length === 0) {
+        const groupIds = new Set(group.map((state) => String(state.candidate.assetId)));
+        const dependencyFeedback = group.every((state) => {
+          const evidence = selectionEvidence.get(state);
+          // A tie represents a selection cycle only when every failure is
+          // peer-related.  Independent failures keep the candidates
+          // unavailable even if a peer requirement also failed.
+          return evidence?.kind === "unavailable" &&
+            evidence.failedRequirements.length > 0 &&
+            evidence.failedRequirements.every((requiredId) => groupIds.has(String(requiredId)));
+        });
+        if (dependencyFeedback) {
+          const conflict: ResolutionConflict = {
+            kind: "exclusive_tie",
+            mergeGroup,
+            involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+          };
+          selectionConflicts.push(conflict);
+          for (const state of group) reasons.set(state, resolutionConflictReason(conflict, state.rank));
+        }
+        continue;
+      }
+      const decision = selectExclusiveWinner(candidates.map((state) => ({
+        candidate: state.candidate,
+        rank: state.rank!,
+      })));
+      if (decision.kind === "conflict") {
+        selectionConflicts.push(decision.conflict);
+        for (const state of candidates) {
+          included.delete(state);
+          reasons.set(state, resolutionConflictReason(decision.conflict, state.rank));
+        }
+        continue;
+      }
+      const winner = candidates.find((state) => state.candidate === decision.candidate.candidate);
+      if (winner === undefined) throw new Error("Exclusive selection returned an unknown candidate.");
+      exclusiveWinners.push(winner);
+      included.add(winner);
+      for (const state of candidates) {
+        if (state === winner) continue;
+        included.delete(state);
+        reasons.set(state, {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup,
+          winnerRank: winner.rank!,
+        });
+      }
+    }
+    const currentOperationIssuers = [...included]
+      .filter((state) => state.candidate.rule.operation.kind !== "add")
+      .sort(compareCandidatesForOutput);
+    return {
+      included,
+      reasons,
+      operationIssuers: currentOperationIssuers,
+      exclusiveWinners,
+      conflicts: selectionConflicts,
+    };
+  };
+  const dynamicReason = (state: CandidateState, pass: OperationPass): CandidateReason | undefined => {
+    const status = pass.statuses.get(state);
+    if (status?.kind === "disabled") return { kind: "disabled", disabledBy: status.disabledBy };
+    if (status?.kind === "overridden") return {
+      kind: "overridden",
+      overriddenBy: status.overriddenBy,
+      mergeGroup: status.mergeGroup,
+      winnerRank: status.winnerRank,
+    };
+    if (status?.kind === "conflict") return resolutionConflictReason(status.conflict, state.rank);
+    const outcome = pass.dependency.get(state);
+    if (outcome !== undefined && !outcome.ok) return {
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: outcome.cause,
+      failedRequirements: [...outcome.failedRequirements],
+    };
+    return undefined;
+  };
+  const currentUnavailableReason = (
+    state: CandidateState,
+    pass: OperationPass,
+  ): CandidateReason | undefined => {
+    const failures: { readonly id: AssetId; readonly cause: DependencyCause }[] = [];
+    for (const requiredId of state.candidate.rule.requires) {
+      const activeTargets = [...baseIncluded].filter((candidate) =>
+        candidate.candidate.assetId === requiredId &&
+        pass.statuses.get(candidate)?.kind === "included"
+      );
+      if (activeTargets.length === 1) {
+        const outcome = pass.dependency.get(activeTargets[0]!);
+        if (outcome !== undefined && !outcome.ok) failures.push({ id: requiredId, cause: outcome.cause });
+        continue;
+      }
+      const candidatesForId = stateById.get(String(requiredId)) ?? [];
+      const matchedCandidates = candidatesForId.filter((candidate) => candidate.matched);
+      let cause: DependencyCause;
+      if (activeTargets.length > 1) cause = "requirement_invalid";
+      else if (matchedCandidates.length > 0) {
+        const kinds = matchedCandidates.map((candidate) => statusForState(candidate, pass.statuses)?.kind);
+        if (kinds.every((kind) => kind === "disabled")) cause = "requirement_disabled";
+        else if (kinds.every((kind) => kind === "overridden")) cause = "requirement_overridden";
+        else cause = "requirement_invalid";
+      } else if (invalidById.has(String(requiredId))) cause = "requirement_invalid";
+      else if (candidatesForId.length === 0) cause = "missing_requirement";
+      else cause = "requirement_out_of_scope";
+      failures.push({ id: requiredId, cause });
+    }
+    failures.sort((left, right) => codeUnitCompare(left.id, right.id));
+    if (failures.length === 0) return undefined;
+    return {
+      kind: "unavailable",
+      availability: "unavailable",
+      cause: failures[0]!.cause,
+      failedRequirements: failures.map((failure) => failure.id),
+    };
+  };
+
+  let finalSelection = selectCurrent();
+  let operationResult: { readonly pass: OperationPass; readonly forcedConflicts: ReadonlyMap<CandidateState, ResolutionConflict> } | undefined;
+  const seenSelections = new Set<string>();
+  for (;;) {
+    finalSelection = selectCurrent();
+    for (const conflict of finalSelection.conflicts) {
+      if (conflict.kind !== "exclusive_tie") continue;
+      for (const state of staticIncluded) {
+        if (state.candidate.rule.mergeMode !== "exclusive" || state.candidate.rule.mergeGroup !== conflict.mergeGroup) continue;
+        if (!conflict.involvedAssetIds.includes(state.candidate.assetId)) continue;
+        selectionEvidence.set(state, resolutionConflictReason(conflict, state.rank));
+      }
+    }
+    const selectionKey = [...selectionExcluded].map(candidateKey).sort(codeUnitCompare).join("\u0001") +
+      "\u0002" + [...finalSelection.included].map(candidateKey).sort(codeUnitCompare).join("\u0001");
+    if (seenSelections.has(selectionKey)) break;
+    seenSelections.add(selectionKey);
+    baseReasons = new Map(finalSelection.reasons);
+    baseIncluded = new Set(finalSelection.included);
+    operationIssuers = finalSelection.operationIssuers;
+    operationIssuerSet = new Set(operationIssuers);
+    operationResult = runCurrentOperation();
+    let changed = false;
+    for (const winner of finalSelection.exclusiveWinners) {
+      if (winner.candidate.rule.mergeMode !== "exclusive") {
+        throw new Error("Exclusive selection returned a non-exclusive winner.");
+      }
+      if (winner.candidate.rule.mandatory) continue;
+      const evidence = dynamicReason(winner, operationResult.pass);
+      if (evidence === undefined) continue;
+      // Preserve an operation conflict as evidence even when this is the last
+      // selectable candidate.  An exclusive tie is synthesized below only
+      // after an earlier exclusion loses support in the current operation graph.
+      selectionExcluded.add(winner);
+      selectionEvidence.set(winner, evidence);
+      changed = true;
+    }
+    for (const state of selectionExcluded) {
+      const evidence = selectionEvidence.get(state);
+      if (evidence === undefined || evidence.kind === "excluded") continue;
+      const status = operationResult.pass.statuses.get(state);
+      let stillSupported: boolean;
+      if (evidence.kind === "disabled") stillSupported = status?.kind === "disabled";
+      else if (evidence.kind === "overridden") stillSupported = status?.kind === "overridden";
+      else if (evidence.kind === "unavailable") {
+        const currentEvidence = currentUnavailableReason(state, operationResult.pass);
+        stillSupported = currentEvidence !== undefined;
+        if (currentEvidence !== undefined) selectionEvidence.set(state, currentEvidence);
+      } else continue;
+      if (stillSupported || state.candidate.rule.mergeMode !== "exclusive") continue;
+      const mergeGroup = state.candidate.rule.mergeGroup;
+      if (unstableExclusiveGroups.has(mergeGroup)) continue;
+      const group = [...staticIncluded].filter((candidate) =>
+        candidate.candidate.rule.mergeMode === "exclusive" &&
+        candidate.candidate.rule.mergeGroup === mergeGroup
+      );
+      const conflict: ResolutionConflict = {
+        kind: "exclusive_tie",
+        mergeGroup,
+        involvedAssetIds: canonicalIds(group.map((candidate) => candidate.candidate.assetId)),
+      };
+      unstableExclusiveGroups.set(mergeGroup, conflict);
+      for (const candidate of group) selectionEvidence.delete(candidate);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  if (operationResult === undefined) throw new Error("Scope operation fixed point was not reached.");
+  const finalPass = operationResult.pass;
+  const forcedConflicts = operationResult.forcedConflicts;
+  for (const state of selectionExcluded) {
+    const evidence = selectionEvidence.get(state);
+    const status = finalPass.statuses.get(state);
+    if (status?.kind === "disabled") {
+      selectionEvidence.set(state, { kind: "disabled", disabledBy: status.disabledBy });
+      continue;
+    }
+    if (status?.kind === "overridden") {
+      selectionEvidence.set(state, {
+        kind: "overridden",
+        overriddenBy: status.overriddenBy,
+        mergeGroup: status.mergeGroup,
+        winnerRank: status.winnerRank,
+      });
+      continue;
+    }
+    if (evidence?.kind === "excluded" && evidence.cause === "resolution_conflict") {
+      if (state.candidate.rule.mergeMode !== "exclusive") continue;
+      const winner = finalSelection.exclusiveWinners.find((candidate) =>
+        candidate.candidate.rule.mergeGroup === state.candidate.rule.mergeGroup
+      );
+      if (
+        winner !== undefined &&
+        winner.candidate.rule.mergeMode === "exclusive" &&
+        finalPass.statuses.get(winner)?.kind === "included"
+      ) {
+        selectionEvidence.set(state, {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup: winner.candidate.rule.mergeGroup,
+          winnerRank: winner.rank!,
+        });
+      }
+      continue;
     }
   }
-  if (finalPass === undefined) throw new Error("Scope operation fixed point was not reached.");
 
   const finalReasons = new Map<CandidateState, CandidateReason>();
   for (const state of states) {
+    const evidence = selectionEvidence.get(state);
+    if (evidence !== undefined) {
+      finalReasons.set(state, evidence);
+      continue;
+    }
     if (!baseIncluded.has(state)) {
       finalReasons.set(state, baseReasons.get(state)!);
       continue;
@@ -1691,13 +2204,26 @@ const resolveScopeFixedPoint = (
       finalReasons.set(state, resolutionConflictReason(status.conflict, state.rank));
     } else {
       const outcome = finalPass.dependency.get(state)!;
-      if (outcome.ok) finalReasons.set(state, baseReasons.get(state)!);
-      else finalReasons.set(state, {
-        kind: "unavailable",
-        availability: "unavailable",
-        cause: outcome.cause,
-        failedRequirements: [...outcome.failedRequirements],
-      });
+      if (outcome.ok) {
+        finalReasons.set(state, {
+          ...baseReasons.get(state)!,
+          ...(outcome.degradedInfo === undefined ? {} : { degradedInfo: outcome.degradedInfo }),
+          ...(outcome.degradedCapabilities === undefined ? {} : { degradedCapabilities: outcome.degradedCapabilities }),
+        });
+      } else {
+        finalReasons.set(state, {
+          kind: "unavailable",
+          availability: "unavailable",
+          cause: outcome.cause,
+          failedRequirements: [...outcome.failedRequirements],
+          ...(outcome.failedCapabilities === undefined ? {} : { failedCapabilities: outcome.failedCapabilities }),
+        });
+      }
+    }
+  }
+  for (const reason of finalReasons.values()) {
+    if (reason.kind === "excluded" && reason.cause === "resolution_conflict") {
+      addConflict(reason.conflict);
     }
   }
 
@@ -1714,12 +2240,20 @@ const resolveScopeFixedPoint = (
       return reason?.kind === "excluded" && reason.cause === "resolution_conflict";
     })) addConflict(entry.conflict);
   }
+  for (const conflict of finalSelection.conflicts) addConflict(conflict);
 
   for (const state of states) {
     const reason = finalReasons.get(state)!;
     if (reason.kind !== "unavailable" || !state.candidate.rule.mandatory) continue;
     const outcome = finalPass.dependency.get(state)!;
     if (outcome.ok) continue;
+    if (outcome.failedCapabilities !== undefined && outcome.failedCapabilities.length > 0) {
+      addConflict({
+        kind: "capability_failure",
+        failedCapabilities: [...outcome.failedCapabilities],
+        involvedAssetIds: [state.candidate.assetId],
+      });
+    }
     if (outcome.cycleIds !== undefined) {
       addConflict({
         kind: "dependency_cycle",
