@@ -1,6 +1,6 @@
 import type { DegradedInfo, CoreErrorDetail } from "@aacl/shared";
-import { codeUnitCompare } from "./ordering.ts";
-import { coreFailure, type AssetResult } from "./failures.ts";
+import { codeUnitCompare } from "../ordering.ts";
+import { coreFailure, type AssetResult } from "../failures.ts";
 
 declare const capabilityIdBrand: unique symbol;
 declare const capabilityFeatureIdBrand: unique symbol;

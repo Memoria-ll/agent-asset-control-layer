@@ -23,7 +23,7 @@ import type {
   CapabilityId,
   CapabilityResolutionContext,
 } from "./capabilities.ts";
-import { coreFailure, type AssetResult } from "./failures.ts";
+import { coreFailure, type AssetResult } from "../failures.ts";
 import {
   normalizeResolutionDirectory,
   RESOLUTION_AXES,
@@ -32,7 +32,7 @@ import {
   type ResolutionContext,
   toResolutionContext,
 } from "./resolution-context.ts";
-import { codeUnitCompare } from "./ordering.ts";
+import { codeUnitCompare } from "../ordering.ts";
 
 export type ResolutionSourceLayer = "global" | "personal" | "project";
 

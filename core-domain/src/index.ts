@@ -41,24 +41,24 @@ export type {
 export { parseExecutionTargetCatalog } from "./catalog-document.ts";
 export type { ExecutionTargetCatalogDocument } from "./catalog-document.ts";
 
-export { toResolutionContext } from "./resolution-context.ts";
-export type { ResolutionContext } from "./resolution-context.ts";
+export { toResolutionContext } from "./resolution/resolution-context.ts";
+export type { ResolutionContext } from "./resolution/resolution-context.ts";
 
-export { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
+export { DEFAULT_ASSET_TYPE_CONTRACTS } from "./resolution/asset-type-contracts.ts";
 export type {
   AssetOperationKind,
   AssetTypeContract,
   AssetTypeContractRegistry,
   AssetTypeExecutionProfile,
   AssetTypeMergePolicy,
-} from "./asset-type-contracts.ts";
+} from "./resolution/asset-type-contracts.ts";
 
 export {
   buildCapabilityCatalog,
   evaluateCapabilityDependencies,
   featureSetContains,
   validateCapabilityContext,
-} from "./capabilities.ts";
+} from "./resolution/capabilities.ts";
 export type {
   CapabilityCatalog,
   CapabilityDefinition,
@@ -70,15 +70,15 @@ export type {
   CapabilityOffer,
   CapabilityReference,
   CapabilityResolutionContext,
-} from "./capabilities.ts";
+} from "./resolution/capabilities.ts";
 
 export {
   resolveScope,
   toResolutionReasonDto,
   toResolutionConflictDto,
   toResolutionConflictDetails,
-} from "./scope-resolver.ts";
-export type { ResolutionAxis } from "./resolution-context.ts";
+} from "./resolution/scope-resolver.ts";
+export type { ResolutionAxis } from "./resolution/resolution-context.ts";
 export type {
   ResolutionSourceLayer,
   ResolutionSource,
@@ -93,7 +93,7 @@ export type {
   ResolutionConflict,
   ResolutionEvaluation,
   ResolutionResult,
-} from "./scope-resolver.ts";
+} from "./resolution/scope-resolver.ts";
 
 export {
   applyWorkflowTransition,

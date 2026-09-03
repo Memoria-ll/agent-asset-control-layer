@@ -370,12 +370,12 @@ describe("asset type contracts", () => {
     // legitimate elsewhere in the domain — `workflow.ts` rejects a definition
     // whose type is not `workflow`, and the catalog projects role and task-type
     // by name. Only the shared resolution pipeline owes type-blindness.
-    const sourceFiles = import.meta.glob<string>("../src/scope-resolver.ts", {
+    const sourceFiles = import.meta.glob<string>("../src/resolution/scope-resolver.ts", {
       eager: true,
       import: "default",
       query: "?raw",
     });
-    const source = sourceFiles["../src/scope-resolver.ts"];
+    const source = sourceFiles["../src/resolution/scope-resolver.ts"];
     if (source === undefined) throw new Error("scope-resolver.ts was not found");
 
     expect(source, "This prohibition also applies to comment text; use wording that avoids the forbidden patterns.").not.toMatch(/assetType\s*[!=]==?\s*"/);

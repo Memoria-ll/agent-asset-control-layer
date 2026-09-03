@@ -10,7 +10,7 @@ import type {
   WorkflowId,
   ResolutionScopeInput,
 } from "@aacl/shared";
-import { coreFailure, type AssetResult } from "./failures.ts";
+import { coreFailure, type AssetResult } from "../failures.ts";
 
 /** The normalized static scope consumed by the #3 resolver. */
 export type ResolutionContext = {
