@@ -1,6 +1,6 @@
 import type { AssetId, AssetRevision, AssetType, CoreErrorDetail, DegradedInfo, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
 import type { AssetTypeContractRegistry } from "./asset-type-contracts.ts";
-import type { CapabilityDegradation, CapabilityDependency, CapabilityId, CapabilityResolutionContext } from "./capabilities.ts";
+import type { CapabilityDegradation, CapabilityDependency, CapabilityDependencyOutcome, CapabilityId, CapabilityResolutionContext } from "./capabilities.ts";
 import type { ResolutionAxis, ResolutionContext } from "./resolution-context.ts";
 
 export type ResolutionSourceLayer = "global" | "personal" | "project";
@@ -209,3 +209,40 @@ export type DependencyOutcome =
       readonly cycleIds?: readonly AssetId[];
       readonly nonCycleFailedRequirements: readonly AssetId[];
     };
+
+export type CandidateRecord = {
+    readonly candidate: AssetCandidate;
+    readonly normalized?: NormalizedCandidate;
+    readonly directoryDiagnostics?: readonly CoreErrorDetail[];
+  };
+export type FixedStatus =
+    | { readonly kind: "included" }
+    | { readonly kind: "disabled"; readonly disabledBy: AssetId }
+    | { readonly kind: "overridden"; readonly overriddenBy: AssetId; readonly mergeGroup: string; readonly winnerRank: ResolutionRank }
+    | { readonly kind: "conflict"; readonly conflict: ResolutionConflict };
+export type OperationAction = { readonly issuer: CandidateState; readonly target: CandidateState; readonly kind: "override" | "disable" };
+export type OperationFailure = { readonly issuer: CandidateState; readonly conflict: ResolutionConflict };
+export type OperationConflictEntry = { readonly conflict: ResolutionConflict; readonly issuers: readonly CandidateState[] };
+export type OperationCycle = { readonly conflict: ResolutionConflict; readonly issuers: readonly CandidateState[] };
+export type DependencyNode = {
+    readonly edges: readonly { readonly requiredId: AssetId; readonly target: CandidateState }[];
+    readonly directFailures: readonly { readonly id: AssetId; readonly cause: DependencyCause }[];
+    readonly capabilityOutcome?: CapabilityDependencyOutcome;
+  };
+export type OperationPass = {
+    readonly statuses: ReadonlyMap<CandidateState, FixedStatus>;
+    readonly dependency: ReadonlyMap<CandidateState, DependencyOutcome>;
+    readonly selectedActions: readonly OperationAction[];
+    readonly operationConflicts: readonly OperationConflictEntry[];
+    readonly failures: readonly OperationFailure[];
+    readonly cycles: readonly OperationCycle[];
+    readonly nextPlan: ReadonlySet<CandidateState>;
+  };
+
+export type SelectionPass = {
+    readonly included: ReadonlySet<CandidateState>;
+    readonly reasons: ReadonlyMap<CandidateState, CandidateReason>;
+    readonly operationIssuers: readonly CandidateState[];
+    readonly exclusiveWinners: readonly CandidateState[];
+    readonly conflicts: readonly ResolutionConflict[];
+  };
