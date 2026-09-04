@@ -10,8 +10,8 @@ import type {
   ResolveScopeInput,
 } from "./resolution-types.ts";
 import { validateResolutionInput } from "./candidate-validation.ts";
-import { matchesScope } from "./scope-matching.ts";
-import { hasUnresolvedIdentityPair, isSameIdOverlayPair, runCurrentOperation } from "./protection-overlay.ts";
+import { matchCandidates } from "./scope-matching.ts";
+import { buildIdentityGroups, isSameIdOverlayPair, runCurrentOperation } from "./protection-overlay.ts";
 import { buildCapabilityOutcomeByState } from "./dependency-evaluation.ts";
 import {
   canonicalIds,
@@ -26,6 +26,7 @@ import {
   selectCurrent,
   type SelectionContext,
 } from "./type-resolution.ts";
+import { buildExclusiveGroups } from "./ranking-precedence.ts";
 
 
 
@@ -58,91 +59,11 @@ const resolveScopeFixedPoint = (
   };
 
 
-  const states: CandidateState[] = deduplicated.map((normalized) => ({
-    candidate: normalized.candidate,
-    matched: false,
-    reason: { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: [] },
-  }));
+  const states = matchCandidates(deduplicated, context);
 
-  for (const state of states) {
-    const decision = matchesScope({ candidate: state.candidate }, context);
-    if (decision.matched) {
-      state.matched = true;
-      state.rank = decision.rank;
-      state.reason = { kind: "included", matchedAxes: decision.matchedAxes, rank: decision.rank };
-    } else {
-      state.reason = { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: decision.mismatchedAxes };
-    }
-  }
+  const matchedById = buildIdentityGroups(states, addConflict);
 
-  // Identity overlays are the only same-ID pair that is allowed to remain
-  // together.  The exemption is pairwise: an unrelated candidate keeps the
-  // entire identity group in duplicate conflict.
-  const matchedById = new Map<string, CandidateState[]>();
-  for (const state of states) {
-    if (!state.matched) continue;
-    const group = matchedById.get(String(state.candidate.assetId)) ?? [];
-    group.push(state);
-    matchedById.set(String(state.candidate.assetId), group);
-  }
-  for (const group of matchedById.values()) {
-    if (group.length < 2 || !hasUnresolvedIdentityPair(group)) continue;
-    const conflict: ResolutionConflict = {
-      kind: "duplicate_identity",
-      assetId: group[0]!.candidate.assetId,
-      involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
-    };
-    addConflict(conflict);
-    for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
-  }
-
-  const exclusiveGroups = new Map<string, CandidateState[]>();
-  for (const state of states) {
-    if (state.reason.kind !== "included" || state.candidate.rule.mergeMode !== "exclusive") continue;
-    const group = exclusiveGroups.get(state.candidate.rule.mergeGroup) ?? [];
-    group.push(state);
-    exclusiveGroups.set(state.candidate.rule.mergeGroup, group);
-  }
-  for (const [mergeGroup, group] of exclusiveGroups) {
-    // A type contract violation is settled before mandatory adjudication: whether an
-    // operation is expressible at all precedes whether an expressible one is allowed.
-    const groupTypes = new Set(group.map((state) => state.candidate.assetType));
-    if (groupTypes.size > 1) {
-      const conflict: ResolutionConflict = {
-        kind: "asset_type_conflict",
-        involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
-      };
-      addConflict(conflict);
-      for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
-      continue;
-    }
-    const mandatory = group.filter((state) => state.candidate.rule.mandatory);
-    if (mandatory.length > 1) {
-      const conflict: ResolutionConflict = {
-        kind: "mandatory_conflict",
-        involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
-      };
-      addConflict(conflict);
-      for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
-      continue;
-    }
-    if (mandatory.length === 1) {
-      const winner = mandatory[0]!;
-      for (const state of group) {
-        if (state === winner) continue;
-        state.reason = {
-          kind: "overridden",
-          overriddenBy: winner.candidate.assetId,
-          mergeGroup,
-          winnerRank: winner.rank!,
-        };
-      }
-      continue;
-    }
-    // Non-mandatory exclusive selection is derived in the fixed-point loop below.
-    // Keeping every matched candidate here allows a dynamic winner to be replaced
-    // by a lower-ranked candidate when its availability changes.
-  }
+  const exclusiveGroups = buildExclusiveGroups(states, addConflict);
 
   const stateById = new Map<string, CandidateState[]>();
   for (const state of states) {

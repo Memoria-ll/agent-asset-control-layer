@@ -15,7 +15,7 @@ import type {
 } from "./resolution-types.ts";
 import { stronglyConnectedComponents } from "./graph.ts";
 import { sourceLayerPrecedence, selectUnbeaten } from "./ranking-precedence.ts";
-import { canonicalIds, compareCandidatesForOutput } from "./result-assembly.ts";
+import { canonicalIds, compareCandidatesForOutput, resolutionConflictReason } from "./result-assembly.ts";
 
 export const isSameIdOverlayPair = (
   issuer: CandidateState,
@@ -34,6 +34,33 @@ export const hasUnresolvedIdentityPair = (
 ): boolean => group.some((left, leftIndex) =>
   group.slice(leftIndex + 1).some((right) =>
     !isSameIdOverlayPair(left, right) && !isSameIdOverlayPair(right, left)));
+
+export const buildIdentityGroups = (
+  states: CandidateState[],
+  addConflict: (conflict: ResolutionConflict) => void,
+): Map<string, CandidateState[]> => {
+  // Identity overlays are the only same-ID pair that is allowed to remain
+  // together.  The exemption is pairwise: an unrelated candidate keeps the
+  // entire identity group in duplicate conflict.
+  const matchedById = new Map<string, CandidateState[]>();
+  for (const state of states) {
+    if (!state.matched) continue;
+    const group = matchedById.get(String(state.candidate.assetId)) ?? [];
+    group.push(state);
+    matchedById.set(String(state.candidate.assetId), group);
+  }
+  for (const group of matchedById.values()) {
+    if (group.length < 2 || !hasUnresolvedIdentityPair(group)) continue;
+    const conflict: ResolutionConflict = {
+      kind: "duplicate_identity",
+      assetId: group[0]!.candidate.assetId,
+      involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+    };
+    addConflict(conflict);
+    for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
+  }
+  return matchedById;
+};
 
 export type OperationStatusContext = {
   readonly baseReasons: ReadonlyMap<CandidateState, CandidateReason>;

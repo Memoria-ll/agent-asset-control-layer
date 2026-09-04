@@ -1,5 +1,5 @@
 import { RESOLUTION_AXES, type ResolutionAxis, type ResolutionContext } from "./resolution-context.ts";
-import type { NormalizedCandidate, ScopeMatchDecision } from "./resolution-types.ts";
+import type { CandidateState, NormalizedCandidate, ScopeMatchDecision } from "./resolution-types.ts";
 import { SCOPE_PRECEDENCE, sourceLayerPrecedence } from "./ranking-precedence.ts";
 
 const directorySegments = (value: string): readonly string[] => value === "/" ? [] : value.slice(1).split("/");
@@ -57,4 +57,27 @@ export const matchesScope = (
       sourceLayerPrecedence: sourceLayerPrecedence(candidate.candidate.source.layer),
     },
   };
+};
+
+export const matchCandidates = (
+  deduplicated: readonly NormalizedCandidate[],
+  context: ResolutionContext,
+): CandidateState[] => {
+  const states: CandidateState[] = deduplicated.map((normalized) => ({
+    candidate: normalized.candidate,
+    matched: false,
+    reason: { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: [] },
+  }));
+
+  for (const state of states) {
+    const decision = matchesScope({ candidate: state.candidate }, context);
+    if (decision.matched) {
+      state.matched = true;
+      state.rank = decision.rank;
+      state.reason = { kind: "included", matchedAxes: decision.matchedAxes, rank: decision.rank };
+    } else {
+      state.reason = { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: decision.mismatchedAxes };
+    }
+  }
+  return states;
 };

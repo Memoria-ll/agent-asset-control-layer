@@ -1,6 +1,6 @@
 import type { ResolutionAxis } from "./resolution-context.ts";
 import type { CandidateState, ExclusiveDecision, RankedCandidate, ResolutionConflict, ResolutionRank, ResolutionSourceLayer } from "./resolution-types.ts";
-import { canonicalIds } from "./result-assembly.ts";
+import { canonicalIds, resolutionConflictReason } from "./result-assembly.ts";
 
 /**
  * The more specific layer wins, so a personal asset overrides a global one.
@@ -92,4 +92,58 @@ export const selectExclusiveWinner = (candidates: readonly RankedCandidate[]): E
       involvedAssetIds: canonicalIds((unbeaten.length === 0 ? candidates : unbeaten).map((candidate) => candidate.candidate.assetId)),
     },
   };
+};
+
+export const buildExclusiveGroups = (
+  states: CandidateState[],
+  addConflict: (conflict: ResolutionConflict) => void,
+): Map<string, CandidateState[]> => {
+  const exclusiveGroups = new Map<string, CandidateState[]>();
+  for (const state of states) {
+    if (state.reason.kind !== "included" || state.candidate.rule.mergeMode !== "exclusive") continue;
+    const group = exclusiveGroups.get(state.candidate.rule.mergeGroup) ?? [];
+    group.push(state);
+    exclusiveGroups.set(state.candidate.rule.mergeGroup, group);
+  }
+  for (const [mergeGroup, group] of exclusiveGroups) {
+    // A type contract violation is settled before mandatory adjudication: whether an
+    // operation is expressible at all precedes whether an expressible one is allowed.
+    const groupTypes = new Set(group.map((state) => state.candidate.assetType));
+    if (groupTypes.size > 1) {
+      const conflict: ResolutionConflict = {
+        kind: "asset_type_conflict",
+        involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+      };
+      addConflict(conflict);
+      for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
+      continue;
+    }
+    const mandatory = group.filter((state) => state.candidate.rule.mandatory);
+    if (mandatory.length > 1) {
+      const conflict: ResolutionConflict = {
+        kind: "mandatory_conflict",
+        involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
+      };
+      addConflict(conflict);
+      for (const state of group) state.reason = resolutionConflictReason(conflict, state.rank);
+      continue;
+    }
+    if (mandatory.length === 1) {
+      const winner = mandatory[0]!;
+      for (const state of group) {
+        if (state === winner) continue;
+        state.reason = {
+          kind: "overridden",
+          overriddenBy: winner.candidate.assetId,
+          mergeGroup,
+          winnerRank: winner.rank!,
+        };
+      }
+      continue;
+    }
+    // Non-mandatory exclusive selection is derived in the fixed-point loop below.
+    // Keeping every matched candidate here allows a dynamic winner to be replaced
+    // by a lower-ranked candidate when its availability changes.
+  }
+  return exclusiveGroups;
 };
