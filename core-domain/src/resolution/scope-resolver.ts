@@ -3,7 +3,6 @@ import { codeUnitCompare } from "../ordering.ts";
 import type {
   CandidateReason,
   CandidateState,
-  OperationConflictEntry,
   OperationPass,
   ResolutionConflict,
   ResolutionResult,
@@ -14,6 +13,7 @@ import { matchCandidates } from "./scope-matching.ts";
 import { buildIdentityGroups, isSameIdOverlayPair, runCurrentOperation } from "./protection-overlay.ts";
 import { buildCapabilityOutcomeByState } from "./dependency-evaluation.ts";
 import {
+  assembleResult,
   canonicalIds,
   compareCandidatesForOutput,
   conflictKey,
@@ -198,150 +198,19 @@ const resolveScopeFixedPoint = (
     if (!changed) break;
   }
   if (operationResult === undefined) throw new Error("Scope operation fixed point was not reached.");
-  const finalPass = operationResult.pass;
-  const forcedConflicts = operationResult.forcedConflicts;
-  for (const state of selectionExcluded) {
-    const evidence = selectionEvidence.get(state);
-    const status = finalPass.statuses.get(state);
-    if (status?.kind === "disabled") {
-      selectionEvidence.set(state, { kind: "disabled", disabledBy: status.disabledBy });
-      continue;
-    }
-    if (status?.kind === "overridden") {
-      selectionEvidence.set(state, {
-        kind: "overridden",
-        overriddenBy: status.overriddenBy,
-        mergeGroup: status.mergeGroup,
-        winnerRank: status.winnerRank,
-      });
-      continue;
-    }
-    if (evidence?.kind === "excluded" && evidence.cause === "resolution_conflict") {
-      if (state.candidate.rule.mergeMode !== "exclusive") continue;
-      const winner = finalSelection.exclusiveWinners.find((candidate) =>
-        candidate.candidate.rule.mergeGroup === state.candidate.rule.mergeGroup
-      );
-      if (
-        winner !== undefined &&
-        winner.candidate.rule.mergeMode === "exclusive" &&
-        finalPass.statuses.get(winner)?.kind === "included"
-      ) {
-        selectionEvidence.set(state, {
-          kind: "overridden",
-          overriddenBy: winner.candidate.assetId,
-          mergeGroup: winner.candidate.rule.mergeGroup,
-          winnerRank: winner.rank!,
-        });
-      }
-      continue;
-    }
-  }
-
-  const finalReasons = new Map<CandidateState, CandidateReason>();
-  for (const state of states) {
-    const evidence = selectionEvidence.get(state);
-    if (evidence !== undefined) {
-      finalReasons.set(state, evidence);
-      continue;
-    }
-    if (!baseIncluded.has(state)) {
-      finalReasons.set(state, baseReasons.get(state)!);
-      continue;
-    }
-    const status = finalPass.statuses.get(state) ?? { kind: "included" as const };
-    if (status.kind === "disabled") {
-      finalReasons.set(state, { kind: "disabled", disabledBy: status.disabledBy });
-    } else if (status.kind === "overridden") {
-      finalReasons.set(state, {
-        kind: "overridden",
-        overriddenBy: status.overriddenBy,
-        mergeGroup: status.mergeGroup,
-        winnerRank: status.winnerRank,
-      });
-    } else if (status.kind === "conflict") {
-      finalReasons.set(state, resolutionConflictReason(status.conflict, state.rank));
-    } else {
-      const outcome = finalPass.dependency.get(state)!;
-      if (outcome.ok) {
-        finalReasons.set(state, {
-          ...baseReasons.get(state)!,
-          ...(outcome.degradedInfo === undefined ? {} : { degradedInfo: outcome.degradedInfo }),
-          ...(outcome.degradedCapabilities === undefined ? {} : { degradedCapabilities: outcome.degradedCapabilities }),
-        });
-      } else {
-        finalReasons.set(state, {
-          kind: "unavailable",
-          availability: "unavailable",
-          cause: outcome.cause,
-          failedRequirements: [...outcome.failedRequirements],
-          ...(outcome.failedCapabilities === undefined ? {} : { failedCapabilities: outcome.failedCapabilities }),
-        });
-      }
-    }
-  }
-  for (const reason of finalReasons.values()) {
-    if (reason.kind === "excluded" && reason.cause === "resolution_conflict") {
-      addConflict(reason.conflict);
-    }
-  }
-
-  // Only conflicts whose issuer remains a resolution conflict survive.  A
-  // failed operation on a candidate disabled by another surviving operation
-  // is diagnostic noise and must not turn a resolved result into conflicted.
-  const operationConflictEntries: OperationConflictEntry[] = [];
-  operationConflictEntries.push(...finalPass.operationConflicts);
-  operationConflictEntries.push(...finalPass.failures.map((failure) => ({ conflict: failure.conflict, issuers: [failure.issuer] })));
-  for (const [issuer, conflict] of forcedConflicts) operationConflictEntries.push({ conflict, issuers: [issuer] });
-  for (const entry of operationConflictEntries) {
-    if (entry.issuers.some((issuer) => {
-      const reason = finalReasons.get(issuer);
-      return reason?.kind === "excluded" && reason.cause === "resolution_conflict";
-    })) addConflict(entry.conflict);
-  }
-  for (const conflict of finalSelection.conflicts) addConflict(conflict);
-
-  for (const state of states) {
-    const reason = finalReasons.get(state)!;
-    if (reason.kind !== "unavailable" || !state.candidate.rule.mandatory) continue;
-    const outcome = finalPass.dependency.get(state)!;
-    if (outcome.ok) continue;
-    if (outcome.failedCapabilities !== undefined && outcome.failedCapabilities.length > 0) {
-      addConflict({
-        kind: "capability_failure",
-        failedCapabilities: [...outcome.failedCapabilities],
-        involvedAssetIds: [state.candidate.assetId],
-      });
-    }
-    if (outcome.cycleIds !== undefined) {
-      addConflict({
-        kind: "dependency_cycle",
-        involvedAssetIds: canonicalIds([state.candidate.assetId, ...outcome.cycleIds]),
-      });
-    }
-    if (outcome.nonCycleFailedRequirements.length > 0) {
-      addConflict({
-        kind: "dependency_failure",
-        failedRequirement: outcome.nonCycleFailedRequirements[0]!,
-        involvedAssetIds: canonicalIds([state.candidate.assetId, ...outcome.failedRequirements]),
-      });
-    }
-  }
-
-  const allStates = [...states, ...invalidStates].sort(compareCandidatesForOutput);
-  const resultConflicts = [...conflicts.values()].sort((left, right) => {
-    const kindOrder = codeUnitCompare(left.kind, right.kind);
-    if (kindOrder !== 0) return kindOrder;
-    return codeUnitCompare(conflictKey(left), conflictKey(right));
+  return assembleResult({
+    context,
+    states,
+    invalidStates,
+    conflicts,
+    addConflict,
+    baseIncluded,
+    baseReasons,
+    selectionEvidence,
+    selectionExcluded,
+    finalSelection,
+    operationResult,
   });
-  return {
-    ok: true,
-    value: {
-      scope: context,
-      evaluations: allStates.map((state) => ({ candidate: state.candidate, reason: finalReasons.get(state) ?? state.reason })),
-      outcome: resultConflicts.length === 0 ? "resolved" : "conflicted",
-      conflicts: resultConflicts,
-    },
-  };
 };
 
 export const resolveScope = (
