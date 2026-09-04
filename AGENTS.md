@@ -32,8 +32,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   process。ビルド段を持たず Node の TypeScript type stripping で起動する。
 - Phase 1 は single-user localhost、Phase 2 は single-user remote / multi-PC、Phase 3 は
   multi-user team。remote / team 運用を local 利用の前提条件にしない。
-- Core が認証を持つまでは loopback だけで待ち受ける。`AACL_CORE_HOST` /
-  `AACL_CORE_PORT` は利用者可視の設定名であり、変更は公開契約の変更として扱う。
+- Core が認証を持つまでは loopback だけで待ち受ける。`AACL_CORE_HOST` / `AACL_CORE_PORT`
+  は利用者可視の設定名であり、変更は公開契約の変更として扱う。設定値が不正なら既定値へ
+  代替せず、startup failure として exit code 1 を返す。
 - root `package.json` の `version` が配布バージョンの正。`0.0.0` の間は保存データの破壊的変更を
   許容する development stage とする。
 

@@ -14,4 +14,5 @@
 - asset の `list` は手作業の filesystem path を読み、`save` は portable path だけを受理する。list 結果の `relativePath` を無条件に save へ渡さない。
 - server の `error` handler は `listen()` と同じ同期 turn で登録する。
 - `index.ts` は import-safe な composition root とし、listen などの起動副作用は `main.ts` だけに置く。
+- `main.ts` は SIGINT / SIGTERM handler を `startCore()` の await 前に登録する。起動中の停止要求は startup cleanup と listen 済み Core の close が終わるまで保持し、要求後は `core.listening` と startup failure event を記録しない。
 - managed root の同一性は `resolve()` による字句正規化で扱う。caller は symlink alias や case-insensitive filesystem 上の綴り違いを別 source として渡さない。

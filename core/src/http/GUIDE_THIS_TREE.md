@@ -4,4 +4,4 @@
 
 ## Local invariants
 
-- request handler の例外は transport 境界で捕捉し、`internal` の `CoreErrorDto` を返す。handler 内の未捕捉例外は応答にならず接続を停止させる。
+- request handler の例外は transport 境界で捕捉し、raw exception detail は `core.request_failed` にだけ記録する。応答には例外由来の message / details を含めず、generic な `internal` の `CoreErrorDto` を返す。
