@@ -116,7 +116,8 @@ export type CandidateReason =
         | "requirement_overridden"
         | "requirement_cycle"
         | "requirement_invalid"
-        | "capability_unavailable";
+        | "capability_unavailable"
+        | "capability_not_allowed";
       readonly failedRequirements: readonly AssetId[];
       readonly failedCapabilities?: readonly CapabilityId[];
     };
@@ -193,7 +194,8 @@ export type DependencyCause =
   | "requirement_overridden"
   | "requirement_cycle"
   | "requirement_invalid"
-  | "capability_unavailable";
+  | "capability_unavailable"
+  | "capability_not_allowed";
 
 export type DependencyOutcome =
   | {

@@ -391,6 +391,13 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   required をすべて hard failure にし、その候補を context から落とす。型は optional なので
   コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
 
+- **`CapabilityOffer.permission` は必須欄で、producer は畳み後の値を渡す。** 省略や既定値に
+  頼らず、`allowed` / `denied` を明示すること (#100)
+
+- **Capability offer は provider を同定しないため、同一 capability・同一 features の複数 offer は
+  permission が異なっても `duplicate_capability_offer` として扱う。** 複数 MCP の統合と
+  permission の畳み規則は producer 側の責務である (#100)
+
 - `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
   でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
   `scanRoot` でその root だけを走査する。** 絞り込みが効くのは全 root の走査が終わったあと

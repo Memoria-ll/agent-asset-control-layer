@@ -64,7 +64,7 @@ export const dependencyOutcomes = (
           }
         : {
             ok: false,
-            cause: "capability_unavailable",
+            cause: outcome.kind === "not_allowed" ? "capability_not_allowed" : "capability_unavailable",
             failedRequirements: [],
             failedCapabilities: outcome.failedCapabilities,
             nonCycleFailedRequirements: [],
@@ -312,9 +312,12 @@ export const dependencyOutcomes = (
         if (failures.length === 0 && capabilityFailure === undefined) {
           outcomes.set(state, { ok: true, ...mergeDegradation(outcomeSources) });
         } else {
+          // Prefer policy denial over absence because reporting a denied capability as missing hides the policy constraint.
           const cause = capabilityFailure === undefined
             ? failures[0]!.cause
-            : "capability_unavailable";
+            : capabilityFailure.kind === "not_allowed"
+              ? "capability_not_allowed"
+              : "capability_unavailable";
           outcomes.set(state, {
             ok: false,
             cause,

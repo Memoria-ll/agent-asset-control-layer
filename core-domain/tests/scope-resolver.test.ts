@@ -60,9 +60,14 @@ const capabilityReference = (value: string, features?: readonly string[]) => ({
   ...(features === undefined ? {} : { features: features.map(capabilityFeatureId) }),
 });
 
-const capabilityOffer = (value: string, features: readonly string[] = []): CapabilityOffer => ({
+const capabilityOffer = (
+  value: string,
+  features: readonly string[] = [],
+  permission: CapabilityOffer["permission"] = "allowed",
+): CapabilityOffer => ({
   capabilityId: capabilityId(value),
   features: features.map(capabilityFeatureId),
+  permission,
 });
 
 const capabilityContext = (
@@ -2574,6 +2579,33 @@ scope.project: [acme]
     expect(reason(result, "skill-a")).toMatchObject({
       kind: "unavailable",
       failedCapabilities: [capabilityId("cap-outside")],
+    });
+  });
+
+  it("T6: switches from a denied primary to an allowed fallback", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-permission-fallback", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [
+        { strength: "required", capability: capabilityReference("cap-primary") },
+        { strength: "fallback", capability: capabilityReference("cap-fallback"), fallbackFor: capabilityReference("cap-primary") },
+      ],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-fallback" }, { id: "cap-primary" }],
+      [
+        capabilityOffer("cap-primary", [], "denied"),
+        capabilityOffer("cap-fallback", [], "allowed"),
+      ],
+    ));
+
+    expect(reason(result, "skill-permission-fallback")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{
+        capabilityId: capabilityId("cap-primary"),
+        strength: "required",
+        fallbackCapabilityId: capabilityId("cap-fallback"),
+      }],
+      degradedInfo: { reasons: [expect.stringContaining("is not permitted.")] },
     });
   });
 });
