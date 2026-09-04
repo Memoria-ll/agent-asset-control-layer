@@ -1,11 +1,11 @@
 import type { AssetId } from "@aacl/shared";
 import { codeUnitCompare } from "../ordering.ts";
-import { evaluateCapabilityDependenciesInValidatedContext } from "./capabilities.ts";
+import { evaluateCapabilityDependenciesInValidatedContext } from "../capabilities/dependencies.ts";
 import type {
   CapabilityDegradation,
   CapabilityDependencyOutcome,
   CapabilityResolutionContext,
-} from "./capabilities.ts";
+} from "../capabilities/dependencies.ts";
 import type {
   CandidateReason,
   CandidateState,
