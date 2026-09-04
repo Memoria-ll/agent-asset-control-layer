@@ -74,10 +74,12 @@ export type {
 
 export {
   resolveScope,
+} from "./resolution/pipeline.ts";
+export {
   toResolutionReasonDto,
   toResolutionConflictDto,
   toResolutionConflictDetails,
-} from "./resolution/scope-resolver.ts";
+} from "./resolution/result-assembly.ts";
 export type { ResolutionAxis } from "./resolution/resolution-context.ts";
 export type {
   ResolutionSourceLayer,
@@ -93,7 +95,7 @@ export type {
   ResolutionConflict,
   ResolutionEvaluation,
   ResolutionResult,
-} from "./resolution/scope-resolver.ts";
+} from "./resolution/resolution-types.ts";
 
 export {
   applyWorkflowTransition,

@@ -17,8 +17,7 @@ issue #100 / 統合ブランチ `integration/issue-100`。
 | §3 7 seam と判断の所有者 | 48-63 | **7 seam の module 名と所有する判断。この表が分割の正** |
 | §3 新規結合の明示宣言 | 64-79 | 追加してよい import 方向。`capabilities` 箱への結合は Phase B |
 | §3 resolution Ledger の全エントリと移管先 | 80-98 | 10 エントリをどの seam の `ledger.md` へ移すか |
-| §3 軸語彙と `matchedAxes` の契約 | 106-125 | `axis-mapping.ts` の役割 |
-| §4 データフロー / 固定点の反復状態 | 126-174 | seam 間で渡す値と反復の終了条件 |
+| §4 データフロー | 126-147 | seam 間で渡す値。ただし §4 後半の `ResolutionIterationState` は本フェーズでは採らない（下記 §4） |
 | §5 7 seam の型定義 | 175-405 | 各 seam の入出力型 |
 | §9 asset type source scan の拡張 | 788-793 | **glob 拡張。本フェーズの成果物** |
 | §10.1 normalise-and-sort source comparison | 816-830 | **証明手順。正規化規則 6 項** |
@@ -36,13 +35,14 @@ root `AGENTS.md` の `## Ledger` を読む。
 
 ### やること
 
-- `core-domain/src/resolution/scope-resolver.ts` の 873-2287 行（`resolveScopeFixedPoint`）の
-  意味論を、design §3 の表が定める 7 module へ移す。
+- `core-domain/src/resolution/scope-resolver.ts` の `resolveScopeFixedPoint` の意味論を、
+  design §3 の表が定める 7 module へ移す。行番号は各ユニット着手時に測り直す
+  （A-1 で 62 宣言が出たため、design が記録した 873-2287 はもう当たらない）。
   - `candidate-validation.ts` / `scope-matching.ts` / `protection-overlay.ts` /
     `ranking-precedence.ts` / `dependency-evaluation.ts` / `type-resolution.ts` /
     `result-assembly.ts`
   - 合成のみを持つ `pipeline.ts`（順序・反復・終了条件・failure short-circuit だけ）
-  - 共通型の `resolution-types.ts`、軸対応の `axis-mapping.ts`
+  - 共通型の `resolution-types.ts`
 - 公開入口 `resolveScope` を `pipeline.ts` の実装へ接続する。`core-domain/src/index.ts` の
   re-export を新 module へ付け替える。
 - `core-domain/tests/asset-type-contracts.test.ts:368-382` の
@@ -63,8 +63,11 @@ root `AGENTS.md` の `## Ledger` を読む。
   残し、`dependency-evaluation.ts` はそこから import する。箱の移設は Phase B。
 - **`available` / `allowed` の分離をしない。** Phase C。
 - **`executionMode` / `workflow.kind` / `standalone` / `matchedAxes` の公開を導入しない。** Phase D。
-  `axis-mapping.ts` は本フェーズで作るが、用途は on-disk kebab 軸 ↔ resolver camel 軸の
-  対応を 1 箇所へ集約することに限り、公開契約へは出さない。
+- **`axis-mapping.ts` を作らない。** on-disk kebab 軸 ↔ resolver camel 軸の対応表は #4 が
+  実 Candidate projection を書くときに、その projection を通すテストと同じ変更で置く。
+  design §3 の当該テストも「#4 の実 Candidate projection とこの表を通す」と定めており、
+  #4 より先に置くと呼び出し側も実データ経路も無い表になる。対応の非自明さ
+  （`task-type` → `taskTypeId`）は root `AGENTS.md` Ledger の #3 trap が引き続き担う。
 - **`TaskId` / `workflowRevision` / `provenance` を導入しない**（#110 / #13 / #14 が owner）。
 - Core HTTP route と Extension client の配線を追加しない（#12 / #31）。
 
@@ -87,23 +90,77 @@ root `AGENTS.md` の `## Ledger` を読む。
 
 ---
 
-## 4. 証明成果物（統合 commit に記載する）
+## 4. 内部状態の表現は現行のまま維持する
 
-1. **normalise-and-sort source comparison が `0 missing / 0 added`。**
-   design §10.1（816-830 行）の正規化規則 6 項をそのまま適用する。比較対象は
-   「旧 `scope-resolver.ts` の extraction manifest に記載した semantic body」と
-   「移送先 owner の body」。`pipeline.ts` の合成コードと contract DTO は比較対象外。
-   **比較 script はリポジトリの production / test tree へ置かない**（作業ブランチのみ）。
-   差分が出たら allowlist 化せず、owner の割当てか extraction manifest を修正して再比較する。
-2. **extraction manifest** — 旧 873-2287 行の各 helper / state / nested type が、どの新 owner の
-   どのシンボルへ移ったかの一対一表。1 の比較単位を定義するので、比較より先に作る。
-3. `pnpm -r test` で既存 118 + 9 が緑。
-4. `bash ~/.claude/scripts/run-gate.sh` が exit 0（4 step すべて PASS）。
-5. `git grep -c resolveScopeFixedPoint` が 0。`scope-resolver.ts` が存在しない。
+seam へ分けるにあたり、closure が持つ内部状態の**表現**は現行のまま運ぶ。
+`states` 配列、`Map` / `Set`、再代入される `let` 群（`baseReasons` / `baseIncluded` /
+`operationIssuers` / `operationIssuerSet` / `finalSelection` / `operationResult`）は
+そのままの型で seam 関数へ明示的に渡し、戻り値で返す。
+
+design §4 の `ResolutionIterationState`（canonical sorted key による集合表現）は
+このフェーズでは採用しない。表現の作り替えは振る舞いを保存する変更ではなく、
+同一スイート緑もソース比較もどちらも証明として成立しなくなるためである
+（`rules/refactoring.md`「refactor は純粋であり、意図した振る舞い変更を運ばない」）。
+決定論の要求 RES-017 は現行表現に対して
+`case 15-m: pins fixed-point invariants for every candidate permutation` が既に pin している。
+
+`ResolutionIterationState` を採るかどうかは、seam が実在するようになってから
+別途判断する。内部表現であって公開契約ではないので、後続フェーズで扱える。
+
+## 5. 実装ユニットと証明成果物
+
+closure の入れ子宣言 147 個のうち、closure 変数を 1 つも参照しないのは
+`stronglyConnectedComponents`（61行）と `makeOperationConflict`（6行）の 2 件だけである。
+残りはキャプチャを引数へ移す必要があるため、**逐語移送になる部分とパラメータ化が要る部分を
+分けて証明する。**
+
+| unit | 内容 | 状態 |
+|---|---|---|
+| A-1 | closure の外の top-level 宣言 62 個を 6 module へ | **完了** `e086acb`。`0 missing / 0 added`（1,692 semantic 行）、2,299→1,483 行 |
+| A-2 | closure 内の型宣言 9 個、`stronglyConnectedComponents`→`graph.ts`、`statusForState`→`protection-overlay.ts`、capability builder と `dependencyOutcomes`→`dependency-evaluation.ts` | **完了** `04013e3`。累計 missing 3 / added 26、→1,073 行 |
+| A-3 | `makeOperationConflict`、`evaluatePlan`、`planKey`、`samePlan`、`runCurrentOperation` → `protection-overlay.ts` | **完了** `c00a65b`。累計 missing 9 / added 46、→652 行 |
+| A-4 | `candidateKey`、`selectCurrent`、`dynamicReason`、`currentUnavailableReason` → `type-resolution.ts` | **完了** `8851e69`。累計 missing 13 / added 80、→520 行 |
+| A-5 | prologue（validation / `states` / `matchedById` / `exclusiveGroups` / `stateById` / base state 初期化）を既存 4 seam へ | 未着手 |
+| A-6 | 反復本体と最終組み立て → `pipeline.ts` / `result-assembly.ts`、`scope-resolver.ts` 削除、`index.ts` 付け替え | 未着手 |
+| A-7 | source scan の glob 拡張、`ledger.md` 群と `AGENTS.md` の同期 | 未着手 |
+
+各ユニットで gate 4 step PASS、`core-domain` 231 件緑、**テストファイルは通算で無変更**。
+累計 `missing` はすべて「引数が増えた呼び出し行 / シグネチャ行」で、対応する `added` と
+1 対 1 に紐づくことを 1 行ずつ確認済み。ロジック行の消失は 0。
+
+**全ユニットに効いた罠**: `baseIncluded` / `baseReasons` / `operationIssuers` /
+`operationIssuerSet` は固定点反復の中で毎周新しい `Map` / `Set` へ再代入される。抽出時に
+束縛すると初回の値で固定され、typecheck も大半のテストも通ったまま収束・再選択系 18 件
+だけが落ちる。context object を**呼び出しごとに**渡すこと。
+
+**A-1 のバウンスで得た事実**: 宣言の移動（削除側）が完全でも参照側の import 漏れは
+正規化比較に映らない（0/0 のまま gate が落ちた）。ソース逐語性の証明とビルド検証は
+どちらも要る。
+
+### 証明条件
+
+1. **`0 missing`** — 旧 `scope-resolver.ts` の semantic 行が 1 行も消えていないこと。
+   design §10.1（816-830 行）の正規化規則 6 項をそのまま適用し、旧側と新側を多重集合で
+   突き合わせる。**この半分は全ユニットで例外なく満たす。**
+2. **`added` 行は全数を列挙し、1 行ずつ分類する。** 許されるのは
+   「新しい関数シグネチャ」「引数リスト」「キャプチャ変数の分割代入」「seam 呼び出しの配線」の
+   4 種類だけで、ロジックを実装する行が分類不能なまま `added` に現れてはならない。
+   キャプチャを引数へ移すときは **context object を 1 個受け取り、関数先頭で分割代入する**形を
+   採る。こうすると本文が逐語のまま残り、added は 1 ユニットあたり数行に収まる。
+3. **extraction manifest** — 旧宣言がどの新 owner のどのシンボルへ移ったかの一対一表。
+   1 と 2 の比較単位を定義するので、比較より先に作る。
+4. `pnpm -r test` で `core-domain` 231 件が緑（うち resolver は 118 direct + `it.each` 9）。
+   **テストファイルを変更しないことが件数不変の担保**であり、件数の再計上では代替しない。
+5. `bash ~/.claude/scripts/run-gate.sh` が exit 0（4 step すべて PASS）。
+6. 最終ユニット後に `git grep -c resolveScopeFixedPoint` が 0 で、`scope-resolver.ts` が存在しない。
+
+**比較 script はリポジトリの production / test tree へ置かない**（作業ブランチの
+`.claude/design/` のみ）。差分が出たら allowlist 化せず、owner の割当てか manifest を
+修正して再比較する。
 
 ---
 
-## 5. 実装上の注意（Ledger 由来）
+## 6. 実装上の注意（Ledger 由来）
 
 `core-domain/src/resolution/ledger.md` の 10 エントリはすべて本フェーズで移送される。特に:
 

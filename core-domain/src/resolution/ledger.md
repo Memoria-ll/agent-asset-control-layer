@@ -33,9 +33,10 @@
   参加する全 issuer を conflict evaluation と一致させる。`assetType` と `loadingTier` は
   `ASSET_TYPES` と `LOADING_TIERS` の membership を runtime で検証する。
 
-- **`resolveScope` の候補構造検証と fixed point の capability 評価には、同じ capability context を
-  渡す**（どちらも `evaluateCapabilityDependenciesInValidatedContext` に、冒頭で 1 度だけ
-  `validateCapabilityContext` した結果を渡す）。検証側だけ context 無しで呼ぶと、definition に
+- **候補の構造検証と dependency 評価には、同じ capability context を渡す** —
+  `candidate-validation.ts` の `validateResolutionInput` が 1 度だけ `validateCapabilityContext`
+  し、その結果を戻り値で運び、`dependency-evaluation.ts` の
+  `evaluateCapabilityDependenciesInValidatedContext` へ渡す。検証側だけ context 無しで呼ぶと、definition に
   無い feature を要求する候補が構造検証を通り、fixed point 側が `invalid_request` を返して
   `throw new Error("Validated capability dependencies must evaluate successfully.")` に落ちる
   — `CoreFailure` ではなく例外になるので、consumer からは resolver のクラッシュに見える。
@@ -51,6 +52,17 @@
   capability 名が出ない）。依存先 component は先に materialize され自身の到達を閉じているので、
   この 1 パスが不動点になる。capability 側は `componentFailedCapabilities`、requirement 側は
   `componentHasNonCycleFailure` がこの役目を持つ (#9)
+
+- **seam へ渡す context object は呼び出しのたびに組む。抽出時に束縛しない。**
+  `baseIncluded` / `baseReasons` / `operationIssuers` / `operationIssuerSet` は `pipeline.ts` の
+  固定点反復の中で毎周新しい `Map` / `Set` / 配列へ再代入される。`dependencyOutcomes` /
+  `statusForState` / `evaluatePlan` / `runCurrentOperation` / `currentUnavailableReason` は
+  これらを呼び出し時点の値として読むので、module top で束縛する・factory へ一度だけ渡す形に
+  すると初回の値で固定される。**typecheck は通り、落ちるのは operation feedback と
+  再選択を跨ぐ少数のケースだけ**（`baseIncluded` と `baseReasons` を 1 度だけ束縛した実測では
+  `case 10-i` / `10-j` / `10-k` / `15-c` の 4 件。どの欄を固定するかで落ちる集合は変わる）。
+  `capabilityOutcomeByState` は逆に反復の外で
+  1 度だけ構築する値なので、反復の中へ移さない (#100)
 
 ## Invariants / identity keys
 

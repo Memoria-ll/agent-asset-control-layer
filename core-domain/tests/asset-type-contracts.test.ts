@@ -366,19 +366,22 @@ describe("asset type contracts", () => {
   });
 
   it("keeps asset type branching out of the shared resolver source", () => {
-    // Scoped to the resolver alone, not to `src/**`: an asset type comparison is
+    // Scoped to `src/resolution`, not to `src/**`: an asset type comparison is
     // legitimate elsewhere in the domain — `workflow.ts` rejects a definition
     // whose type is not `workflow`, and the catalog projects role and task-type
-    // by name. Only the shared resolution pipeline owes type-blindness.
-    const sourceFiles = import.meta.glob<string>("../src/resolution/scope-resolver.ts", {
+    // by name. Only the shared resolution pipeline owes type-blindness, and it is
+    // spread across every module in that directory, so the whole directory is read.
+    const sourceFiles = import.meta.glob<string>("../src/resolution/*.ts", {
       eager: true,
       import: "default",
       query: "?raw",
     });
-    const source = sourceFiles["../src/resolution/scope-resolver.ts"];
-    if (source === undefined) throw new Error("scope-resolver.ts was not found");
+    const entries = Object.entries(sourceFiles);
+    if (entries.length === 0) throw new Error("No resolution source file was found");
 
-    expect(source, "This prohibition also applies to comment text; use wording that avoids the forbidden patterns.").not.toMatch(/assetType\s*[!=]==?\s*"/);
-    expect(source, "This prohibition also applies to comment text; use wording that avoids the forbidden patterns.").not.toMatch(/switch\s*\([^)]*assetType/);
+    for (const [path, source] of entries) {
+      expect(source, `${path}: this prohibition also applies to comment text; use wording that avoids the forbidden patterns.`).not.toMatch(/assetType\s*[!=]==?\s*"/);
+      expect(source, `${path}: this prohibition also applies to comment text; use wording that avoids the forbidden patterns.`).not.toMatch(/switch\s*\([^)]*assetType/);
+    }
   });
 });
