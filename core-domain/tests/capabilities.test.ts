@@ -357,7 +357,7 @@ describe("capability catalog and dependency semantics", () => {
     }
   });
 
-  it("T6: keeps the failure discriminator on a spread and a serialized outcome", () => {
+  it("T7: keeps the failure discriminator on a spread and a serialized outcome", () => {
     const catalog = context([definition("filesystem")], [offer("filesystem", [], "denied")]);
     const result = expectValue(evaluateCapabilityDependencies([
       { strength: "required", capability: reference("filesystem") },

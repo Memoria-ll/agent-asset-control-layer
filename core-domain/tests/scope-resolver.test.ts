@@ -2609,7 +2609,7 @@ scope.project: [acme]
     });
   });
 
-  it("T7: reports a propagated denial over an absence that sorts first", () => {
+  it("T8: reports a propagated denial over an absence that sorts first", () => {
     // skill-a-missing sorts before skill-b-denied, so the first required failure is the absence.
     const parent = candidateFromDocument(
       assetDocument("skill-parent", "requires: [skill-a-missing, skill-b-denied]\n", "skill"),
