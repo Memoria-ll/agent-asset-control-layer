@@ -80,7 +80,6 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   behavior を固定する。
 - view glue は `core/src/main.ts` と、VS Code API に直接触れる Extension の activation、lifecycle、
   command / webview 配線。
-- `core/src/index.ts` は副作用のない composition root。起動副作用は `main.ts` だけが持つ。
 - テストは各 package の `tests/` に置き、Vitest で実行する。最終判定は canonical gate を使う。
 
 ## Repository-wide change considerations

@@ -13,3 +13,4 @@
 - cross-process lock は恒久 regular lock file への OS-native exclusive FD lock で保持する。lock path を unlink / rename せず、descriptor と path の identity を検証する。
 - asset の `list` は手作業の filesystem path を読み、`save` は portable path だけを受理する。list 結果の `relativePath` を無条件に save へ渡さない。
 - server の `error` handler は `listen()` と同じ同期 turn で登録する。
+- `index.ts` は import-safe な composition root とし、listen などの起動副作用は `main.ts` だけに置く。
