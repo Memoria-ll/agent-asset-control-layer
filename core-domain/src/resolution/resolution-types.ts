@@ -1,4 +1,4 @@
-import type { AssetId, AssetRevision, AssetType, CoreErrorDetail, DegradedInfo, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
+import type { AssetId, AssetRevision, AssetType, CoreErrorDetail, DegradedInfo, LoadingTier, ResolutionContextInput } from "@aacl/shared";
 import type { AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import type { CapabilityDegradation, CapabilityDependency, CapabilityDependencyOutcome, CapabilityId, CapabilityResolutionContext } from "../capabilities/dependencies.ts";
 import type { ResolutionAxis, ResolutionContext } from "./resolution-context.ts";
@@ -162,7 +162,7 @@ export type ResolutionConflict =
     };
 
 export type ResolveScopeInput = {
-  readonly scope: ResolutionScopeInput;
+  readonly context: ResolutionContextInput;
   readonly snapshot: ResolutionSnapshot;
   readonly contracts?: AssetTypeContractRegistry;
   readonly capabilityContext?: CapabilityResolutionContext;

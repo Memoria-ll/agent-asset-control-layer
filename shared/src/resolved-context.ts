@@ -7,6 +7,7 @@ import {
   ProviderId,
   RoleId,
   RuntimeId,
+  SkillId,
   StageId,
   TaskTypeId,
   WorkflowId,
@@ -40,35 +41,69 @@ export const LOADING_TIERS = ["core", "discoverable", "on-demand"] as const;
 export const LoadingTier = z.enum(LOADING_TIERS);
 export type LoadingTier = z.infer<typeof LoadingTier>;
 
-/**
- * The dimensions a resolution is evaluated against. Every axis is optional: a
- * caller resolves against the axes it actually knows.
- *
- * An execution instance id is not among them. Assets declare the scope they
- * apply to, and are authored before any run exists, so an opaque identifier
- * minted when a run starts is a dimension no asset could ever be matched on.
- *
- * It is defined here rather than beside `ResolveRequest` because a resolved
- * context embeds the scope it was resolved for, while a resolve response embeds
- * the resolved context — the reverse placement makes the two modules import each
- * other.
- */
-export const ResolutionScopeInput = z.strictObject({
+export const EXECUTION_MODES = ["advisory_preparation", "development_execution"] as const;
+export const ExecutionMode = z.enum(EXECUTION_MODES);
+export type ExecutionMode = z.infer<typeof ExecutionMode>;
+
+const workflowNone = z.strictObject({ kind: z.literal("none") });
+const workflowStandalone = z.strictObject({ kind: z.literal("standalone"), skillId: SkillId });
+const workflowSelected = z.strictObject({
+  kind: z.literal("selected"),
+  workflowId: WorkflowId,
+  stageId: StageId,
+});
+
+const WorkflowSelectionSchema = z.discriminatedUnion("kind", [
+  workflowNone,
+  workflowStandalone,
+  workflowSelected,
+]);
+const DevelopmentWorkflowSelectionSchema = z.discriminatedUnion("kind", [
+  workflowStandalone,
+  workflowSelected,
+]);
+export type WorkflowSelection = z.infer<typeof WorkflowSelectionSchema>;
+export type WorkflowSelectionInput = z.input<typeof WorkflowSelectionSchema>;
+
+const resolutionContextAxes = {
   projectId: z.optional(ProjectId),
-  workflowId: z.optional(WorkflowId),
-  stageId: z.optional(StageId),
   taskTypeId: z.optional(TaskTypeId),
   roleId: z.optional(RoleId),
   providerId: z.optional(ProviderId),
   runtimeId: z.optional(RuntimeId),
   modelId: z.optional(ModelId),
   directory: z.optional(DirectoryPath),
+};
+
+/**
+ * The explicit execution state and dimensions a resolution is evaluated against.
+ * Every dimension is optional: a caller resolves against the axes it actually
+ * knows.
+ *
+ * An execution instance id is not among them. Assets declare the scope they
+ * apply to, and are authored before any run exists, so an opaque identifier
+ * minted when a run starts is a dimension no asset could ever be matched on.
+ *
+ * The development arm excludes `kind: "none"` so the invalid combination is
+ * represented in the emitted JSON Schema as well as by parsing.
+ */
+const advisoryPreparationContext = z.strictObject({
+  executionMode: z.literal("advisory_preparation"),
+  workflow: WorkflowSelectionSchema,
+  ...resolutionContextAxes,
 });
-// `z.input`, matching the name and every other `*Input` alias: a caller
-// composes a scope from plain strings, and identifier brands exist only on
-// the parsed side. A parsed scope is still assignable here, because a branded
-// string is a string.
-export type ResolutionScopeInput = z.input<typeof ResolutionScopeInput>;
+const developmentExecutionContext = z.strictObject({
+  executionMode: z.literal("development_execution"),
+  workflow: DevelopmentWorkflowSelectionSchema,
+  ...resolutionContextAxes,
+});
+export const ResolutionContextInput = z.discriminatedUnion("executionMode", [
+  advisoryPreparationContext,
+  developmentExecutionContext,
+]);
+export type ResolutionContextInput = z.input<typeof ResolutionContextInput>;
+export type ResolutionContextDto = z.infer<typeof ResolutionContextInput>;
+export type ResolutionContextDtoInput = z.input<typeof ResolutionContextInput>;
 
 /** One asset the resolution decided on, carrying the reason for that decision. */
 export const ResolvedAssetDto = z.strictObject({
@@ -107,11 +142,11 @@ export type ContextCostDtoInput = z.input<typeof ContextCostDto>;
 /**
  * The full result of a resolution.
  *
- * `scope` is repeated on the result because reconstructing a past resolved
+ * `context` is repeated on the result because reconstructing a past resolved
  * context (#13) needs the input it was produced from.
  */
 export const ResolvedContextDto = z.strictObject({
-  scope: ResolutionScopeInput,
+  context: ResolutionContextInput,
   assets: z.array(ResolvedAssetDto),
   conflicts: z.array(ConflictDto),
   cost: ContextCostDto,

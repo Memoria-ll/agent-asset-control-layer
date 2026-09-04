@@ -8,7 +8,7 @@ import type {
   StageId,
   TaskTypeId,
   WorkflowId,
-  ResolutionScopeInput,
+  ResolutionContextInput,
 } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "../failures.ts";
 
@@ -114,11 +114,11 @@ export const normalizeResolutionDirectory = (
   return { ok: true, value: { value: trimmed as DirectoryPath, segments } };
 };
 
-/** Normalize the nine resolution axes for the #3 resolver; execution IDs are rejected. */
-export const toResolutionContext = (scope: ResolutionScopeInput): AssetResult<ResolutionContext> => {
-  const raw = scope as unknown;
+/** Normalize the nine resolution axes for the #3 resolver; execution state is not a matching axis. */
+export const toResolutionContext = (contextInput: ResolutionContextInput): AssetResult<ResolutionContext> => {
+  const raw = contextInput as unknown;
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return invalidScope([detail(["scope"], "invalid_value", "The resolution scope must be an object.")]);
+    return invalidScope([detail(["context"], "invalid_value", "The resolution context must be an object.")]);
   }
 
   const input = raw as Record<string, unknown>;
@@ -135,18 +135,28 @@ export const toResolutionContext = (scope: ResolutionScopeInput): AssetResult<Re
     directory?: DirectoryPath;
   } = {};
 
+  const workflow = input.workflow;
+  if (workflow !== null && typeof workflow === "object" && !Array.isArray(workflow)) {
+    const selectedWorkflow = workflow as Record<string, unknown>;
+    if (selectedWorkflow.kind === "selected") {
+      context.workflowId = selectedWorkflow.workflowId as WorkflowId;
+      context.stageId = selectedWorkflow.stageId as StageId;
+    }
+  }
+
   for (const key of Object.keys(input)) {
+    if (key === "executionMode" || key === "workflow") continue;
     if (!isAxis(key)) {
-      details.push(detail(["scope", key], "unknown_key", `Unknown resolution scope key "${key}".`));
+      details.push(detail(["context", key], "unknown_key", `Unknown resolution context key "${key}".`));
       continue;
     }
     const value = input[key];
     if (typeof value !== "string") {
-      details.push(detail(["scope", key], "invalid_value", `Resolution scope key "${key}" must be a string.`));
+      details.push(detail(["context", key], "invalid_value", `Resolution context key "${key}" must be a string.`));
       continue;
     }
     if (value.length === 0) {
-      details.push(detail(["scope", key], "empty_identifier", `Resolution scope key "${key}" must not be empty.`));
+      details.push(detail(["context", key], "empty_identifier", `Resolution context key "${key}" must not be empty.`));
       continue;
     }
     switch (key) {
@@ -159,7 +169,7 @@ export const toResolutionContext = (scope: ResolutionScopeInput): AssetResult<Re
       case "runtimeId": context.runtimeId = value as RuntimeId; break;
       case "modelId": context.modelId = value as ModelId; break;
       case "directory": {
-        const normalized = normalizeResolutionDirectory(value, ["scope", key]);
+        const normalized = normalizeResolutionDirectory(value, ["context", key]);
         if (!normalized.ok) details.push(...(normalized.failure.details ?? []));
         else context.directory = normalized.value.value;
         break;

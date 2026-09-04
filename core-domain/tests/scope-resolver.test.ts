@@ -4,7 +4,7 @@ import {
   parseResolvedContextDto,
   tryParseResolvedContextDto,
 } from "@aacl/shared";
-import type { AssetId, AssetRevision, AssetType, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
+import type { AssetId, AssetRevision, AssetType, LoadingTier } from "@aacl/shared";
 import {
   buildCapabilityCatalog,
   parseAssetDocument,
@@ -139,21 +139,38 @@ const candidateFromDocument = (
   return candidateFromCanonicalAsset(asset, directives, fixture);
 };
 
+type ResolutionAxesInput = Partial<Record<ResolutionAxis, string>>;
+
 const resolve = (
-  scope: ResolutionScopeInput,
+  axes: ResolutionAxesInput,
   candidates: readonly AssetCandidate[],
   capabilityContextValue?: CapabilityResolutionContext,
 ) => resolveScope({
-  scope: parseResolveRequest({ scope }).scope,
+  // Test fixtures provide matching axes; the public request still carries the explicit execution state.
+  context: (() => {
+    const { workflowId, stageId, ...axesWithoutWorkflow } = axes;
+    // A selected workflow carries both ids, so one alone would silently drop that
+    // axis from matching instead of failing the fixture.
+    if ((workflowId === undefined) !== (stageId === undefined)) {
+      throw new Error("resolve() takes workflowId and stageId together, or neither.");
+    }
+    return {
+      executionMode: "advisory_preparation" as const,
+      workflow: workflowId !== undefined && stageId !== undefined
+        ? { kind: "selected" as const, workflowId, stageId }
+        : { kind: "none" as const },
+      ...axesWithoutWorkflow,
+    };
+  })(),
   snapshot: { candidates },
   ...(capabilityContextValue === undefined ? {} : { capabilityContext: capabilityContextValue }),
 });
 
 const resultValue = (
-  scope: ResolutionScopeInput,
+  axes: ResolutionAxesInput,
   candidates: readonly AssetCandidate[],
   capabilityContextValue?: CapabilityResolutionContext,
-): ResolutionResult => expectOk(resolve(scope, candidates, capabilityContextValue));
+): ResolutionResult => expectOk(resolve(axes, candidates, capabilityContextValue));
 
 const evaluation = (result: ResolutionResult, assetId: string): ResolutionEvaluation => {
   const found = result.evaluations.find((item) => item.candidate.assetId === assetId);
@@ -331,6 +348,15 @@ requires: [asset-required, asset-prerequisite]
     });
   });
 
+  it("D3: treats workflow and stage selectors as neutral for a none workflow", () => {
+    // Characterization pin: omitted workflow and stage axes remain neutral in scope matching.
+    const result = resultValue({}, [
+      candidateFromDocument(assetDocument("asset-workflow-stage", "scope.workflow: [workflow-1]\nscope.stage: [stage-1]\n"), add()),
+    ]);
+
+    expect(reason(result, "asset-workflow-stage").kind).toBe("included");
+  });
+
   it("case 2: matches any selected role and excludes an outsider", () => {
     const candidate = candidateFromDocument(assetDocument("asset-a", "scope.role: [author, reviewer]\n"), add());
     for (const [scope, expected] of [
@@ -467,7 +493,7 @@ scope.project: [acme]
   it.each([
     {
       name: "role and model",
-      scope: { roleId: "reviewer", modelId: "model-a" },
+      axes: { roleId: "reviewer", modelId: "model-a" },
       otherId: "asset-role",
       otherFields: "scope.role: [reviewer]\n",
       winnerId: "asset-model",
@@ -477,7 +503,7 @@ scope.project: [acme]
     },
     {
       name: "stage and model",
-      scope: { stageId: "review", modelId: "model-a" },
+      axes: { workflowId: "review-flow", stageId: "review", modelId: "model-a" },
       otherId: "asset-stage",
       otherFields: "scope.stage: [review]\n",
       winnerId: "asset-model",
@@ -485,8 +511,8 @@ scope.project: [acme]
       winnerAxes: ["modelId"] as const,
       winnerVector: [90],
     },
-  ])("case 21: chooses the higher-precedence axis for $name", ({ scope, otherId, otherFields, winnerId, winnerFields, winnerAxes, winnerVector }) => {
-    const result = resultValue(scope, [
+  ])("case 21: chooses the higher-precedence axis for $name", ({ axes, otherId, otherFields, winnerId, winnerFields, winnerAxes, winnerVector }) => {
+    const result = resultValue(axes, [
       candidateFromDocument(assetDocument(otherId, otherFields), exclusive("g")),
       candidateFromDocument(assetDocument(winnerId, winnerFields), exclusive("g")),
     ]);
@@ -2261,7 +2287,7 @@ scope.project: [acme]
   it("case 17.5 full DTO projection: accepts a result projected through the shared response schema", () => {
     const result = resultValue({}, [candidateFromDocument(assetDocument("asset-a"), add())]);
     const resolvedContext = {
-      scope: result.scope,
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
       assets: result.evaluations.map(({ candidate, reason: candidateReason }) => ({
         assetId: candidate.assetId,
         revision: candidate.revision,

@@ -138,7 +138,9 @@ const resolve = (
   candidates: readonly AssetCandidate[],
   contracts?: AssetTypeContractRegistry,
 ) => resolveScope({
-  scope: parseResolveRequest({ scope: {} }).scope,
+  context: parseResolveRequest({
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+  }).context,
   snapshot: { candidates },
   ...(contracts === undefined ? {} : { contracts }),
 });

@@ -11,11 +11,15 @@ import type { ProjectClient } from "../src/index.ts";
 describe("shared contract consumption", () => {
   it("loads the shared contract through the package export", () => {
     const request = parseResolveRequest({
-      scope: { projectId: "project-1" },
+      context: {
+        executionMode: "advisory_preparation",
+        workflow: { kind: "none" },
+        projectId: "project-1",
+      },
       loadingTiers: ["core"],
     });
 
-    expect(request.scope.projectId).toBe("project-1");
+    expect(request.context.projectId).toBe("project-1");
     expect(request.loadingTiers).toEqual(["core"]);
     expect(CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });

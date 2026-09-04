@@ -1,5 +1,5 @@
 import { ASSET_TYPES, LOADING_TIERS } from "@aacl/shared";
-import type { AssetType, CoreErrorDetail, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
+import type { AssetType, CoreErrorDetail, LoadingTier, ResolutionContextInput } from "@aacl/shared";
 import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
 import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import { evaluateCapabilityDependenciesInValidatedContext, validateCapabilityContext } from "../capabilities/dependencies.ts";
@@ -315,10 +315,10 @@ export const validateCandidate = (
 
 
 export const toResolutionContextSafely = (
-  scope: unknown,
+  context: unknown,
 ): AssetResult<ResolutionContext> => {
-  if (!isRecord(scope)) return invalidRequest([detail(["scope"], "invalid_value", "The resolution scope must be an object.")]);
-  const input = scope as ResolutionScopeInput;
+  if (!isRecord(context)) return invalidRequest([detail(["context"], "invalid_value", "The resolution context must be an object.")]);
+  const input = context as ResolutionContextInput;
   return toResolutionContext(input);
 };
 
@@ -332,7 +332,7 @@ export type ValidatedResolutionInput = {
 export const validateResolutionInput = (
   input: ResolveScopeInput,
 ): AssetResult<ValidatedResolutionInput> => {
-  const contextResult = toResolutionContextSafely(input?.scope);
+  const contextResult = toResolutionContextSafely(input?.context);
   if (!contextResult.ok) return contextResult;
   if (!isRecord(input) || !isRecord(input.snapshot) || !Array.isArray(input.snapshot.candidates)) {
     return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);

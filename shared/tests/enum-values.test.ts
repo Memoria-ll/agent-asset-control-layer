@@ -5,6 +5,7 @@ import {
   AVAILABILITY_STATUSES,
   COMPATIBILITY_STATUSES,
   CORE_ERROR_CODES,
+  EXECUTION_MODES,
   LOADING_TIERS,
   PROJECT_DISCOVERY_STATUSES,
   RESOLUTION_REASON_KINDS,
@@ -14,7 +15,7 @@ import {
 // modules that own them, the way no consumer needs to.
 import { CoreErrorCode } from "../src/errors.ts";
 import { CompatibilityStatus } from "../src/contract-version.ts";
-import { AssetType, LoadingTier } from "../src/resolved-context.ts";
+import { AssetType, ExecutionMode, LoadingTier } from "../src/resolved-context.ts";
 import { AvailabilityStatus, ResolutionReasonKind } from "../src/status.ts";
 import { TransitionKind } from "../src/workflow.ts";
 
@@ -24,6 +25,7 @@ describe("frozen contract enum values", () => {
     ["RESOLUTION_REASON_KINDS", RESOLUTION_REASON_KINDS, ["included", "excluded", "overridden", "disabled", "unavailable"]],
     ["AVAILABILITY_STATUSES", AVAILABILITY_STATUSES, ["available", "degraded", "unavailable"]],
     ["LOADING_TIERS", LOADING_TIERS, ["core", "discoverable", "on-demand"]],
+    ["EXECUTION_MODES", EXECUTION_MODES, ["advisory_preparation", "development_execution"]],
     ["CORE_ERROR_CODES", CORE_ERROR_CODES, ["invalid_request", "not_found", "conflict", "unavailable", "incompatible_contract", "internal"]],
     ["COMPATIBILITY_STATUSES", COMPATIBILITY_STATUSES, ["compatible", "incompatible"]],
     ["TRANSITION_KINDS", TRANSITION_KINDS, ["advance", "retry", "reject", "return"]],
@@ -46,6 +48,7 @@ describe("frozen contract enum values", () => {
     ["ResolutionReasonKind", ResolutionReasonKind, RESOLUTION_REASON_KINDS],
     ["AvailabilityStatus", AvailabilityStatus, AVAILABILITY_STATUSES],
     ["LoadingTier", LoadingTier, LOADING_TIERS],
+    ["ExecutionMode", ExecutionMode, EXECUTION_MODES],
     ["CoreErrorCode", CoreErrorCode, CORE_ERROR_CODES],
     ["CompatibilityStatus", CompatibilityStatus, COMPATIBILITY_STATUSES],
     ["TransitionKind", TransitionKind, TRANSITION_KINDS],

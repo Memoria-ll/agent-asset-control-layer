@@ -18,7 +18,11 @@ const resolvedContext = (overrides: {
   conflicts?: unknown[];
   body?: string;
 }): unknown => ({
-  scope: { projectId: "project-1" },
+  context: {
+    executionMode: "advisory_preparation",
+    workflow: { kind: "none" },
+    projectId: "project-1",
+  },
   assets: [
     {
       assetId: "asset-1",
