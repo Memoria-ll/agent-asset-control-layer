@@ -74,7 +74,7 @@ export type {
 
 export {
   resolveScope,
-} from "./resolution/scope-resolver.ts";
+} from "./resolution/pipeline.ts";
 export {
   toResolutionReasonDto,
   toResolutionConflictDto,

@@ -42,7 +42,7 @@ import { buildExclusiveGroups } from "./ranking-precedence.ts";
  * selects the next pass.  Reasons and aggregate conflicts are materialized
  * after the plan is stable.
  */
-const resolveScopeFixedPoint = (
+export const resolveScope = (
   input: ResolveScopeInput,
 ): AssetResult<ResolutionResult> => {
   const validated = validateResolutionInput(input);
@@ -212,7 +212,3 @@ const resolveScopeFixedPoint = (
     operationResult,
   });
 };
-
-export const resolveScope = (
-  input: ResolveScopeInput,
-): AssetResult<ResolutionResult> => resolveScopeFixedPoint(input);
