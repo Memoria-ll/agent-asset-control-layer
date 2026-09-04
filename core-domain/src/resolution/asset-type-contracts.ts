@@ -1,5 +1,5 @@
 import type { AssetType } from "@aacl/shared";
-import type { ResolutionOperation } from "./scope-resolver.ts";
+import type { ResolutionOperation } from "./resolution-types.ts";
 
 /**
  * The operation vocabulary a type contract may allow, derived from the resolver's
