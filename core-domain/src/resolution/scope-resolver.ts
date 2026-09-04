@@ -1,35 +1,15 @@
-import type {
-  AssetType,
-  CoreErrorDetail,
-  LoadingTier,
-} from "@aacl/shared";
-import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
-import { validateCapabilityContext } from "./capabilities.ts";
 import type { AssetResult } from "../failures.ts";
 import { codeUnitCompare } from "../ordering.ts";
 import type {
-  AssetCandidate,
   CandidateReason,
-  CandidateRecord,
   CandidateState,
-  NormalizedCandidate,
   OperationConflictEntry,
   OperationPass,
   ResolutionConflict,
   ResolutionResult,
   ResolveScopeInput,
 } from "./resolution-types.ts";
-import {
-  deduplicateExactCandidates,
-  candidatePath,
-  detail,
-  invalidDirectoryReason,
-  invalidRequest,
-  isRecord,
-  normalizeCandidateDirectory,
-  toResolutionContextSafely,
-  validateCandidate,
-} from "./candidate-validation.ts";
+import { validateResolutionInput } from "./candidate-validation.ts";
 import { matchesScope } from "./scope-matching.ts";
 import { hasUnresolvedIdentityPair, isSameIdOverlayPair, runCurrentOperation } from "./protection-overlay.ts";
 import { buildCapabilityOutcomeByState } from "./dependency-evaluation.ts";
@@ -64,25 +44,9 @@ import {
 const resolveScopeFixedPoint = (
   input: ResolveScopeInput,
 ): AssetResult<ResolutionResult> => {
-  const contextResult = toResolutionContextSafely(input?.scope);
-  if (!contextResult.ok) return contextResult;
-  if (!isRecord(input) || !isRecord(input.snapshot) || !Array.isArray(input.snapshot.candidates)) {
-    return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
-  }
-  const contracts = input.contracts ?? DEFAULT_ASSET_TYPE_CONTRACTS;
-  const capabilityContextResult = input.capabilityContext === undefined
-    ? undefined
-    : validateCapabilityContext(input.capabilityContext);
-  if (capabilityContextResult !== undefined && !capabilityContextResult.ok) {
-    // The helper reports against its own input, so its paths name `catalog` / `offers`,
-    // neither of which is a field of ResolveScopeInput.  Rooting them at the field the
-    // caller passed is what lets a consumer find the offending value.
-    return invalidRequest((capabilityContextResult.failure.details ?? []).map((item) =>
-      detail(["capabilityContext", ...item.path], item.code, item.message)));
-  }
-  const capabilityContext = capabilityContextResult === undefined || !capabilityContextResult.ok
-    ? undefined
-    : capabilityContextResult.value;
+  const validated = validateResolutionInput(input);
+  if (!validated.ok) return validated;
+  const { context, capabilityContext, invalidStates, deduplicated } = validated.value;
 
   const conflicts = new Map<string, ResolutionConflict>();
   const addConflict = (conflict: ResolutionConflict): void => {
@@ -94,62 +58,6 @@ const resolveScopeFixedPoint = (
   };
 
 
-  const records: CandidateRecord[] = [];
-  const invalidStates: CandidateState[] = [];
-  const normalizedCandidates: NormalizedCandidate[] = [];
-  const validationDetails: CoreErrorDetail[] = [];
-
-  // Structural validation is deliberately completed before directory
-  // partitioning.  A malformed candidate must never become a successful
-  // invalid-directory evaluation, and it must not be dereferenced below.
-  for (const rawCandidate of input.snapshot.candidates) {
-    const candidate = rawCandidate as AssetCandidate;
-    const structuralDetails = validateCandidate({ candidate }, contracts, capabilityContext);
-    if (structuralDetails.length > 0) {
-      validationDetails.push(...structuralDetails);
-      continue;
-    }
-    const normalized = normalizeCandidateDirectory(candidate);
-    records.push({
-      candidate,
-      ...(normalized.candidate === undefined ? {} : { normalized: normalized.candidate }),
-      ...(normalized.diagnostics === undefined ? {} : { directoryDiagnostics: normalized.diagnostics }),
-    });
-  }
-  if (validationDetails.length > 0) return invalidRequest(validationDetails);
-
-  // Payload consistency is an identity invariant over every structurally
-  // valid record, including records whose directory is later excluded.
-  const payloadByIdentity = new Map<string, { assetType: AssetType; loadingTier: LoadingTier }>();
-  for (const record of records) {
-    const { candidate } = record;
-    const identity = `${String(candidate.assetId)}\u0000${String(candidate.revision)}`;
-    const previous = payloadByIdentity.get(identity);
-    if (previous === undefined) {
-      payloadByIdentity.set(identity, { assetType: candidate.assetType, loadingTier: candidate.loadingTier });
-    } else if (previous.assetType !== candidate.assetType || previous.loadingTier !== candidate.loadingTier) {
-      validationDetails.push(detail(
-        candidatePath(candidate),
-        "invalid_value",
-        "Candidates with the same asset identity must have the same payload type and loading tier.",
-      ));
-    }
-  }
-  if (validationDetails.length > 0) return invalidRequest(validationDetails);
-
-  for (const record of records) {
-    if (record.directoryDiagnostics !== undefined) {
-      invalidStates.push({
-        candidate: record.candidate,
-        matched: false,
-        reason: invalidDirectoryReason(record.directoryDiagnostics),
-      });
-    } else if (record.normalized !== undefined) {
-      normalizedCandidates.push(record.normalized);
-    }
-  }
-
-  const deduplicated = deduplicateExactCandidates(normalizedCandidates);
   const states: CandidateState[] = deduplicated.map((normalized) => ({
     candidate: normalized.candidate,
     matched: false,
@@ -157,7 +65,7 @@ const resolveScopeFixedPoint = (
   }));
 
   for (const state of states) {
-    const decision = matchesScope({ candidate: state.candidate }, contextResult.value);
+    const decision = matchesScope({ candidate: state.candidate }, context);
     if (decision.matched) {
       state.matched = true;
       state.rank = decision.rank;
@@ -507,7 +415,7 @@ const resolveScopeFixedPoint = (
   return {
     ok: true,
     value: {
-      scope: contextResult.value,
+      scope: context,
       evaluations: allStates.map((state) => ({ candidate: state.candidate, reason: finalReasons.get(state) ?? state.reason })),
       outcome: resultConflicts.length === 0 ? "resolved" : "conflicted",
       conflicts: resultConflicts,

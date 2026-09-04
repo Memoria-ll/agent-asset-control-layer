@@ -1,12 +1,13 @@
 import { ASSET_TYPES, LOADING_TIERS } from "@aacl/shared";
 import type { AssetType, CoreErrorDetail, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
+import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
 import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
-import { evaluateCapabilityDependenciesInValidatedContext } from "./capabilities.ts";
+import { evaluateCapabilityDependenciesInValidatedContext, validateCapabilityContext } from "./capabilities.ts";
 import type { CapabilityDependency, CapabilityResolutionContext, CapabilityId } from "./capabilities.ts";
 import { coreFailure, type AssetResult } from "../failures.ts";
 import { normalizeResolutionDirectory, RESOLUTION_AXES, type NormalizedDirectory, type ResolutionAxis, type ResolutionContext, toResolutionContext } from "./resolution-context.ts";
 import { codeUnitCompare } from "../ordering.ts";
-import type { AssetCandidate, CandidateReason, NormalizedCandidate, ResolutionOperation, ResolutionRule } from "./resolution-types.ts";
+import type { AssetCandidate, CandidateReason, CandidateRecord, CandidateState, NormalizedCandidate, ResolutionOperation, ResolutionRule, ResolveScopeInput } from "./resolution-types.ts";
 import { sourceLayerPrecedence } from "./ranking-precedence.ts";
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -319,4 +320,101 @@ export const toResolutionContextSafely = (
   if (!isRecord(scope)) return invalidRequest([detail(["scope"], "invalid_value", "The resolution scope must be an object.")]);
   const input = scope as ResolutionScopeInput;
   return toResolutionContext(input);
+};
+
+export type ValidatedResolutionInput = {
+  readonly context: ResolutionContext;
+  readonly capabilityContext: CapabilityResolutionContext | undefined;
+  readonly invalidStates: CandidateState[];
+  readonly deduplicated: readonly NormalizedCandidate[];
+};
+
+export const validateResolutionInput = (
+  input: ResolveScopeInput,
+): AssetResult<ValidatedResolutionInput> => {
+  const contextResult = toResolutionContextSafely(input?.scope);
+  if (!contextResult.ok) return contextResult;
+  if (!isRecord(input) || !isRecord(input.snapshot) || !Array.isArray(input.snapshot.candidates)) {
+    return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
+  }
+  const contracts = input.contracts ?? DEFAULT_ASSET_TYPE_CONTRACTS;
+  const capabilityContextResult = input.capabilityContext === undefined
+    ? undefined
+    : validateCapabilityContext(input.capabilityContext);
+  if (capabilityContextResult !== undefined && !capabilityContextResult.ok) {
+    // The helper reports against its own input, so its paths name `catalog` / `offers`,
+    // neither of which is a field of ResolveScopeInput.  Rooting them at the field the
+    // caller passed is what lets a consumer find the offending value.
+    return invalidRequest((capabilityContextResult.failure.details ?? []).map((item) =>
+      detail(["capabilityContext", ...item.path], item.code, item.message)));
+  }
+  const capabilityContext = capabilityContextResult === undefined || !capabilityContextResult.ok
+    ? undefined
+    : capabilityContextResult.value;
+
+  const records: CandidateRecord[] = [];
+  const invalidStates: CandidateState[] = [];
+  const normalizedCandidates: NormalizedCandidate[] = [];
+  const validationDetails: CoreErrorDetail[] = [];
+
+  // Structural validation is deliberately completed before directory
+  // partitioning.  A malformed candidate must never become a successful
+  // invalid-directory evaluation, and it must not be dereferenced below.
+  for (const rawCandidate of input.snapshot.candidates) {
+    const candidate = rawCandidate as AssetCandidate;
+    const structuralDetails = validateCandidate({ candidate }, contracts, capabilityContext);
+    if (structuralDetails.length > 0) {
+      validationDetails.push(...structuralDetails);
+      continue;
+    }
+    const normalized = normalizeCandidateDirectory(candidate);
+    records.push({
+      candidate,
+      ...(normalized.candidate === undefined ? {} : { normalized: normalized.candidate }),
+      ...(normalized.diagnostics === undefined ? {} : { directoryDiagnostics: normalized.diagnostics }),
+    });
+  }
+  if (validationDetails.length > 0) return invalidRequest(validationDetails);
+
+  // Payload consistency is an identity invariant over every structurally
+  // valid record, including records whose directory is later excluded.
+  const payloadByIdentity = new Map<string, { assetType: AssetType; loadingTier: LoadingTier }>();
+  for (const record of records) {
+    const { candidate } = record;
+    const identity = `${String(candidate.assetId)}\u0000${String(candidate.revision)}`;
+    const previous = payloadByIdentity.get(identity);
+    if (previous === undefined) {
+      payloadByIdentity.set(identity, { assetType: candidate.assetType, loadingTier: candidate.loadingTier });
+    } else if (previous.assetType !== candidate.assetType || previous.loadingTier !== candidate.loadingTier) {
+      validationDetails.push(detail(
+        candidatePath(candidate),
+        "invalid_value",
+        "Candidates with the same asset identity must have the same payload type and loading tier.",
+      ));
+    }
+  }
+  if (validationDetails.length > 0) return invalidRequest(validationDetails);
+
+  for (const record of records) {
+    if (record.directoryDiagnostics !== undefined) {
+      invalidStates.push({
+        candidate: record.candidate,
+        matched: false,
+        reason: invalidDirectoryReason(record.directoryDiagnostics),
+      });
+    } else if (record.normalized !== undefined) {
+      normalizedCandidates.push(record.normalized);
+    }
+  }
+
+  const deduplicated = deduplicateExactCandidates(normalizedCandidates);
+  return {
+    ok: true,
+    value: {
+      context: contextResult.value,
+      ...(capabilityContext === undefined ? {} : { capabilityContext }),
+      invalidStates,
+      deduplicated,
+    } as ValidatedResolutionInput,
+  };
 };
