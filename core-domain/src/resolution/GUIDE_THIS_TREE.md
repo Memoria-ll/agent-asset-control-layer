@@ -17,6 +17,3 @@
 ## Change considerations
 
 - on-disk scope axis と resolution context axis は名前が異なるため、`CanonicalAsset.scope` から candidate への投影は明示的な対応表で行う。
-- `ResolveScopeInput.capabilityContext` の省略は offer 0 件を意味する。resolver を実行経路へ配線する caller は現在の capability context を明示的に渡す。
-- `ResolutionResult.context.directory` は caller の入力表現、`scope.directory` は matching 用の正規化表現。再現には前者、同一性判定には後者を使う。
-- capability offer は provider identity を持たない。同一 capability と features の複数 offer は duplicate とし、producer が permission を `allowed` / `denied` に畳んで渡す。

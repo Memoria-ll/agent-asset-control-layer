@@ -6,3 +6,5 @@
 
 - asset frontmatter は versioned strict schema。未知の top-level key と未知 schema version を拒否するため、新しい directive や field の導入は asset schema version の更新として設計する。
 - host path、clock、process、network、filesystem などの能力を domain logic に持ち込まず、入力値または注入した純粋な seam から受け取る。
+- `AgentExecutionRecord` を DTO へ投影するときは `tryParseAgentExecutionDto` で runtime validation する。
+- `AgentExecutionRecord.providerId` は、参照する Runtime と Model の `providerId` の両方に一致させる。各 ID の存在確認だけで組合せを受理しない。

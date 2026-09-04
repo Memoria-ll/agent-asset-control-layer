@@ -19,6 +19,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   複数の subtree を変更する場合は、それぞれの祖先 guide を読む。
 - 同じ事実を root と subtree guide、または複数の guide に重複させない。適用範囲が変わった
   ときは、事実を新しい最小の共通 subtree へ移す。
+- guide の置き場所は、その事実が説明する対象ではなく、その制約に違反しうる編集箇所すべてで
+  決める。caller / producer の義務も含め、全編集箇所から祖先参照で到達できる最小の共通 subtree に置く。
 - guide にはコードやテストから直接復元できない現在の制約だけを書く。実装の逐語説明、
   issue 固有の経緯、テストケースの説明は置かない。
 
@@ -68,8 +70,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   required 欄の追加を含む境界 DTO の変更は contract version を更新する。
 - Asset の source of truth は人間可読な filesystem file。その on-disk shape も公開契約であり、
   変更時は `save-schema-check` を通す。
-- Core API の request / response / error / version は公開契約。`GET /health` と `HEAD /health` は
-  `{ contractVersion }` だけを返し、Core 実装バージョンを consumer へ公開しない。
+- Core API の request / response / error / version は公開契約。`GET /health` は
+  `{ contractVersion }` を返す。`HEAD /health` は同じ status / headers を body なしで返す。
 
 ### レイヤと検証
 
@@ -88,6 +90,12 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - source を直接実行するため、TypeScript の相対 import 指定子は `.ts` で書く。
 - `core-domain` の公開面は `core-domain/src/index.ts`。公開 API を追加した変更で re-export も追加し、
   package の公開 API を使うテストは index から import する。
+- `resolveScope` を実行経路へ配線する caller は `capabilityContext` を明示的に渡す。省略は
+  capability offer が 0 件であることを意味する。
+- `ResolutionResult.context.directory` は caller の入力表現、`scope.directory` は matching 用の
+  正規化表現。再現には前者、同一性判定には後者を使う。
+- capability offer は provider identity を持たない。同一 capability と features の offer は
+  producer が permission を `allowed` / `denied` に畳み、1件として渡す。
 - package を増減するときは workspace package 検査と `gate.json` の typecheck / test /
   node-resolution の期待数を同じ変更で更新する。
 - `tsconfig.base.json` は `noUnusedLocals` を有効にしていない。コード移動では追加元に残った
