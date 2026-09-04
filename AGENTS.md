@@ -380,11 +380,12 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
   idempotency を別に設計する必要がある (#7)
 
-- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
-  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
-  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
-  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
-  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+- **公開 `ConflictDto` は `kind` を判別子とする 8 arm の discriminated union で、値集合の正は
+  `CONFLICT_KINDS`（`shared/tests/enum-values.test.ts` が逐語で pin）。** したがって内部
+  `ResolutionConflict` に kind を足すことは公開 enum への値追加であり、
+  **`CONTRACT_VERSION` の bump を伴う破壊的変更になる。** 内部だけ足して公開側を忘れる漏れは
+  `conflictExplanation` の網羅 switch と `toResolutionConflictDto` がコンパイル時に捕まえるが、
+  **bump の要否はコンパイラが見ないので、追加する側が自分で判断する** (#100)
 
 - **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
   「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の

@@ -223,6 +223,14 @@ describe("boundary states that cannot exist", () => {
       matchedAxes: [],
       degradedCapabilities: [{ capabilityId: "cap-a", strength: "required" }],
     }],
+    // Absence already carries "nothing degraded", so the empty list is a second
+    // spelling of it rather than a state of its own.
+    ["an included reason carrying an empty degradation list", {
+      kind: "included",
+      explanation: "Matched scope",
+      matchedAxes: [],
+      degradedCapabilities: [],
+    }],
   ])("rejects %s", (_name, reason) => {
     expect(() => parseResolvedContextDto(resolvedContext({ reason }))).toThrow();
   });
@@ -255,6 +263,16 @@ describe("boundary states that cannot exist", () => {
     expect(parsed.assets[0]?.reason).toMatchObject({
       degradedCapabilities: [{ capabilityId: "cap-a", strength: "preferred" }],
     });
+  });
+
+  it("keeps an empty matched-axis list representable", () => {
+    // A globally scoped asset matches no axis, so this array is a real state
+    // rather than the missing-evidence shape the rejections above cover.
+    const parsed = parseResolvedContextDto(resolvedContext({
+      reason: { kind: "included", explanation: "Matched scope", matchedAxes: [] },
+    }));
+
+    expect(parsed.assets[0]?.reason).toMatchObject({ matchedAxes: [] });
   });
 
   it("keeps an empty asset body representable", () => {
@@ -415,6 +433,25 @@ describe("published JSON Schema carries the same constraints", () => {
     expect(requirementArm.properties.failedRequirements.minItems).toBe(1);
     expect(capabilityArm.properties.failedCapabilities.minItems).toBe(1);
     expect(capabilityArm.properties.failedRequirements.minItems).toBe(1);
+  });
+
+  it("states the minimum on every optional array of the resolution contract", () => {
+    // Optional arrays mean "absent = none", so a present-but-empty one is a
+    // second spelling of absence. The required arrays are listed alongside so
+    // that a new optional array added here is a deliberate decision.
+    const s = schemas() as any;
+    const reason = s.ResolvedContextDto.properties.assets.items.properties.reason;
+    const included = reason.oneOf.find((arm: any) => arm.properties.kind.const === "included");
+
+    expect(included.properties.degradedCapabilities.minItems).toBe(1);
+    expect(included.properties.degradedInfo.properties.reasons.minItems).toBe(1);
+    expect(s.ResolveRequest.properties.loadingTiers.minItems).toBe(1);
+    expect(s.ResolveRequest.properties.ide.properties.selectedFilePaths.minItems).toBe(1);
+    expect(s.CoreErrorDto.properties.details.minItems).toBe(1);
+    // Empty is a real state here, so neither carries a minimum.
+    expect(included.properties.matchedAxes.minItems).toBeUndefined();
+    expect(s.ResolvedContextDto.properties.assets.minItems).toBeUndefined();
+    expect(s.ResolvedContextDto.properties.conflicts.minItems).toBeUndefined();
   });
 
   it("requires a fallback on the required capability-degradation arm only", () => {

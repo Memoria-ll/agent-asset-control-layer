@@ -126,9 +126,13 @@ export const ResolutionReason = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("included"),
     explanation: NonEmptyString,
+    // `matchedAxes` is unconstrained: a globally scoped asset matches no axis,
+    // so the empty array is a real state rather than missing evidence.
     matchedAxes: z.array(NonEmptyString),
     degradedInfo: z.optional(DegradedInfo),
-    degradedCapabilities: z.optional(z.array(CapabilityDegradationDto)),
+    // Absence already means "no capability degraded", so a present-but-empty
+    // list is a second spelling of the same state and nothing else.
+    degradedCapabilities: z.optional(z.array(CapabilityDegradationDto).check(z.minLength(1))),
   }),
   z.strictObject({
     kind: z.literal("excluded"),
