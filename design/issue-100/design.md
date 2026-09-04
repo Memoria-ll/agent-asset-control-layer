@@ -147,6 +147,8 @@ pipeline は次の型を通る。`AssetResult` の failure は validation stage 
 
 ### 固定点の反復状態と終了
 
+**この節の `ResolutionIterationState` は Phase A では採用していない。** Phase A は `states` 配列・`Map` / `Set`・再代入される `let` 群という現行の表現のまま seam へ渡した。表現の作り替えは振る舞いを保存する変更ではなく、同一スイート緑もソース比較もどちらも証明として成立しなくなるためである。決定論の要求 RES-017 は現行表現に対して `case 15-m: pins fixed-point invariants for every candidate permutation` が pin している。採否は seam が実在するようになった今、内部表現の判断として後続フェーズで決める。
+
 composition root が保持する反復値は次の一つの値として受け渡す。
 
 ```text
@@ -846,7 +848,7 @@ source 集合の読み込み後は `source === undefined` の判定を、glob �
 
 | phase | 内容 | 触る箱 | 証明条件 |
 |---|---|---|---|
-| A | 7 seam へのファイル分割のみ。契約は据え置き。§9 の glob 拡張を同じ成果物に含め、`scope-resolver.ts:873-2287` の意味論を pipeline と各 seam へ移し、public `resolveScope` を新 pipeline へ接続する | `core-domain/src/resolution/`、`core-domain/src/index.ts`、`core-domain/tests/`、`core-domain/src/resolution/ledger.md` | §10.1 の `rules/refactoring.md` normalise-and-sort source comparison が `0 missing / 0 added`。既存 118 direct + `it.each` 9 が同一 public entry から green。glob は新 seam を含み、source scan が green。typecheck / package boundary も green |
+| A | 7 seam へのファイル分割。契約は据え置き。§9 の glob 拡張を同じ成果物に含め、`resolveScopeFixedPoint` の意味論を `pipeline.ts` と各 seam へ移し、public `resolveScope` を `pipeline.ts` が持つ。**着地済み（`47d07aa`、9 ユニット）** | `core-domain/src/resolution/`、`core-domain/src/index.ts`、`core-domain/tests/`、`core-domain/src/resolution/ledger.md`、root `AGENTS.md` | 正規化比較で missing 17 / added 128。missing はすべて引数が増えた呼び出し行・シグネチャ行と委譲ラッパ削除の 2 行で、対応する added と 1 対 1 に紐づき、ロジック行の消失は 0。`scope-resolver.test.ts` は無変更で core-domain 231 件 green。glob は新 seam を含み、`graph.ts` への違反注入で当該ファイルを名指しして赤になることを確認済み。gate 4 step PASS |
 | B | capabilities 箱への移設のみ。availability / permission の分離を含めず、current capability semantics、required / optional / preferred / fallback、explicit empty snapshot をそのまま移す。domain 入口の `capabilitySnapshot` を required value として接続する | `core-domain/src/capabilities/`、`core-domain/src/resolution/`、`core-domain/src/index.ts`、`core-domain/tests/`、capabilities Ledger、root `AGENTS.md` Ledger | 同一スイート green。移動後の S1-S6 / S10 / S13 / S15 と Resolver integration S7-S9 / S16-S17 が同じ結果を返し、explicit empty snapshot が「0 offers」の値として green。dependency direction / host 禁止も green |
 | C | available / allowed 分離。`CapabilityOffer` を availability と permission の直積で観測し、`available && allowed` を成功 predicate とする。第三の未観測状態を作らない | `core-domain/src/capabilities/`、`core-domain/src/resolution/dependency-evaluation.ts`、`core-domain/tests/`、capabilities Ledger | 新規 capability tests の赤証明を先に得てから実装し、実装後にその tests、既存 Resolver integration、explicit empty snapshot が green。available / allowed 各組合せと capability reason が一致する |
 | D | context union（`executionMode` + optional project axis + workflow selection）と reason / conflict 構造化。`scope` → `context`、`matchedAxes`、閉じた conflict kind を `shared` strict schema に定め、`CONTRACT_VERSION` を `0.5.0` とする | `shared/src/`、`shared/tests/`、`core-domain/src/resolution/`、`core-domain/tests/`、両 package の index、`json-schema.ts`、root Ledger | 新規 context / reason / conflict tests の赤証明を先に得てから実装し、parser と JSON Schema の照合が green。`development_execution` + `kind:none` だけを拒否し、advisory + selected / development + standalone を受理。既存 118 + `it.each` 9 の behavior pin と public projection が green |
