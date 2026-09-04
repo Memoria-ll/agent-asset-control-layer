@@ -35,6 +35,7 @@ export type CapabilityDependency =
 export type CapabilityOffer = {
   readonly capabilityId: CapabilityId;
   readonly features: readonly CapabilityFeatureId[];
+  readonly permission: "allowed" | "denied";
 };
 
 export type CapabilityResolutionContext = {
@@ -42,11 +43,24 @@ export type CapabilityResolutionContext = {
   readonly offers: readonly CapabilityOffer[];
 };
 
-export type CapabilityDegradation = {
-  readonly capabilityId: CapabilityId;
-  readonly strength: "required" | "optional" | "preferred";
-  readonly fallbackCapabilityId?: CapabilityId;
-};
+/**
+ * A `required` dependency degrades only by standing a usable fallback in its
+ * place; with none it is a hard failure and the candidate leaves the context.
+ * Splitting the arms is what stops a `required` degradation from being built
+ * without naming what satisfied it — the state the public
+ * `CapabilityDegradationDto` also refuses.
+ */
+export type CapabilityDegradation =
+  | {
+      readonly capabilityId: CapabilityId;
+      readonly strength: "required";
+      readonly fallbackCapabilityId: CapabilityId;
+    }
+  | {
+      readonly capabilityId: CapabilityId;
+      readonly strength: "optional" | "preferred";
+      readonly fallbackCapabilityId?: CapabilityId;
+    };
 
 export type CapabilityDependencyOutcome =
   | {
@@ -56,6 +70,7 @@ export type CapabilityDependencyOutcome =
     }
   | {
       readonly ok: false;
+      readonly kind: "unavailable" | "not_allowed";
       readonly failedCapabilities: readonly CapabilityId[];
       readonly reasons: readonly string[];
     };
@@ -247,6 +262,15 @@ export const validateCapabilityContext = (
       continue;
     }
     const offerId = offerValue.capabilityId as CapabilityId;
+    const permission = offerValue.permission;
+    if (permission !== "allowed" && permission !== "denied") {
+      details.push(detail(
+        ["offers", String(index), "permission"],
+        "invalid_capability_permission",
+        "Capability offer permission must be allowed or denied.",
+      ));
+      continue;
+    }
     const definition = catalog.get(offerId);
     if (definition === undefined) {
       details.push(detail(["offers", String(index), "capabilityId"], "unknown_capability_id", `Capability "${offerId}" is not declared in the catalog.`));
@@ -262,7 +286,7 @@ export const validateCapabilityContext = (
     } else {
       seenOffers.add(offerKey);
     }
-    offers.push({ capabilityId: offerId, features });
+    offers.push({ capabilityId: offerId, features, permission });
   }
 
   if (details.length > 0) return invalidCapabilityInput(details);
@@ -393,21 +417,33 @@ const normalizeDependencies = (
 
 const emptyContext = (): CapabilityResolutionContext => ({ catalog: new Map(), offers: [] });
 
+type CapabilityUsability = "usable" | "denied" | "missing";
+
 const capabilityAvailable = (
   reference: CapabilityReference,
   context: CapabilityResolutionContext,
-): boolean => {
-  if (!context.catalog.has(reference.capabilityId)) return false;
-  return context.offers.some((offer) =>
+): CapabilityUsability => {
+  if (!context.catalog.has(reference.capabilityId)) return "missing";
+  const matchingOffers = context.offers.filter((offer) =>
     offer.capabilityId === reference.capabilityId
     && featureSetContains(offer.features, reference.features ?? []));
+  if (matchingOffers.length === 0) return "missing";
+  return matchingOffers.some((offer) => offer.permission === "allowed") ? "usable" : "denied";
 };
 
 const capabilityReasonText = (
   capabilityId: CapabilityId,
   strength: CapabilityStrength,
+  usability: CapabilityUsability,
   fallbackCapabilityId?: CapabilityId,
 ): string => {
+  if (usability === "denied") {
+    if (strength === "fallback") return `Fallback capability "${capabilityId}" is not permitted.`;
+    if (fallbackCapabilityId !== undefined) {
+      return `Fallback capability "${fallbackCapabilityId}" was selected because capability "${capabilityId}" with ${strength} strength is not permitted.`;
+    }
+    return `Capability "${capabilityId}" with ${strength} strength is not permitted.`;
+  }
   if (strength === "fallback") return `Fallback capability "${capabilityId}" is unavailable.`;
   if (fallbackCapabilityId !== undefined) {
     return `Capability "${capabilityId}" with ${strength} strength is unavailable; fallback capability "${fallbackCapabilityId}" was selected.`;
@@ -464,13 +500,18 @@ const evaluateNormalizedDependencies = (
 
   const failedCapabilities: CapabilityId[] = [];
   const failureReasons: Array<{ readonly capabilityId: CapabilityId; readonly text: string }> = [];
+  const failureKinds: CapabilityUsability[] = [];
   const degradations: CapabilityDegradation[] = [];
   const degradationReasons: Array<{ readonly capabilityId: CapabilityId; readonly text: string }> = [];
   for (const dependency of primaryDependencies) {
-    if (capabilityAvailable(dependency.capability, context)) continue;
+    const primaryUsability = capabilityAvailable(dependency.capability, context);
+    if (primaryUsability === "usable") continue;
 
     const fallback = fallbackByPrimary.get(referenceKey(dependency.capability));
-    if (fallback !== undefined && capabilityAvailable(fallback.capability, context)) {
+    const fallbackUsability = fallback === undefined
+      ? undefined
+      : capabilityAvailable(fallback.capability, context);
+    if (fallbackUsability === "usable" && fallback !== undefined) {
       degradations.push({
         capabilityId: dependency.capability.capabilityId,
         strength: dependency.strength,
@@ -481,6 +522,7 @@ const evaluateNormalizedDependencies = (
         text: capabilityReasonText(
           dependency.capability.capabilityId,
           dependency.strength,
+          primaryUsability,
           fallback.capability.capabilityId,
         ),
       });
@@ -489,17 +531,19 @@ const evaluateNormalizedDependencies = (
 
     const primaryFailureReason = {
       capabilityId: dependency.capability.capabilityId,
-      text: capabilityReasonText(dependency.capability.capabilityId, dependency.strength),
+      text: capabilityReasonText(dependency.capability.capabilityId, dependency.strength, primaryUsability),
     };
     const fallbackFailureReason = fallback === undefined ? undefined : {
-      capabilityId: fallback.capability.capabilityId,
-      text: capabilityReasonText(fallback.capability.capabilityId, "fallback"),
+      capabilityId: fallback!.capability.capabilityId,
+      text: capabilityReasonText(fallback!.capability.capabilityId, "fallback", fallbackUsability!),
     };
     if (dependency.strength === "required") {
       failedCapabilities.push(dependency.capability.capabilityId);
+      failureKinds.push(primaryUsability);
       failureReasons.push(primaryFailureReason);
       if (fallbackFailureReason !== undefined && fallback !== undefined) {
         failedCapabilities.push(fallback.capability.capabilityId);
+        failureKinds.push(fallbackUsability!);
         failureReasons.push(fallbackFailureReason);
       }
     } else {
@@ -526,10 +570,14 @@ const evaluateNormalizedDependencies = (
   // A required failure removes the candidate, so soft degradation cannot be retained alongside it.
   if (failedCapabilities.length > 0) {
     const uniqueFailedCapabilities = [...new Set(failedCapabilities)].sort(codeUnitCompare);
+    // `kind` stays an ordinary enumerable field: the outcome is publicly re-exported, so a
+    // consumer that spreads, clones, or serializes it would otherwise lose the discriminator
+    // and turn a denial into an indistinguishable absence.
     return {
       ok: true,
       value: {
         ok: false,
+        kind: failureKinds.includes("denied") ? "not_allowed" : "unavailable",
         failedCapabilities: uniqueFailedCapabilities,
         reasons: canonicalReasons(failureReasons),
       },

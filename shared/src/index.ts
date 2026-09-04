@@ -48,6 +48,7 @@ export type {
   TaskTypeId,
   ProviderId,
   RuntimeId,
+  SkillId,
   ModelId,
   SessionId,
   AgentExecutionId,
@@ -61,7 +62,9 @@ export type {
   ResolutionReasonKind,
   AvailabilityStatus,
   DegradedInfo,
+  CapabilityDegradationDto,
   ResolutionReason,
+  ConflictKind,
   ConflictDto,
 } from "./status.ts";
 
@@ -108,7 +111,12 @@ export type {
 export type {
   AssetType,
   LoadingTier,
-  ResolutionScopeInput,
+  ExecutionMode,
+  WorkflowSelection,
+  WorkflowSelectionInput,
+  ResolutionContextInput,
+  ResolutionContextDto,
+  ResolutionContextDtoInput,
   ResolvedAssetDto,
   ContextCostDto,
   ResolvedContextDto,
@@ -165,8 +173,9 @@ export type {
 // schema is built from, so the two cannot drift.
 // ---------------------------------------------------------------------------
 
-export { ASSET_TYPES, LOADING_TIERS } from "./resolved-context.ts";
+export { ASSET_TYPES, LOADING_TIERS, EXECUTION_MODES } from "./resolved-context.ts";
 export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
+export { CONFLICT_KINDS } from "./status.ts";
 export { CORE_ERROR_CODES } from "./errors.ts";
 export { COMPATIBILITY_STATUSES } from "./contract-version.ts";
 export { TRANSITION_KINDS } from "./workflow.ts";

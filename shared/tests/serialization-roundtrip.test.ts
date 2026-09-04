@@ -6,7 +6,12 @@ import { contractSchemas } from "../src/json-schema.ts";
 
 const representativeInputs: Record<string, unknown> = {
   ResolveRequest: {
-    scope: { projectId: "project-1", directory: "/workspace" },
+    context: {
+      executionMode: "advisory_preparation",
+      workflow: { kind: "none" },
+      projectId: "project-1",
+      directory: "/workspace",
+    },
     ide: {
       workspaceFolder: "/workspace",
       activeFilePath: "/workspace/readme.md",
@@ -16,27 +21,35 @@ const representativeInputs: Record<string, unknown> = {
   },
   ResolveResponse: {
     resolvedContext: {
-      scope: { projectId: "project-1" },
+      context: {
+        executionMode: "advisory_preparation",
+        workflow: { kind: "none" },
+        projectId: "project-1",
+      },
       assets: [
         {
           assetId: "asset-1",
           revision: "revision-1",
           assetType: "skill",
           loadingTier: "core",
-          reason: { kind: "included", explanation: "Matched scope" },
+          reason: { kind: "included", explanation: "Matched scope", matchedAxes: [] },
           body: "# Example",
           tokenEstimate: 12,
         },
       ],
       conflicts: [
-        { explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] },
+        { kind: "mandatory_conflict", explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] },
       ],
       cost: { totalTokenEstimate: 12, includedAssetCount: 1, excludedAssetCount: 0 },
       resolvedAt: "2026-08-30T01:02:03+09:00",
     },
   },
   ResolvedContextDto: {
-    scope: { projectId: "project-1" },
+    context: {
+      executionMode: "advisory_preparation",
+      workflow: { kind: "none" },
+      projectId: "project-1",
+    },
     assets: [],
     conflicts: [],
     cost: { totalTokenEstimate: 0, includedAssetCount: 0, excludedAssetCount: 0 },
@@ -149,18 +162,22 @@ describe("contract serialization", () => {
   });
 
   it("normalizes omitted and explicitly undefined optional fields after JSON", () => {
-    const omitted = parseResolveRequest({ scope: {} });
-    const explicitUndefined = parseResolveRequest({ scope: {}, ide: undefined });
+    const context = {
+      executionMode: "advisory_preparation" as const,
+      workflow: { kind: "none" as const },
+    };
+    const omitted = parseResolveRequest({ context });
+    const explicitUndefined = parseResolveRequest({ context, ide: undefined });
 
-    expect(Object.keys(omitted)).toEqual(["scope"]);
-    expect(Object.keys(explicitUndefined)).toEqual(["scope", "ide"]);
+    expect(Object.keys(omitted)).toEqual(["context"]);
+    expect(Object.keys(explicitUndefined)).toEqual(["context", "ide"]);
     expect(Object.prototype.hasOwnProperty.call(omitted, "ide")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(explicitUndefined, "ide")).toBe(true);
 
     const omittedAfterJson = JSON.parse(JSON.stringify(omitted));
     const explicitAfterJson = JSON.parse(JSON.stringify(explicitUndefined));
-    expect(Object.keys(omittedAfterJson)).toEqual(["scope"]);
-    expect(Object.keys(explicitAfterJson)).toEqual(["scope"]);
+    expect(Object.keys(omittedAfterJson)).toEqual(["context"]);
+    expect(Object.keys(explicitAfterJson)).toEqual(["context"]);
     expect(explicitAfterJson).toEqual(omittedAfterJson);
   });
 

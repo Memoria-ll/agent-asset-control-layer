@@ -214,8 +214,8 @@ local-first Core、およびその Workbench となる VS Code Extension。
 - 観察中: `core/src/config` / `http` / `logging` は独立して変更された実績がない
   （3 つとも変更 1 回、しかも同一コミット）。**次に `http` へエンドポイントを足すとき、
   `config` と `logging` が同時に動くかで、この 3 分割が変更の単位と合っているかを判定する。**
-- 観察中: Ledger の内訳は root 26 件 / 箱 18 件で、**箱をまたぐ事実の方が多い**。
-  19 箱のうち 12 箱がエントリ 0 件。この比率が「箱の切りすぎ」なのか「このドメインでは
+- 観察中: Ledger の内訳は root 26 件 / 箱 19 件で、**箱をまたぐ事実の方が多い**。
+  20 箱のうち 13 箱がエントリ 0 件。この比率が「箱の切りすぎ」なのか「このドメインでは
   箱をまたぐ結合が本質的に多い」のかで取るべき手が逆になるため、#108 で測る。
 
 ### レイヤ / seam mapping
@@ -295,6 +295,7 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
 - `core/src/workflow/ledger.md`
 - `core/tests/ledger.md`
 - `core-domain/src/ledger.md`
+- `core-domain/src/capabilities/ledger.md`
 - `core-domain/src/resolution/ledger.md`
 - `core-domain/tests/ledger.md`
 - `shared/src/ledger.md`
@@ -379,16 +380,30 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
   idempotency を別に設計する必要がある (#7)
 
-- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
-  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
-  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
-  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
-  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+- **公開 `ConflictDto` は `kind` を判別子とする 8 arm の discriminated union で、値集合の正は
+  `CONFLICT_KINDS`（`shared/tests/enum-values.test.ts` が逐語で pin）。** したがって内部
+  `ResolutionConflict` に kind を足すことは公開 enum への値追加であり、
+  **`CONTRACT_VERSION` の bump を伴う破壊的変更になる。** 内部だけ足して公開側を忘れる漏れは
+  `conflictExplanation` の網羅 switch と `toResolutionConflictDto` がコンパイル時に捕まえるが、
+  **bump の要否はコンパイラが見ないので、追加する側が自分で判断する** (#100)
 
 - **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
   「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
   required をすべて hard failure にし、その候補を context から落とす。型は optional なので
   コンパイルも gate も通る。resolver を配線する面（#12 / #82）はこの欄を必ず埋めること (#9)
+
+- **`CapabilityOffer.permission` は必須欄で、producer は畳み後の値を渡す。** 省略や既定値に
+  頼らず、`allowed` / `denied` を明示すること (#100)
+
+- **`ResolutionResult` の `context.directory` は caller が送った文字列そのまま、
+  `scope.directory` は末尾スラッシュを落とした正規化形。** 両方 `DirectoryPath` なので
+  取り違えても typecheck も gate も緑のまま通り、`/repo/src/` と `/repo/src` が
+  一致しない。matching / 同一性判定に使うのは `scope`、resolved context の再現
+  （`ResolvedContextDto.context`、#12 / #13）に使うのは `context` (#100)
+
+- **Capability offer は provider を同定しないため、同一 capability・同一 features の複数 offer は
+  permission が異なっても `duplicate_capability_offer` として扱う。** 複数 MCP の統合と
+  permission の畳み規則は producer 側の責務である (#100)
 
 - `AssetListResult.failures` は **全 managed root の診断が混ざった 1 本の列**で、`source.rootId`
   でしか出どころを区別できない。**1 つの root について判断する消費側は、結果を絞るのではなく
@@ -442,8 +457,9 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   型表明で、キーと中身が食い違う registry を書けなくするため。`ASSET_TYPES` に値を足すと
   この Record がビルドを落とす。共通 pipeline 側の type 分岐禁止は
   `core-domain/tests/asset-type-contracts.test.ts` の source scan が機械判定する
-  （**走査対象は `scope-resolver.ts` 1 ファイルのみ** — `workflow.ts` や `catalog.ts` には
-  正当な type 比較がある） (#75)
+  （**走査対象は `core-domain/src/resolution/*.ts` の全ファイル**で、新しい seam module も
+  自動的に含む。`src/**` へは広げない — `workflow.ts` や `catalog.ts` には正当な type 比較が
+  ある） (#75)
 
 - **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
   検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、

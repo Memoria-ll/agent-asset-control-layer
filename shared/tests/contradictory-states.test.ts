@@ -18,14 +18,18 @@ const resolvedContext = (overrides: {
   conflicts?: unknown[];
   body?: string;
 }): unknown => ({
-  scope: { projectId: "project-1" },
+  context: {
+    executionMode: "advisory_preparation",
+    workflow: { kind: "none" },
+    projectId: "project-1",
+  },
   assets: [
     {
       assetId: "asset-1",
       revision: "revision-1",
       assetType: "skill",
       loadingTier: "core",
-      reason: overrides.reason ?? { kind: "included", explanation: "Matched scope" },
+      reason: overrides.reason ?? { kind: "included", explanation: "Matched scope", matchedAxes: [] },
       ...(overrides.body === undefined ? {} : { body: overrides.body }),
     },
   ],
@@ -116,24 +120,31 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseResolvedContextDto(
         resolvedContext({
-          reason: { kind: "unavailable", explanation: "Runtime is down", availability: "available" },
+          reason: {
+            kind: "unavailable",
+            explanation: "Runtime is down",
+            availability: "available",
+            detail: { cause: "missing_requirement", failedRequirements: ["asset-required"] },
+          },
         }),
       ),
     ).toThrow();
   });
 
-  it.each(["degraded", "unavailable"])(
-    "accepts an unavailable reason reporting %s",
-    (availability) => {
-      expect(() =>
-        parseResolvedContextDto(
-          resolvedContext({
-            reason: { kind: "unavailable", explanation: "Runtime is down", availability },
-          }),
-        ),
-      ).not.toThrow();
-    },
-  );
+  it("accepts an unavailable reason", () => {
+    expect(() =>
+      parseResolvedContextDto(
+        resolvedContext({
+          reason: {
+            kind: "unavailable",
+            explanation: "Runtime is down",
+            availability: "unavailable",
+            detail: { cause: "missing_requirement", failedRequirements: ["asset-required"] },
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
 
   it("rejects a degraded state carrying no reason", () => {
     expect(z.safeParse(DegradedInfo, { reasons: [] }).success).toBe(false);
@@ -157,14 +168,14 @@ describe("boundary states that cannot exist", () => {
 
   it("rejects a blank explanation on a resolution reason", () => {
     expect(() =>
-      parseResolvedContextDto(resolvedContext({ reason: { kind: "included", explanation: "" } })),
+      parseResolvedContextDto(resolvedContext({ reason: { kind: "included", explanation: "", matchedAxes: [] } })),
     ).toThrow();
   });
 
   it("rejects a conflict that involves no asset", () => {
     expect(() =>
       parseResolvedContextDto(
-        resolvedContext({ conflicts: [{ explanation: "Overlapping assets", involvedAssetIds: [] }] }),
+        resolvedContext({ conflicts: [{ kind: "mandatory_conflict", explanation: "Overlapping assets", involvedAssetIds: [] }] }),
       ),
     ).toThrow();
   });
@@ -173,10 +184,95 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseResolvedContextDto(
         resolvedContext({
-          conflicts: [{ explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] }],
+          conflicts: [{ kind: "mandatory_conflict", explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] }],
         }),
       ),
     ).not.toThrow();
+  });
+
+  it.each([
+    ["an excluded candidate whose invalid directory has no diagnostic", {
+      kind: "excluded",
+      explanation: "The candidate has an invalid directory selector.",
+      detail: { cause: "invalid_directory", diagnostics: [] },
+    }],
+    ["an unavailable candidate that names no failed requirement", {
+      kind: "unavailable",
+      explanation: "A requirement failed.",
+      availability: "unavailable",
+      detail: { cause: "missing_requirement", failedRequirements: [] },
+    }],
+    ["an unavailable candidate that names no denied capability", {
+      kind: "unavailable",
+      explanation: "A capability is not permitted.",
+      availability: "unavailable",
+      detail: { cause: "capability_not_allowed", failedCapabilities: [] },
+    }],
+    ["a capability failure whose requirement list is present but empty", {
+      kind: "unavailable",
+      explanation: "A capability is not permitted.",
+      availability: "unavailable",
+      detail: { cause: "capability_not_allowed", failedCapabilities: ["cap-a"], failedRequirements: [] },
+    }],
+    // A required dependency with no usable fallback is a hard failure, so a
+    // required degradation naming none describes a state the resolver cannot
+    // reach and a consumer cannot explain.
+    ["a required capability degradation with no fallback", {
+      kind: "included",
+      explanation: "Matched scope",
+      matchedAxes: [],
+      degradedCapabilities: [{ capabilityId: "cap-a", strength: "required" }],
+    }],
+    // Absence already carries "nothing degraded", so the empty list is a second
+    // spelling of it rather than a state of its own.
+    ["an included reason carrying an empty degradation list", {
+      kind: "included",
+      explanation: "Matched scope",
+      matchedAxes: [],
+      degradedCapabilities: [],
+    }],
+  ])("rejects %s", (_name, reason) => {
+    expect(() => parseResolvedContextDto(resolvedContext({ reason }))).toThrow();
+  });
+
+  it("accepts a required capability degradation that names its fallback", () => {
+    const parsed = parseResolvedContextDto(resolvedContext({
+      reason: {
+        kind: "included",
+        explanation: "Matched scope",
+        matchedAxes: [],
+        degradedCapabilities: [{ capabilityId: "cap-a", strength: "required", fallbackCapabilityId: "cap-b" }],
+      },
+    }));
+
+    expect(parsed.assets[0]?.reason).toMatchObject({
+      degradedCapabilities: [{ capabilityId: "cap-a", strength: "required", fallbackCapabilityId: "cap-b" }],
+    });
+  });
+
+  it("keeps a soft capability degradation representable without a fallback", () => {
+    const parsed = parseResolvedContextDto(resolvedContext({
+      reason: {
+        kind: "included",
+        explanation: "Matched scope",
+        matchedAxes: [],
+        degradedCapabilities: [{ capabilityId: "cap-a", strength: "preferred" }],
+      },
+    }));
+
+    expect(parsed.assets[0]?.reason).toMatchObject({
+      degradedCapabilities: [{ capabilityId: "cap-a", strength: "preferred" }],
+    });
+  });
+
+  it("keeps an empty matched-axis list representable", () => {
+    // A globally scoped asset matches no axis, so this array is a real state
+    // rather than the missing-evidence shape the rejections above cover.
+    const parsed = parseResolvedContextDto(resolvedContext({
+      reason: { kind: "included", explanation: "Matched scope", matchedAxes: [] },
+    }));
+
+    expect(parsed.assets[0]?.reason).toMatchObject({ matchedAxes: [] });
   });
 
   it("keeps an empty asset body representable", () => {
@@ -324,13 +420,59 @@ describe("published JSON Schema carries the same constraints", () => {
     expect(cost.excludedAssetCount.minimum).toBe(0);
   });
 
-  it("omits available from the unavailable resolution reason", () => {
+  it("states the minimum evidence on every negative-state array", () => {
+    const reason = (schemas().ResolvedContextDto as any).properties.assets.items.properties.reason;
+    const armsFor = (kind: string) => reason.oneOf
+      .find((arm: any) => arm.properties.kind.const === kind)
+      .properties.detail.oneOf;
+    const invalidDirectory = armsFor("excluded")
+      .find((arm: any) => arm.properties.cause.const === "invalid_directory");
+    const [requirementArm, capabilityArm] = armsFor("unavailable");
+
+    expect(invalidDirectory.properties.diagnostics.minItems).toBe(1);
+    expect(requirementArm.properties.failedRequirements.minItems).toBe(1);
+    expect(capabilityArm.properties.failedCapabilities.minItems).toBe(1);
+    expect(capabilityArm.properties.failedRequirements.minItems).toBe(1);
+  });
+
+  it("states the minimum on every optional array of the resolution contract", () => {
+    // Optional arrays mean "absent = none", so a present-but-empty one is a
+    // second spelling of absence. The required arrays are listed alongside so
+    // that a new optional array added here is a deliberate decision.
+    const s = schemas() as any;
+    const reason = s.ResolvedContextDto.properties.assets.items.properties.reason;
+    const included = reason.oneOf.find((arm: any) => arm.properties.kind.const === "included");
+
+    expect(included.properties.degradedCapabilities.minItems).toBe(1);
+    expect(included.properties.degradedInfo.properties.reasons.minItems).toBe(1);
+    expect(s.ResolveRequest.properties.loadingTiers.minItems).toBe(1);
+    expect(s.ResolveRequest.properties.ide.properties.selectedFilePaths.minItems).toBe(1);
+    expect(s.CoreErrorDto.properties.details.minItems).toBe(1);
+    // Empty is a real state here, so neither carries a minimum.
+    expect(included.properties.matchedAxes.minItems).toBeUndefined();
+    expect(s.ResolvedContextDto.properties.assets.minItems).toBeUndefined();
+    expect(s.ResolvedContextDto.properties.conflicts.minItems).toBeUndefined();
+  });
+
+  it("requires a fallback on the required capability-degradation arm only", () => {
+    const reason = (schemas().ResolvedContextDto as any).properties.assets.items.properties.reason;
+    const arms = reason.oneOf
+      .find((arm: any) => arm.properties.kind.const === "included")
+      .properties.degradedCapabilities.items.oneOf;
+    const required = arms.find((arm: any) => arm.properties.strength.const === "required");
+    const soft = arms.find((arm: any) => arm.properties.strength.const === undefined);
+
+    expect(required.required).toContain("fallbackCapabilityId");
+    expect(soft.required).not.toContain("fallbackCapabilityId");
+  });
+
+  it("fixes unavailable resolution reasons to unavailable", () => {
     const reason = (schemas().ResolvedContextDto as any).properties.assets.items.properties.reason;
     const unavailableArm = reason.oneOf.find(
       (arm: any) => arm.properties.kind.const === "unavailable",
     );
 
-    expect(unavailableArm.properties.availability.enum).toEqual(["degraded", "unavailable"]);
+    expect(unavailableArm.properties.availability.const).toBe("unavailable");
   });
 
   it("requires a reason on the blocked transition arm only", () => {

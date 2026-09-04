@@ -1,5 +1,6 @@
 import * as z from "zod/mini";
 import { AssetId } from "./identifiers.ts";
+import { CoreErrorDetail } from "./errors.ts";
 import { NonEmptyString } from "./primitives.ts";
 
 /**
@@ -30,17 +31,6 @@ export const AvailabilityStatus = z.enum(AVAILABILITY_STATUSES);
 export type AvailabilityStatus = z.infer<typeof AvailabilityStatus>;
 
 /**
- * The availability values that can accompany an `unavailable` resolution reason.
- *
- * `available` is excluded because the pair states two opposite things about one
- * asset, and the consumer has no rule for deciding which half to render. It is a
- * separate enum rather than a check on `AvailabilityStatus` because a check is
- * absent from `z.toJSONSchema` output, which would leave the published schema
- * accepting the very pair the parser rejects.
- */
-const UnavailableAvailability = z.enum(["degraded", "unavailable"]);
-
-/**
  * `reasons` stays a string array until the reason vocabulary is settled (#3/#9):
  * turning it into an enum later is a breaking change, and an enum invented now
  * would freeze values that no issue defines.
@@ -56,30 +46,104 @@ export const DegradedInfo = z.strictObject({
 });
 export type DegradedInfo = z.infer<typeof DegradedInfo>;
 
+const SOFT_CAPABILITY_DEGRADATION_STRENGTHS = ["optional", "preferred"] as const;
+
 /**
- * Why one asset ended up included, excluded, overridden, disabled or
- * unavailable.
+ * A `required` degradation always names the fallback that stood in for the
+ * capability: a required dependency with no usable fallback is a hard failure
+ * (`kind: "unavailable"`), never a degradation. Modelling the strengths as a
+ * union is what stops `{ strength: "required" }` alone — a state asserting a
+ * required dependency was degraded while naming nothing that satisfied it —
+ * from parsing, and publishes the same requirement in the JSON Schema.
  *
- * A discriminated union rather than a flat `{ kind, explanation }`: each arm
- * carries its own references, and a flat shape would push every new field onto
- * consumers of every other arm.
- *
- * The `included` arm deliberately carries no scope-match structure — which
- * scope matched is resolution semantics and belongs to Core (#3).
+ * A soft degradation carries the fallback only when one was selected: an
+ * optional or preferred dependency degrades on its own when none exists.
  */
+const CapabilityDegradationDto = z.discriminatedUnion("strength", [
+  z.strictObject({
+    capabilityId: NonEmptyString,
+    strength: z.literal("required"),
+    fallbackCapabilityId: NonEmptyString,
+  }),
+  z.strictObject({
+    capabilityId: NonEmptyString,
+    strength: z.enum(SOFT_CAPABILITY_DEGRADATION_STRENGTHS),
+    fallbackCapabilityId: z.optional(NonEmptyString),
+  }),
+]);
+export type CapabilityDegradationDto = z.infer<typeof CapabilityDegradationDto>;
+
+const REQUIREMENT_FAILURE_CAUSES = [
+  "missing_requirement",
+  "requirement_out_of_scope",
+  "requirement_disabled",
+  "requirement_overridden",
+  "requirement_cycle",
+  "requirement_invalid",
+] as const;
+const CAPABILITY_FAILURE_CAUSES = ["capability_unavailable", "capability_not_allowed"] as const;
+
+const excludedReasonDetail = z.discriminatedUnion("cause", [
+  z.strictObject({
+    cause: z.literal("scope_mismatch"),
+    matchedAxes: z.array(NonEmptyString),
+  }),
+  z.strictObject({
+    cause: z.literal("invalid_directory"),
+    /**
+     * At least one diagnostic: this array is the whole account of why the
+     * directory selector is invalid, so an empty one excludes the candidate
+     * while explaining nothing.
+     */
+    diagnostics: z.array(CoreErrorDetail).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    cause: z.literal("resolution_conflict"),
+    conflict: z.lazy(() => ConflictDto),
+  }),
+]);
+
+/**
+ * Every arm names at least one failed item. An unavailable candidate whose
+ * failure list is empty asserts a hard failure while identifying nothing that
+ * failed, which leaves the consumer nothing to display and nothing to act on.
+ * `failedRequirements` on the capability arm keeps "absent means none": it is
+ * omitted rather than sent empty.
+ */
+const unavailableReasonDetail = z.discriminatedUnion("cause", [
+  z.strictObject({
+    cause: z.enum(REQUIREMENT_FAILURE_CAUSES),
+    failedRequirements: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    cause: z.enum(CAPABILITY_FAILURE_CAUSES),
+    failedCapabilities: z.array(NonEmptyString).check(z.minLength(1)),
+    failedRequirements: z.optional(z.array(AssetId).check(z.minLength(1))),
+  }),
+]);
+
 export const ResolutionReason = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("included"),
     explanation: NonEmptyString,
+    // `matchedAxes` is unconstrained: a globally scoped asset matches no axis,
+    // so the empty array is a real state rather than missing evidence.
+    matchedAxes: z.array(NonEmptyString),
+    degradedInfo: z.optional(DegradedInfo),
+    // Absence already means "no capability degraded", so a present-but-empty
+    // list is a second spelling of the same state and nothing else.
+    degradedCapabilities: z.optional(z.array(CapabilityDegradationDto).check(z.minLength(1))),
   }),
   z.strictObject({
     kind: z.literal("excluded"),
     explanation: NonEmptyString,
+    detail: excludedReasonDetail,
   }),
   z.strictObject({
     kind: z.literal("overridden"),
     explanation: NonEmptyString,
     overriddenBy: AssetId,
+    mergeGroup: NonEmptyString,
   }),
   z.strictObject({
     kind: z.literal("disabled"),
@@ -89,14 +153,70 @@ export const ResolutionReason = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("unavailable"),
     explanation: NonEmptyString,
-    availability: UnavailableAvailability,
+    availability: z.literal("unavailable"),
+    detail: unavailableReasonDetail,
   }),
 ]);
 export type ResolutionReason = z.infer<typeof ResolutionReason>;
 
-/** A resolution conflict, reported instead of being silently won by one side. */
-export const ConflictDto = z.strictObject({
-  explanation: NonEmptyString,
-  involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
-});
+export const CONFLICT_KINDS = [
+  "exclusive_tie",
+  "mandatory_conflict",
+  "operation_conflict",
+  "duplicate_identity",
+  "dependency_cycle",
+  "dependency_failure",
+  "asset_type_conflict",
+  "capability_failure",
+] as const;
+export const ConflictKind = z.enum(CONFLICT_KINDS);
+export type ConflictKind = z.infer<typeof ConflictKind>;
+
+export const ConflictDto = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("exclusive_tie"),
+    explanation: NonEmptyString,
+    mergeGroup: NonEmptyString,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("mandatory_conflict"),
+    explanation: NonEmptyString,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("operation_conflict"),
+    explanation: NonEmptyString,
+    targetAssetId: AssetId,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("duplicate_identity"),
+    explanation: NonEmptyString,
+    assetId: AssetId,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("dependency_cycle"),
+    explanation: NonEmptyString,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("dependency_failure"),
+    explanation: NonEmptyString,
+    failedRequirement: AssetId,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("asset_type_conflict"),
+    explanation: NonEmptyString,
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+  z.strictObject({
+    kind: z.literal("capability_failure"),
+    explanation: NonEmptyString,
+    failedCapabilities: z.array(NonEmptyString).check(z.minLength(1)),
+    involvedAssetIds: z.array(AssetId).check(z.minLength(1)),
+  }),
+]);
 export type ConflictDto = z.infer<typeof ConflictDto>;

@@ -48,6 +48,9 @@ export type AgentExecutionId = z.infer<typeof AgentExecutionId>;
 export const WorkflowId = brandedId<"WorkflowId">();
 export type WorkflowId = z.infer<typeof WorkflowId>;
 
+export const SkillId = brandedId<"SkillId">();
+export type SkillId = z.infer<typeof SkillId>;
+
 /**
  * One execution of a workflow definition. Core issues the value, and it is unique across every
  * definition — not merely within the one it belongs to. `WorkflowStateDto` still carries
