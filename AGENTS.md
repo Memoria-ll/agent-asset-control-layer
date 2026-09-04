@@ -85,8 +85,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 
 ## Repository-wide change considerations
 
-- root `package.json` の `engines.node` は、Core が TypeScript source を直接実行できる Node 22.18 以上の
-  runtime 条件と、lockfile 上の全依存の `engines` の積集合を満たす。依存更新時も22.18未満へ広げない。
+- root `package.json` の `engines.node` は、Core が TypeScript source を直接実行できる Node 24.12.0 以上の
+  runtime 条件と、lockfile 上の全依存の `engines` の積集合を満たす。24.12.0 は TypeScript type stripping が
+  stable になった最小 runtime であり、依存更新時も下限をこれ未満へ広げない。
 - source を直接実行するため、TypeScript の相対 import 指定子は `.ts` で書く。
 - `resolveScope` を実行経路へ配線する caller は `capabilityContext` を明示的に渡す。省略は
   capability offer が 0 件であることを意味する。
