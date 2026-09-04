@@ -442,8 +442,9 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   型表明で、キーと中身が食い違う registry を書けなくするため。`ASSET_TYPES` に値を足すと
   この Record がビルドを落とす。共通 pipeline 側の type 分岐禁止は
   `core-domain/tests/asset-type-contracts.test.ts` の source scan が機械判定する
-  （**走査対象は `scope-resolver.ts` 1 ファイルのみ** — `workflow.ts` や `catalog.ts` には
-  正当な type 比較がある） (#75)
+  （**走査対象は `core-domain/src/resolution/*.ts` の全ファイル**で、新しい seam module も
+  自動的に含む。`src/**` へは広げない — `workflow.ts` や `catalog.ts` には正当な type 比較が
+  ある） (#75)
 
 - **Type 固有 metadata（Skill の kind、Workflow の stage / transition）は Type contract の
   検証対象になっていない。** `AssetCandidate` が `CanonicalAsset.metadata` を運んでおらず、
