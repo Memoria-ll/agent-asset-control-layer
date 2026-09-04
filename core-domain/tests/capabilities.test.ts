@@ -236,6 +236,7 @@ describe("capability catalog and dependency semantics", () => {
 
     expect(result).toEqual({
       ok: false,
+      kind: "unavailable",
       failedCapabilities: [capabilityId("filesystem")],
       reasons: ['Capability "filesystem" with required strength is unavailable.'],
     });
@@ -354,5 +355,17 @@ describe("capability catalog and dependency semantics", () => {
     if (!result.ok) {
       expect(result.failure.details?.map((item) => item.code)).toContain("duplicate_capability_offer");
     }
+  });
+
+  it("T6: keeps the failure discriminator on a spread and a serialized outcome", () => {
+    const catalog = context([definition("filesystem")], [offer("filesystem", [], "denied")]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem") },
+    ], catalog));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect({ ...result }.kind).toBe("not_allowed");
+    expect(JSON.parse(JSON.stringify(result)).kind).toBe("not_allowed");
   });
 });

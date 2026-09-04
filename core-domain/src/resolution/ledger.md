@@ -51,7 +51,12 @@
   伝わらず、**診断そのものが結果から消える**（cycle と dependency_failure だけが残り、原因の
   capability 名が出ない）。依存先 component は先に materialize され自身の到達を閉じているので、
   この 1 パスが不動点になる。capability 側は `componentFailedCapabilities`、requirement 側は
-  `componentHasNonCycleFailure` がこの役目を持つ (#9)
+  `componentHasNonCycleFailure` がこの役目を持つ (#9)。
+  **失敗の集合だけでなく、primary cause に載せる失敗の種別も同じ 2 source で union する** —
+  `componentHasDeniedCapability` がこの役目を持つ。cause を per-state の
+  `failures[0]`（required asset id の辞書順で先頭）から採ると、`failedCapabilities` には denied
+  な capability が載ったまま cause が `capability_unavailable` になり、**consumer は policy 拒否を
+  再接続で直せる不在と読む**。typecheck も gate も通る (#100)
 
 - **seam へ渡す context object は呼び出しのたびに組む。抽出時に束縛しない。**
   `baseIncluded` / `baseReasons` / `operationIssuers` / `operationIssuerSet` は `pipeline.ts` の

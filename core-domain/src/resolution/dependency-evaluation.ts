@@ -270,6 +270,19 @@ export const dependencyOutcomes = (
         });
         return [...own, ...required];
       });
+      // The failure kind is unioned over the same two sources as the capability set above,
+      // because a denial that reaches a member only through the component or an outgoing
+      // edge is still carried in that member's failedCapabilities — reporting it as an
+      // absence would tell the consumer to reconnect a capability that policy denies.
+      const componentHasDeniedCapability = component.some((state) => {
+        const node = dependencyNodes.get(state)!;
+        if (node.capabilityOutcome?.ok === false && node.capabilityOutcome.kind === "not_allowed") return true;
+        return node.edges.some((edge) => {
+          if (componentStates.has(edge.target)) return false;
+          const outcome = outcomes.get(edge.target);
+          return outcome !== undefined && !outcome.ok && outcome.cause === "capability_not_allowed";
+        });
+      });
       for (const state of component) {
         const node = dependencyNodes.get(state)!;
         const failures = [...node.directFailures];
@@ -313,11 +326,16 @@ export const dependencyOutcomes = (
           outcomes.set(state, { ok: true, ...mergeDegradation(outcomeSources) });
         } else {
           // Prefer policy denial over absence because reporting a denied capability as missing hides the policy constraint.
-          const cause = capabilityFailure === undefined
+          // The requirement causes keep their existing selection; only a capability cause is upgraded,
+          // so a denial held anywhere in the component wins over an absence that merely sorts first.
+          const selectedCause = capabilityFailure === undefined
             ? failures[0]!.cause
             : capabilityFailure.kind === "not_allowed"
               ? "capability_not_allowed"
               : "capability_unavailable";
+          const cause = selectedCause === "capability_unavailable" && componentHasDeniedCapability
+            ? "capability_not_allowed"
+            : selectedCause;
           outcomes.set(state, {
             ok: false,
             cause,

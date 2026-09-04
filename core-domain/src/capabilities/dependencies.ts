@@ -557,15 +557,18 @@ const evaluateNormalizedDependencies = (
   // A required failure removes the candidate, so soft degradation cannot be retained alongside it.
   if (failedCapabilities.length > 0) {
     const uniqueFailedCapabilities = [...new Set(failedCapabilities)].sort(codeUnitCompare);
-    const failure: Extract<CapabilityDependencyOutcome, { readonly ok: false }> = {
-      ok: false,
-      kind: failureKinds.includes("denied") ? "not_allowed" : "unavailable",
-      failedCapabilities: uniqueFailedCapabilities,
-      reasons: canonicalReasons(failureReasons),
+    // `kind` stays an ordinary enumerable field: the outcome is publicly re-exported, so a
+    // consumer that spreads, clones, or serializes it would otherwise lose the discriminator
+    // and turn a denial into an indistinguishable absence.
+    return {
+      ok: true,
+      value: {
+        ok: false,
+        kind: failureKinds.includes("denied") ? "not_allowed" : "unavailable",
+        failedCapabilities: uniqueFailedCapabilities,
+        reasons: canonicalReasons(failureReasons),
+      },
     };
-    // Keep the discriminator non-enumerable because capability diagnostics expose failures and reasons.
-    Object.defineProperty(failure, "kind", { value: failure.kind, enumerable: false });
-    return { ok: true, value: failure };
   }
   if (degradations.length === 0) return { ok: true, value: { ok: true } };
   const degradationKey = (degradation: CapabilityDegradation): string =>
