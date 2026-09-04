@@ -56,8 +56,7 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - discovery は workspace から filesystem root へ向かい、最寄りの `.aacl` で確定する。
   その Project marker が不正でも上位 Project へ抜けない。
 - `~/.aacl-state/project-registry.json` は Marker から再構築できる索引であり、identity の正にしない。
-- Project Init / discovery / Marker は `shared` の公開 DTO と transport-neutral な
-  `ProjectClient` 境界を通す。
+- Project Init / discovery / Marker の境界値には `shared` の公開 DTO を使う。
 
 ### 公開 contract
 
@@ -89,8 +88,6 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - root `package.json` の `engines.node` は lockfile 上の全依存の `engines` の積集合を宣言する。
   依存を追加・更新したら `pnpm-lock.yaml` と同時に見直す。
 - source を直接実行するため、TypeScript の相対 import 指定子は `.ts` で書く。
-- `core-domain` の公開面は `core-domain/src/index.ts`。公開 API を追加した変更で re-export も追加し、
-  package の公開 API を使うテストは index から import する。
 - `resolveScope` を実行経路へ配線する caller は `capabilityContext` を明示的に渡す。省略は
   capability offer が 0 件であることを意味する。
 - `ResolutionResult.context.directory` は caller の入力表現、`scope.directory` は matching 用の
