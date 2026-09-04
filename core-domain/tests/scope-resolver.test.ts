@@ -60,9 +60,14 @@ const capabilityReference = (value: string, features?: readonly string[]) => ({
   ...(features === undefined ? {} : { features: features.map(capabilityFeatureId) }),
 });
 
-const capabilityOffer = (value: string, features: readonly string[] = []): CapabilityOffer => ({
+const capabilityOffer = (
+  value: string,
+  features: readonly string[] = [],
+  permission: CapabilityOffer["permission"] = "allowed",
+): CapabilityOffer => ({
   capabilityId: capabilityId(value),
   features: features.map(capabilityFeatureId),
+  permission,
 });
 
 const capabilityContext = (
@@ -2574,6 +2579,59 @@ scope.project: [acme]
     expect(reason(result, "skill-a")).toMatchObject({
       kind: "unavailable",
       failedCapabilities: [capabilityId("cap-outside")],
+    });
+  });
+
+  it("T6: switches from a denied primary to an allowed fallback", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-permission-fallback", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [
+        { strength: "required", capability: capabilityReference("cap-primary") },
+        { strength: "fallback", capability: capabilityReference("cap-fallback"), fallbackFor: capabilityReference("cap-primary") },
+      ],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-fallback" }, { id: "cap-primary" }],
+      [
+        capabilityOffer("cap-primary", [], "denied"),
+        capabilityOffer("cap-fallback", [], "allowed"),
+      ],
+    ));
+
+    expect(reason(result, "skill-permission-fallback")).toMatchObject({
+      kind: "included",
+      degradedCapabilities: [{
+        capabilityId: capabilityId("cap-primary"),
+        strength: "required",
+        fallbackCapabilityId: capabilityId("cap-fallback"),
+      }],
+      degradedInfo: { reasons: [expect.stringContaining("is not permitted.")] },
+    });
+  });
+
+  it("T7: reports a propagated denial over an absence that sorts first", () => {
+    // skill-a-missing sorts before skill-b-denied, so the first required failure is the absence.
+    const parent = candidateFromDocument(
+      assetDocument("skill-parent", "requires: [skill-a-missing, skill-b-denied]\n", "skill"),
+      add(),
+    );
+    const missing = candidateFromDocument(assetDocument("skill-a-missing", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-missing") }],
+    });
+    const denied = candidateFromDocument(assetDocument("skill-b-denied", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-denied") }],
+    });
+    const result = resultValue({}, [parent, missing, denied], capabilityContext(
+      [{ id: "cap-denied" }, { id: "cap-missing" }],
+      [capabilityOffer("cap-denied", [], "denied")],
+    ));
+
+    expect(reason(result, "skill-parent")).toMatchObject({
+      kind: "unavailable",
+      cause: "capability_not_allowed",
+      failedCapabilities: [capabilityId("cap-denied"), capabilityId("cap-missing")],
     });
   });
 });

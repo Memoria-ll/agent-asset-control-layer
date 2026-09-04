@@ -37,9 +37,14 @@ const reference = (id: string, features?: readonly string[]): CapabilityReferenc
   ...(features === undefined ? {} : { features: features.map(featureId) }),
 });
 
-const offer = (id: string, features: readonly string[] = []): CapabilityOffer => ({
+const offer = (
+  id: string,
+  features: readonly string[] = [],
+  permission: CapabilityOffer["permission"] = "allowed",
+): CapabilityOffer => ({
   capabilityId: capabilityId(id),
   features: features.map(featureId),
+  permission,
 });
 
 const context = (
@@ -231,6 +236,7 @@ describe("capability catalog and dependency semantics", () => {
 
     expect(result).toEqual({
       ok: false,
+      kind: "unavailable",
       failedCapabilities: [capabilityId("filesystem")],
       reasons: ['Capability "filesystem" with required strength is unavailable.'],
     });
@@ -282,5 +288,84 @@ describe("capability catalog and dependency semantics", () => {
         fallbackCapabilityId: capabilityId("filesystem"),
       }],
     });
+  });
+  it("T1: rejects a denied offer for a required dependency", () => {
+    const catalog = context([definition("filesystem")], [offer("filesystem", [], "denied")]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem") },
+    ], catalog));
+
+    expect(result).toMatchObject({
+      ok: false,
+      kind: "not_allowed",
+      failedCapabilities: [capabilityId("filesystem")],
+    });
+  });
+
+  it("T2: degrades an optional dependency when its offer is denied", () => {
+    const catalog = context([definition("filesystem")], [offer("filesystem", [], "denied")]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "optional", capability: reference("filesystem") },
+    ], catalog));
+
+    expect(result).toMatchObject({
+      ok: true,
+      degradedCapabilities: [{ capabilityId: capabilityId("filesystem"), strength: "optional" }],
+      degradation: { reasons: [expect.stringContaining("is not permitted.")] },
+    });
+  });
+
+  it("T3: distinguishes denied and missing capability reasons", () => {
+    const denied = expectValue(evaluateCapabilityDependencies([
+      { strength: "optional", capability: reference("filesystem") },
+    ], context([definition("filesystem")], [offer("filesystem", [], "denied")])));
+    const missing = expectValue(evaluateCapabilityDependencies([
+      { strength: "optional", capability: reference("filesystem") },
+    ], context([definition("filesystem")], [])));
+
+    expect(denied).toMatchObject({
+      degradation: { reasons: ['Capability "filesystem" with optional strength is not permitted.'] },
+    });
+    expect(missing).toMatchObject({
+      degradation: { reasons: ['Capability "filesystem" with optional strength is unavailable.'] },
+    });
+  });
+
+  it("T4: rejects an offer without permission", () => {
+    const invalidOffer = {
+      capabilityId: capabilityId("filesystem"),
+      features: [],
+    } as unknown as CapabilityOffer;
+    const result = validateCapabilityContext(context([definition("filesystem")], [invalidOffer]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => item.code)).toContain("invalid_capability_permission");
+    }
+  });
+
+  it("T5: rejects offers that differ only in permission", () => {
+    // The duplicate key excludes permission because offers do not identify their provider.
+    const result = validateCapabilityContext(context([definition("filesystem")], [
+      offer("filesystem", ["read"], "allowed"),
+      offer("filesystem", ["read"], "denied"),
+    ]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details?.map((item) => item.code)).toContain("duplicate_capability_offer");
+    }
+  });
+
+  it("T6: keeps the failure discriminator on a spread and a serialized outcome", () => {
+    const catalog = context([definition("filesystem")], [offer("filesystem", [], "denied")]);
+    const result = expectValue(evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem") },
+    ], catalog));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect({ ...result }.kind).toBe("not_allowed");
+    expect(JSON.parse(JSON.stringify(result)).kind).toBe("not_allowed");
   });
 });

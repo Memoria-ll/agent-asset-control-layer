@@ -325,7 +325,6 @@ DependencyEvaluationInput = {
 CapabilityOffer = {
   capabilityId: CapabilityId
   features: readonly CapabilityFeatureId[]
-  availability: "available" | "unavailable"
   permission: "allowed" | "denied"
 }
 
@@ -361,9 +360,9 @@ DependencyEvaluation = {
 }
 ```
 
-`availability` は provider が接続 / offer 可能か、`permission` は現行 project / role / policy で利用を許可されるかを表す。`available && permission` を初めて成功 predicate とする。`CapabilityDependency.strength` の required / optional / preferred / fallback は依存元が要求する強度であり、offer の状態へコピーしない。これが CAP-004、CAP-006、CAP-007 の境界である。Resolver は catalog を再構成したり permission を推論したりせず、capability module が返した snapshot を同じ context の全候補で共有する。
+Capability offer の存在が接続状態を表し、`permission` が現行 project / role / policy での利用許可を表す。`capabilityAvailable` は features を満たす offer の存在量化で `usable` / `denied` / `missing` を判定し、`usable` を成功 predicate とする。`CapabilityDependency.strength` の required / optional / preferred / fallback は依存元が要求する強度であり、offer の状態へコピーしない。これが CAP-004、CAP-006、CAP-007 の境界である。Resolver は catalog を再構成したり permission を推論したりせず、capability module が返した snapshot を同じ context の全候補で共有する。
 
-Capability state は offer の存在と `permission: "allowed" | "denied"` の 2 つで観測し、「offer 無し = 未接続」「offer あり + allowed」「offer あり + denied」の 3 状態を取る。`availability` を独立した欄にはしない — 読み手が現れるまで足さない。未観測という状態も設けない。明示的な空 snapshot は「提供 0 件」の観測値であり、未観測を表す代替値ではない。
+Capability state は「offer 無し = 未接続」「offer あり + allowed」「offer あり + denied」の 3 状態を取る。明示的な空 snapshot は「提供 0 件」の観測値であり、未観測を表す代替値ではない。
 
 ### 5.5 seam 6〜7 と composition の型
 
@@ -565,7 +564,7 @@ reason / conflict に載せる capability identifier は `NonEmptyString` とし
 | type semantics | `asset-type-contracts.ts:1-72` と Resolver の validation / selection が相互に参照 | resolution-types → asset-type-contracts / type-resolution | operation 型を common model へ移し import cycle を解消。type contract へは pipeline からだけ入力し、type 名の共通分岐を増やさない |
 | public reason / conflict | `CandidateReason` → `toResolutionReasonDto`（`scope-resolver.ts:106-153,825-869`）→ `shared/src/status.ts:70-103` | result-assembly → structured `ResolutionReason` / `ConflictDto` → `ResolvedContextDto` | reason 文字列の再解析を consumer に要求しない。public reason は `matchedAxes`、public conflict は閉じた `kind` と failure IDs を運び、internal rank は wire 欄へ投影しないため canonical precedence の未確定値を契約へ固定しない |
 | public response | `ResolvedContextDto.scope`（`shared/src/resolved-context.ts:108-128`） | `ResolvedContextDto.context`（explicit execution state）→ future Core adapter | 現在 Core HTTP は `/health` のみで response consumer は 0 件。新 route は #12 の範囲に残し、今回の変更で network handler を増やさない |
-| capability state | `CapabilityResolutionContext` optional `catalog + offers`（`capabilities.ts:40-43`）→ `capabilityAvailable` | Capability module の `CapabilityResolutionSnapshot`（availability / permission）→ dependency-evaluation | `available` と `allowed` を別欄にし、required / preferred は dependency strength に残す。省略 default の bypass を必須 input で封じる |
+| capability state | `CapabilityResolutionContext` optional `catalog + offers`（`capabilities.ts:40-43`）→ `capabilityAvailable` | Capability module の `CapabilityResolutionSnapshot`（offer existence / permission）→ dependency-evaluation | offer の存在と permission を `usable` / `denied` / `missing` へ評価し、required / preferred は dependency strength に残す。省略 default の bypass を必須 input で封じる |
 | result identity / dedup | `makeAssetRevision` の serialized canonical asset → Resolver exact duplicate fold | 同じ SHA-256 revision → candidate-validation semantic fold | `AssetRevision` を mtime / uuid に変える設計は採らない。body の暗黙後勝ちを防ぐ既存 invariant を維持 |
 | ledger / index | root AGENTS + `core-domain/src/resolution/ledger.md` → 現行 module 内の nested helpers | root AGENTS + resolution Ledger + 新 capabilities Ledger → 各 owner module | 10 resolution entries は全件上表へ移管。新箱の追加は root Ledger 一覧と箱 Ledger の両方を更新する必要がある |
 
@@ -782,7 +781,7 @@ Core HTTP の start path（`core/src/index.ts:30-112`）と Extension の Projec
 1. `ResolveRequest` の `context` 必須、`development_execution` + `workflow.kind: "none"` 拒否、advisory + selected workflow と development + standalone を受理。
 2. `WorkflowSelection` の `none` / `standalone` / `selected` の strict shape、`SkillId`、全 optional axis、unknown key 拒否。
 3. `ResolutionReason` の included `matchedAxes`、scope mismatch detail、unavailable failed IDs、`ConflictDto.kind` の全 armと strictness。reason rank 欄、TaskId、workflowRevision、provenance 欄を受ける入力は契約外として拒否する。
-4. capability offer の `availability` と `permission` を別々に評価し、`available: true, permission: denied` を `capability_not_allowed` として説明するケース。
+4. capability offer の存在と `permission` を評価し、offer が存在して `permission: denied` の状態を `capability_not_allowed` として説明するケース。
 5. `workflow.kind: "none"` context で workflow / stage selector candidate を neutral に評価するケース、`standalone` の `skillId` と明示 execution permission を Orchestrator 境界へ渡すケース。
 
 view-separated な分岐を含む Resolver は、上記の red test と、既存 118 direct + 9 parameterized declaration の green regression の両方を負う。各 test は result を `resolveScope` の実公開入口から受け、candidate mapping のローカル再実装や capability evaluator の写しを test fixture に持たせない。
@@ -811,7 +810,7 @@ source 集合の読み込み後は `source === undefined` の判定を、glob �
 4. Phase A の同じ変更で `core-domain/tests/asset-type-contracts.test.ts:368-382` の glob を `../src/resolution/*.ts` へ広げ、file map が空のときの throw へ判定を更新する。現行 4 ファイルの禁止パターン 0 件を基準に、新設 seam file を検査対象へ含める。
 5. source comparison と既存 regression の proof を得た後、`scope-resolver.ts:873-2287` の `resolveScopeFixedPoint`、旧 nested type / Map / SCC / operation / selection helper、test-only `candidateFromCanonicalAsset` を owner module / 実 data path へ移し、旧 file と旧 symbol を削除する。`core-domain/src/index.ts` は新 module を直接 re-export する。
 6. Phase B で capability の型検証・依存観測を `core-domain/src/capabilities/` へ移す。移設は逐語で、型・意味論・省略時の扱いをすべて据え置く。`capabilitySnapshot` を required value にするかは Phase D が context union と一緒に決める — 省略の扱いを変えることは振る舞いの変更であり、Phase B の証明条件（同一スイート緑）と両立しない。available / allowed の分離は Phase C で行う。
-7. Phase C で `availability` と `permission` を別軸にし、`available && allowed` を成功 predicate とする。第三の未観測状態を作らず、新規 capability test を先行 red として置いてから実装し、integration test と quality gate を green にする。
+7. Phase C で offer の存在と `permission` を評価し、features を満たす allowed offer の存在を成功 predicate とする。3 状態を新規 capability test として先行 red に置いてから実装し、integration test と quality gate を green にする。
 8. Phase D で `ResolveRequest.context` / `ResolvedContextDto.context`、independent execution mode + workflow selection、structured reason / conflict を `shared` の strict schema へ切り替える。scope→context の DTO commit と reason / conflict DTO commit は分割できるが、version bump は最後の一回だけに置き、`CONTRACT_VERSION` を `0.5.0` にする。旧 `scope` alias、TaskId、workflowRevision、provenance、reason rank は追加しない。
 9. 各 owner の public re-export、root / box Ledger、JSON Schema、dependency-boundary を同期し、old file / old symbol / direct import / comparison harness の検索結果を 0 件にする。各 Phase の終端で canonical quality gate が green であることを進行条件とする。
 
@@ -835,7 +834,7 @@ source 集合の読み込み後は `source === undefined` の判定を、glob �
 | 時点 | 公開入口 | その時点で存在する成果物 | quality gate の条件 |
 |---|---|---|---|
 | Phase A 終端 | `index.ts` → `pipeline.resolveScope` | 7 seam、pipeline、拡張済み source scan。旧 file / old symbol は削除済み | normalise-and-sort が 0差分、既存 118 + `it.each` 9 が green、typecheck / package boundary が green |
-| Phase B 終端 | 同じ public entry | capabilities box と required `capabilitySnapshot`。availability / permission は current semantics | 同一 suite green、capability owner の移動後 test と explicit empty snapshot が green |
+| Phase B 終端 | 同じ public entry | capabilities box と required `capabilitySnapshot`。offer existence / permission は current semantics | 同一 suite green、capability owner の移動後 test と explicit empty snapshot が green |
 | Phase C 終端 | 同じ public entry | 未接続 / allowed / denied の 3 状態と dependency outcome | 新規 capability tests の先行 red → 実装後 green、全既存 integration と gate green |
 | Phase D 終端 | `ResolveRequest.context` → new pipeline → `ResolvedContextDto.context` | strict context / reason / conflict schema、`CONTRACT_VERSION=0.5.0` | 新規 tests の先行 red → parser / projection 実装後 green、JSON Schema 照合と gate green |
 | Ledger / export 同期後 | `core-domain/src/index.ts` と `shared/src/index.ts` | stale re-export / stale Ledger / comparison harness なし | old symbol / old file / direct import の検索 0 件、dependency-boundary と node resolution を含む gate green |
@@ -862,7 +861,7 @@ Phase A の終端で固定点意味論を新しい値の反復へ移し、Phase 
 | state | public entry | phase 完了時の state | 次 phase へ進める条件 |
 |---|---|---|---|
 | A | `core-domain/src/index.ts` → `resolution/pipeline.ts` | 7 seam、pipeline、拡張 source scan、old resolver file / symbol の削除。公開 contract は現行 shape | normalise-and-sort 0差分、118 + supplemental 9 green、source scan / typecheck / package boundary green |
-| B | 同じ `resolveScope` | capability snapshot の validation / observation が capabilities box に集約。current availability semantics を維持 | 同一スイート green、explicit empty snapshot と全 S1-S17 owner test green |
+| B | 同じ `resolveScope` | capability snapshot の validation / observation が capabilities box に集約。current offer existence semantics を維持 | 同一スイート green、explicit empty snapshot と全 S1-S17 owner test green |
 | C | 同じ `resolveScope` | 未接続 / allowed / denied の 3 状態、dependency outcome、capability reason、内部 cause の分岐が確定 | 新規 capability tests の赤証明 → 実装後 green、既存 behavior pin と gate green |
 | D | `ResolveRequest.context` → pipeline → `ResolvedContextDto.context` | strict context / reason / conflict、`CONTRACT_VERSION=0.5.0` | 新規 contract tests の赤証明 → parser / JSON Schema / projection green、既存 118 + 9 green |
 
@@ -880,7 +879,7 @@ Phase A の終端で固定点意味論を新しい値の反復へ移し、Phase 
 | U4 | project / 残りの scope 軸 | `AgentExecutionDto` の project / stage / taskType / role / provider / runtime / model は全て optional（`shared/src/sessions.ts:59-73`）。`WorkflowEvaluationInput` の role / taskType も optional（`core-domain/src/workflow.ts:582-587`） | `projectId?`、`taskTypeId?`、`roleId?`、`providerId?`、`runtimeId?`、`modelId?`、`directory?` を optional のまま保持する。development で 9 軸を一括 required にしない | 不足した旧 request の扱いは context contract に従い、workflow selection だけが development の cross-arm 必須条件になる | 裁定済み |
 | U5 | no-workflow の matching | `scope-resolver.ts:452` は request value が undefined のとき selector を neutral にする | `workflow.kind: "none"` は workflow / stage request value を未指定として扱い、workflow / stage selector candidate を neutral に評価する。実行可能な行為は #101 が判定する | Advisory / Preparation の candidate 集合、reason、conflict は現行 neutral 挙動を保つ。execution authorization の結果は #101 の外部境界で現れる | 裁定済み |
 | U6 | Standalone Skill | `WorkflowBinding` に standalone arm があり（`shared/src/sessions.ts:40-47`）、§7 は明示 permission がある場合の repository mutation を定義する | `standalone` に `skillId` を持たせ、明示 execution permission を Orchestrator / User へ渡す | standalone execution と repository mutation permission を consumer が区別できる | 裁定済み |
-| U7 | `available` と `allowed` | 現行 `CapabilityOffer` に状態欄はなく、catalog + offer の存在だけを検査する | capability offer に availability と permission の 2 軸を持たせ、`available && allowed` を成功 predicate とする。未観測という第三状態は作らない | 接続状態と policy 許可を別々の reason / dependency result として観測できる | 裁定済み |
+| U7 | `available` と `allowed` | 現行 `CapabilityOffer` は catalog と offer の存在だけを検査する | capability offer の存在と permission から「未接続」「許可」「拒否」の 3 状態を導出し、features を満たす allowed offer の存在を成功 predicate とする | 接続状態と policy 許可を別々の reason / dependency result として観測できる | 裁定済み |
 | U8 | capability snapshot の transport | 現行 HTTP route は `/health` の GET / HEAD だけで Resolve route は 0 件。domain input の snapshot は required とする | #12 の HTTP / IPC adapter が Capability owner の snapshot を同じ transport exchange で運び、欠落を `invalid_request`、明示 empty を 0 offers として domain へ渡す | route が将来追加された時、adapter が omission を空 snapshotへ変換するかどうかが公開 request validation として現れる | 裁定済み |
 | U9 | reason の構造化 | 内部 reason は rank を持つが、現行 public reason は説明と一部 ID に縮約される | public reason は `matchedAxes` のみを axis explainability 欄として持ち、rank / rank component は internal に留める。`matchedAxes` の順序は現行 `RESOLUTION_AXES` 順で固定する | Preview / Extension は文字列再解析なしに matched axis を表示でき、rank の未確定値を契約へ依存しない | 裁定済み |
 | U10 | conflict kind の公開 | 現行 `ConflictDto` は `explanation` / `involvedAssetIds` の 2 欄（`AGENTS.md:382-386`） | 8 種類の `kind` を閉じた strict union で公開し、arm ごとの target / merge group / failed IDs を保持する | consumer が conflict 種別で表示・再試行を分けられる。kind の arm 追加・削除、required 欄追加、kind 固有欄変更は breaking になる | 裁定済み |
