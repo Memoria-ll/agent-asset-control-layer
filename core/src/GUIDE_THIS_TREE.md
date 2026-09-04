@@ -14,3 +14,4 @@
 - asset の `list` は手作業の filesystem path を読み、`save` は portable path だけを受理する。list 結果の `relativePath` を無条件に save へ渡さない。
 - server の `error` handler は `listen()` と同じ同期 turn で登録する。
 - `index.ts` は import-safe な composition root とし、listen などの起動副作用は `main.ts` だけに置く。
+- managed root の同一性は `resolve()` による字句正規化で扱う。caller は symlink alias や case-insensitive filesystem 上の綴り違いを別 source として渡さない。
