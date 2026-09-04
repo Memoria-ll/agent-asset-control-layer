@@ -1,0 +1,9 @@
+# GUIDE_THIS_TREE.md — core-domain/src
+
+この guide は `core-domain/src/` 以下に適用する。子ディレクトリに guide がある場合も先に読む。
+
+## Local invariants
+
+- asset frontmatter は versioned strict schema。未知の top-level key と未知 schema version を拒否するため、新しい directive や field の導入は asset schema version の更新として設計する。
+- `AgentExecutionRecord` を DTO へ投影するときは `tryParseAgentExecutionDto` で runtime validation する。
+- `AgentExecutionRecord.providerId` は、参照する Runtime と Model の `providerId` の両方に一致させる。各 ID の存在確認だけで組合せを受理しない。
