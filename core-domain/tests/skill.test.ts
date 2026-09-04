@@ -1,0 +1,388 @@
+import { describe, expect, it } from "vitest";
+import type { AssetId, AssetRevision } from "@aacl/shared";
+import {
+  createSkillAsset,
+  parseAssetDocument,
+  parseSkillAsset,
+  projectSkillCandidate,
+  serializeCanonicalAsset,
+  updateSkillAsset,
+  validateAsset,
+} from "../src/index.ts";
+import type {
+  CanonicalAsset,
+  CapabilityDependency,
+  CapabilityFeatureId,
+  CapabilityId,
+  SkillInput,
+} from "../src/index.ts";
+
+const expectOk = <Value>(result: { readonly ok: boolean; readonly value?: Value; readonly failure?: { readonly message: string } }): Value => {
+  expect(result.ok).toBe(true);
+  if (!result.ok || result.value === undefined) throw new Error(result.failure?.message ?? "Expected success.");
+  return result.value;
+};
+
+const parseAsset = (document: string): CanonicalAsset =>
+  expectOk(validateAsset(expectOk(parseAssetDocument(document))));
+
+const assetId = (value: string): AssetId => value as AssetId;
+const capabilityId = (value: string): CapabilityId => value as CapabilityId;
+const featureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
+
+const workflowSkillDocument = `---
+schema-version: 1
+id: issue-development
+type: skill
+tier: discoverable
+scope.project: [project-aacl]
+scope.workflow: [issue-development]
+requires: [issue-development-workflow, safety-rule]
+capability.required: [filesystem-read]
+capability.optional: [browser-dom]
+capability.preferred: [browser-screenshot]
+capability.fallback.browser-screenshot: vision-image
+capability.features.browser-dom: [accessibility-tree]
+capability.fallback-features.browser-screenshot: [png]
+metadata.activation-condition: An issue is selected.
+metadata.completion-criteria: [Pull request is ready, Verification passes]
+metadata.conflicts: [emergency-fix]
+metadata.description: Develop one issue through a reviewed workflow.
+metadata.display-name: Issue development
+metadata.execution-mode: development_execution
+metadata.execution-permission: explicit-development
+metadata.expected-output: A reviewed pull request.
+metadata.kind: bounded-operation
+metadata.priority: 50
+metadata.workflow-relation: workflow-scoped
+---
+Perform the bounded issue-development operation.
+`;
+
+describe("Canonical Skill", () => {
+  it("parses a Workflow-scoped Skill and preserves capability dependencies through serialization", () => {
+    const asset = parseAsset(workflowSkillDocument);
+    const skill = expectOk(parseSkillAsset(asset));
+
+    expect(skill.kind).toBe("bounded-operation");
+    expect(skill.workflowRelation).toEqual({ kind: "workflow-scoped" });
+    expect(skill.executionPermission).toBe("explicit-development");
+    expect(skill.priority).toBe(50);
+    expect(skill.capabilityDependencies).toEqual([
+      { strength: "required", capability: { capabilityId: "filesystem-read" } },
+      {
+        strength: "optional",
+        capability: { capabilityId: "browser-dom", features: ["accessibility-tree"] },
+      },
+      { strength: "preferred", capability: { capabilityId: "browser-screenshot" } },
+      {
+        strength: "fallback",
+        capability: { capabilityId: "vision-image", features: ["png"] },
+        fallbackFor: { capabilityId: "browser-screenshot" },
+      },
+    ]);
+
+    const serialized = expectOk(serializeCanonicalAsset(asset));
+    expect(expectOk(serializeCanonicalAsset(parseAsset(serialized)))).toBe(serialized);
+  });
+
+  it.each([
+    ["bounded-operation", "standalone"],
+    ["procedure", "standalone"],
+    ["advisory", "standalone"],
+    ["system-operation", "standalone"],
+  ] as const)("accepts %s with %s relation", (kind, relation) => {
+    const asset = parseAsset(`---
+id: sample-skill
+type: skill
+tier: on-demand
+metadata.description: A sample Skill.
+metadata.display-name: Sample Skill
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: ${kind}
+metadata.workflow-relation: ${relation}
+---
+Perform the bounded instructions.
+`);
+    expect(expectOk(parseSkillAsset(asset)).workflowRelation.kind).toBe(relation);
+  });
+
+  it("requires named Workflow scope for a workflow-scoped Skill", () => {
+    const asset = parseAsset(`---
+id: workflow-review
+type: skill
+tier: on-demand
+metadata.description: Review a Workflow stage.
+metadata.display-name: Workflow review
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: workflow-scoped
+---
+Review the selected Workflow stage.
+`);
+    const result = parseSkillAsset(asset);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected failure.");
+    expect(result.failure.details).toContainEqual(expect.objectContaining({
+      path: ["document", "frontmatter", "scope.workflow"],
+      code: "missing_field",
+    }));
+  });
+
+  it("rejects Workflow scope on a standalone Skill", () => {
+    const asset = parseAsset(`---
+id: scoped-standalone
+type: skill
+tier: on-demand
+scope.workflow: [issue-development]
+metadata.description: Declares contradictory Workflow applicability.
+metadata.display-name: Scoped standalone
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Review the selected input.
+`);
+    const result = parseSkillAsset(asset);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected failure.");
+    expect(result.failure.details).toContainEqual(expect.objectContaining({
+      path: ["document", "frontmatter", "scope.workflow"],
+      code: "invalid_skill_relation",
+    }));
+  });
+
+  it("requires explicit permission for a development execution Skill", () => {
+    const asset = parseAsset(`---
+id: unsafe-development
+type: skill
+tier: on-demand
+metadata.description: Attempts development without explicit permission.
+metadata.display-name: Unsafe development
+metadata.execution-mode: development_execution
+metadata.execution-permission: advisory-only
+metadata.kind: bounded-operation
+metadata.workflow-relation: standalone
+---
+Modify the selected repository.
+`);
+    const result = parseSkillAsset(asset);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected failure.");
+    expect(result.failure.details).toContainEqual(expect.objectContaining({
+      path: ["document", "frontmatter", "metadata.execution-permission"],
+      code: "invalid_execution_permission",
+    }));
+  });
+
+  it("rejects an unknown metadata key instead of dropping it", () => {
+    const asset = parseAsset(`---
+id: typo-skill
+type: skill
+tier: on-demand
+metadata.description: Contains a typo.
+metadata.display-name: Typo Skill
+metadata.execution-mdoe: advisory_preparation
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Report advice.
+`);
+    const result = parseSkillAsset(asset);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected failure.");
+    expect(result.failure.details).toContainEqual(expect.objectContaining({
+      path: ["document", "frontmatter", "metadata.execution-mdoe"],
+      code: "unknown_key",
+    }));
+  });
+
+  it("rejects orphan capability fallback and feature declarations", () => {
+    const fallback = validateAsset(expectOk(parseAssetDocument(`---
+id: orphan-fallback
+type: skill
+tier: on-demand
+capability.fallback.browser: vision
+---
+Body
+`)));
+    expect(fallback.ok).toBe(false);
+    if (fallback.ok) throw new Error("Expected failure.");
+    expect(fallback.failure.details?.map(({ code }) => code)).toContain("unknown_fallback_primary");
+
+    const features = validateAsset(expectOk(parseAssetDocument(`---
+id: orphan-features
+type: skill
+tier: on-demand
+capability.features.browser: [dom]
+---
+Body
+`)));
+    expect(features.ok).toBe(false);
+    if (features.ok) throw new Error("Expected failure.");
+    expect(features.failure.details?.map(({ code }) => code)).toContain("unknown_capability_reference");
+
+    const redundant = validateAsset(expectOk(parseAssetDocument(`---
+id: redundant-fallback
+type: skill
+tier: on-demand
+capability.required: [browser]
+capability.fallback.browser: browser
+---
+Body
+`)));
+    expect(redundant.ok).toBe(false);
+    if (redundant.ok) throw new Error("Expected failure.");
+    expect(redundant.failure.details?.map(({ code }) => code)).toContain("redundant_fallback");
+  });
+
+  it("represents a weaker same-capability fallback without losing either feature set", () => {
+    const asset = parseAsset(`---
+id: weaker-browser-fallback
+type: skill
+tier: on-demand
+capability.required: [browser]
+capability.fallback.browser: browser
+capability.features.browser: [dom, screenshot]
+capability.fallback-features.browser: [dom]
+metadata.description: Use a weaker browser feature set when screenshots are unavailable.
+metadata.display-name: Browser fallback
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Inspect the browser DOM.
+`);
+    const skill = expectOk(parseSkillAsset(asset));
+    expect(skill.capabilityDependencies).toEqual([
+      { strength: "required", capability: { capabilityId: "browser", features: ["dom", "screenshot"] } },
+      {
+        strength: "fallback",
+        capability: { capabilityId: "browser", features: ["dom"] },
+        fallbackFor: { capabilityId: "browser", features: ["dom", "screenshot"] },
+      },
+    ]);
+    const serialized = expectOk(serializeCanonicalAsset(asset));
+    expect(expectOk(serializeCanonicalAsset(parseAsset(serialized)))).toBe(serialized);
+  });
+
+  it("creates, updates, and projects one Skill without duplicating its identity", () => {
+    const capabilityDependencies: readonly CapabilityDependency[] = [{
+      strength: "required",
+      capability: { capabilityId: capabilityId("filesystem-read"), features: [featureId("text")] },
+    }];
+    const input: SkillInput = {
+      id: assetId("review-change"),
+      tier: "discoverable",
+      scope: { project: ["project-aacl"], role: ["reviewer"] },
+      requires: [assetId("review-rule")],
+      lifecycle: "active",
+      displayName: "Review change",
+      description: "Review a bounded change.",
+      kind: "bounded-operation",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      priority: 10,
+      conflicts: [assetId("write-change")],
+      completionCriteria: ["Findings are reported"],
+      capabilityDependencies,
+      body: "Inspect the selected change.",
+    };
+    const created = expectOk(createSkillAsset(input));
+    const updated = expectOk(updateSkillAsset(created, {
+      displayName: "Review selected change",
+      priority: null,
+    }));
+    const skill = expectOk(parseSkillAsset(updated));
+
+    expect(skill.skillId).toBe("review-change");
+    expect(skill.displayName).toBe("Review selected change");
+    expect(skill.priority).toBeUndefined();
+    expect(skill.asset.lifecycle).toBe("active");
+    expect(skill.capabilityDependencies).toEqual(capabilityDependencies);
+
+    expect(projectSkillCandidate(skill, {
+      revision: "sha256:revision" as AssetRevision,
+      source: { layer: "project", sourceId: "project-root/skills/review-change.md" },
+    })).toEqual({
+      assetId: "review-change",
+      revision: "sha256:revision",
+      assetType: "skill",
+      loadingTier: "discoverable",
+      source: { layer: "project", sourceId: "project-root/skills/review-change.md" },
+      rule: {
+        selectors: { projectId: ["project-aacl"], roleId: ["reviewer"] },
+        mandatory: false,
+        operation: { kind: "add" },
+        requires: ["review-rule"],
+        capabilityDependencies,
+        mergeMode: "additive",
+      },
+    });
+  });
+
+  it("normalizes capability dependency order in the created Canonical Asset", () => {
+    const created = expectOk(createSkillAsset({
+      id: assetId("ordered-capabilities"),
+      tier: "on-demand",
+      displayName: "Ordered capabilities",
+      description: "Keeps one canonical dependency order.",
+      kind: "advisory",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      capabilityDependencies: [
+        { strength: "preferred", capability: { capabilityId: capabilityId("zeta") } },
+        { strength: "required", capability: { capabilityId: capabilityId("alpha") } },
+      ],
+      body: "Inspect the available capabilities.",
+    }));
+
+    expect(created.capabilityDependencies).toEqual([
+      { strength: "required", capability: { capabilityId: "alpha" } },
+      { strength: "preferred", capability: { capabilityId: "zeta" } },
+    ]);
+    expect(expectOk(parseSkillAsset(created)).capabilityDependencies).toEqual(created.capabilityDependencies);
+  });
+
+  it("returns failures for malformed runtime capability values instead of throwing or dropping them", () => {
+    const base = parseAsset(`---
+id: malformed-capability
+type: skill
+tier: on-demand
+metadata.description: Exercises runtime validation.
+metadata.display-name: Malformed capability
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Inspect input.
+`);
+    const malformedStrength = {
+      ...base,
+      capabilityDependencies: [{ strength: "mystery", capability: { capabilityId: "browser" } }],
+    } as unknown as CanonicalAsset;
+    expect(serializeCanonicalAsset(malformedStrength)).toMatchObject({
+      ok: false,
+      failure: { details: [{ code: "invalid_capability_strength" }] },
+    });
+
+    const malformedReference = {
+      ...base,
+      capabilityDependencies: [{ strength: "required", capability: null }],
+    } as unknown as CanonicalAsset;
+    expect(() => serializeCanonicalAsset(malformedReference)).not.toThrow();
+    expect(serializeCanonicalAsset(malformedReference)).toMatchObject({
+      ok: false,
+      failure: { details: [{ code: "invalid_capability_reference" }] },
+    });
+  });
+});

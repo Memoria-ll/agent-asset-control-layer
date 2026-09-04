@@ -15,6 +15,29 @@ export type {
 } from "./assets.ts";
 
 export {
+  SKILL_KINDS,
+  SKILL_EXECUTION_PERMISSIONS,
+  SKILL_WORKFLOW_RELATIONS,
+  createSkillAsset,
+  parseSkillAsset,
+  projectSkillCandidate,
+  updateSkillAsset,
+} from "./skill.ts";
+export type {
+  CanonicalSkill,
+  SkillCandidateProjection,
+  SkillExecutionPermission,
+  SkillInput,
+  SkillKind,
+  SkillPatch,
+  SkillWorkflowRelation,
+  SkillWorkflowRelationKind,
+} from "./skill.ts";
+
+export { createWorkflowEntryReference } from "./workflow-entry.ts";
+export type { WorkflowEntryReference } from "./workflow-entry.ts";
+
+export {
   buildMetadataCatalog,
   catalogRevisionInput,
   projectRoleDefinition,
