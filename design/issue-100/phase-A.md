@@ -114,13 +114,28 @@ closure の入れ子宣言 147 個のうち、closure 変数を 1 つも参照�
 残りはキャプチャを引数へ移す必要があるため、**逐語移送になる部分とパラメータ化が要る部分を
 分けて証明する。**
 
-| unit | 内容 | 証明 |
+| unit | 内容 | 状態 |
 |---|---|---|
-| A-1 | closure の外の top-level 宣言 62 個を 6 module へ | **完了**。正規化比較 `0 missing / 0 added`（1,692 semantic 行）、gate 4 step PASS |
-| A-2 | closure 内の型宣言 9 個、`stronglyConnectedComponents`、`statusForState`、`capabilityOutcomeByState`、`dependencyOutcomes` → `dependency-evaluation.ts` | 0 missing + added 行の全数分類 |
-| A-3 | `makeOperationConflict`、`evaluatePlan`、`runCurrentOperation` → `protection-overlay.ts` | 同上 |
-| A-4 | `selectCurrent`、`dynamicReason`、`currentUnavailableReason` → `type-resolution.ts`、最終組み立て → `result-assembly.ts`、反復 → `pipeline.ts`、`scope-resolver.ts` 削除 | 同上 |
-| A-5 | source scan の glob 拡張、Ledger と AGENTS.md の同期 | gate green |
+| A-1 | closure の外の top-level 宣言 62 個を 6 module へ | **完了** `e086acb`。`0 missing / 0 added`（1,692 semantic 行）、2,299→1,483 行 |
+| A-2 | closure 内の型宣言 9 個、`stronglyConnectedComponents`→`graph.ts`、`statusForState`→`protection-overlay.ts`、capability builder と `dependencyOutcomes`→`dependency-evaluation.ts` | **完了** `04013e3`。累計 missing 3 / added 26、→1,073 行 |
+| A-3 | `makeOperationConflict`、`evaluatePlan`、`planKey`、`samePlan`、`runCurrentOperation` → `protection-overlay.ts` | **完了** `c00a65b`。累計 missing 9 / added 46、→652 行 |
+| A-4 | `candidateKey`、`selectCurrent`、`dynamicReason`、`currentUnavailableReason` → `type-resolution.ts` | **完了** `8851e69`。累計 missing 13 / added 80、→520 行 |
+| A-5 | prologue（validation / `states` / `matchedById` / `exclusiveGroups` / `stateById` / base state 初期化）を既存 4 seam へ | 未着手 |
+| A-6 | 反復本体と最終組み立て → `pipeline.ts` / `result-assembly.ts`、`scope-resolver.ts` 削除、`index.ts` 付け替え | 未着手 |
+| A-7 | source scan の glob 拡張、`ledger.md` 群と `AGENTS.md` の同期 | 未着手 |
+
+各ユニットで gate 4 step PASS、`core-domain` 231 件緑、**テストファイルは通算で無変更**。
+累計 `missing` はすべて「引数が増えた呼び出し行 / シグネチャ行」で、対応する `added` と
+1 対 1 に紐づくことを 1 行ずつ確認済み。ロジック行の消失は 0。
+
+**全ユニットに効いた罠**: `baseIncluded` / `baseReasons` / `operationIssuers` /
+`operationIssuerSet` は固定点反復の中で毎周新しい `Map` / `Set` へ再代入される。抽出時に
+束縛すると初回の値で固定され、typecheck も大半のテストも通ったまま収束・再選択系 18 件
+だけが落ちる。context object を**呼び出しごとに**渡すこと。
+
+**A-1 のバウンスで得た事実**: 宣言の移動（削除側）が完全でも参照側の import 漏れは
+正規化比較に映らない（0/0 のまま gate が落ちた）。ソース逐語性の証明とビルド検証は
+どちらも要る。
 
 ### 証明条件
 
