@@ -4,6 +4,7 @@ import {
   ASSET_TYPES,
   AVAILABILITY_STATUSES,
   COMPATIBILITY_STATUSES,
+  CONFLICT_KINDS,
   CORE_ERROR_CODES,
   EXECUTION_MODES,
   LOADING_TIERS,
@@ -16,13 +17,14 @@ import {
 import { CoreErrorCode } from "../src/errors.ts";
 import { CompatibilityStatus } from "../src/contract-version.ts";
 import { AssetType, ExecutionMode, LoadingTier } from "../src/resolved-context.ts";
-import { AvailabilityStatus, ResolutionReasonKind } from "../src/status.ts";
+import { AvailabilityStatus, ConflictKind, ResolutionReasonKind } from "../src/status.ts";
 import { TransitionKind } from "../src/workflow.ts";
 
 describe("frozen contract enum values", () => {
   it.each([
     ["ASSET_TYPES", ASSET_TYPES, ["skill", "rule", "role", "workflow", "task-type", "policy", "guardrail", "knowledge"]],
     ["RESOLUTION_REASON_KINDS", RESOLUTION_REASON_KINDS, ["included", "excluded", "overridden", "disabled", "unavailable"]],
+    ["CONFLICT_KINDS", CONFLICT_KINDS, ["exclusive_tie", "mandatory_conflict", "operation_conflict", "duplicate_identity", "dependency_cycle", "dependency_failure", "asset_type_conflict", "capability_failure"]],
     ["AVAILABILITY_STATUSES", AVAILABILITY_STATUSES, ["available", "degraded", "unavailable"]],
     ["LOADING_TIERS", LOADING_TIERS, ["core", "discoverable", "on-demand"]],
     ["EXECUTION_MODES", EXECUTION_MODES, ["advisory_preparation", "development_execution"]],
@@ -46,6 +48,7 @@ describe("frozen contract enum values", () => {
   it.each([
     ["AssetType", AssetType, ASSET_TYPES],
     ["ResolutionReasonKind", ResolutionReasonKind, RESOLUTION_REASON_KINDS],
+    ["ConflictKind", ConflictKind, CONFLICT_KINDS],
     ["AvailabilityStatus", AvailabilityStatus, AVAILABILITY_STATUSES],
     ["LoadingTier", LoadingTier, LOADING_TIERS],
     ["ExecutionMode", ExecutionMode, EXECUTION_MODES],

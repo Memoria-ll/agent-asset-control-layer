@@ -348,6 +348,37 @@ requires: [asset-required, asset-prerequisite]
     });
   });
 
+  it("D4: projects matched axes in resolution order and preserves an empty match", () => {
+    const allAxes = candidateFromDocument(assetDocument("asset-all-axes", [
+      "scope.project: [project-1]",
+      "scope.workflow: [workflow-1]",
+      "scope.stage: [stage-1]",
+      "scope.task-type: [task-type-1]",
+      "scope.role: [role-1]",
+      "scope.provider: [provider-1]",
+      "scope.runtime: [runtime-1]",
+      "scope.model: [model-1]",
+      "scope.directory: [/workspace]",
+    ].join("\n") + "\n"), add());
+    const result = resultValue({
+      projectId: "project-1",
+      workflowId: "workflow-1",
+      stageId: "stage-1",
+      taskTypeId: "task-type-1",
+      roleId: "role-1",
+      providerId: "provider-1",
+      runtimeId: "runtime-1",
+      modelId: "model-1",
+      directory: "/workspace",
+    }, [allAxes, candidateFromDocument(assetDocument("asset-global"), add())]);
+
+    expect(toResolutionReasonDto(reason(result, "asset-all-axes"))).toMatchObject({
+      kind: "included",
+      matchedAxes: ["projectId", "workflowId", "stageId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId", "directory"],
+    });
+    expect(toResolutionReasonDto(reason(result, "asset-global"))).toMatchObject({ kind: "included", matchedAxes: [] });
+  });
+
   it("D3: treats workflow and stage selectors as neutral for a none workflow", () => {
     // Characterization pin: omitted workflow and stage axes remain neutral in scope matching.
     const result = resultValue({}, [
@@ -367,7 +398,7 @@ requires: [asset-required, asset-prerequisite]
       const result = resultValue(scope, [candidate]);
       expect(reason(result, "asset-a").kind).toBe(expected);
       if (expected === "included") expect(reason(result, "asset-a")).toMatchObject({ matchedAxes: ["roleId"] });
-      else expect(reason(result, "asset-a")).toEqual({ kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["roleId"] });
+      else expect(reason(result, "asset-a")).toEqual({ kind: "excluded", cause: "scope_mismatch", matchedAxes: [], mismatchedAxes: ["roleId"] });
       expect(result.outcome).toBe("resolved");
       expect(result.conflicts).toHaveLength(0);
     }
@@ -378,10 +409,10 @@ requires: [asset-required, asset-prerequisite]
 scope.project: [acme]
 `), add());
     expect(reason(resultValue({ roleId: "reviewer", projectId: "other" }, [candidate]), "asset-a")).toEqual({
-      kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["projectId"],
+      kind: "excluded", cause: "scope_mismatch", matchedAxes: ["roleId"], mismatchedAxes: ["projectId"],
     });
     expect(reason(resultValue({ roleId: "author", projectId: "acme" }, [candidate]), "asset-a")).toEqual({
-      kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["roleId"],
+      kind: "excluded", cause: "scope_mismatch", matchedAxes: ["projectId"], mismatchedAxes: ["roleId"],
     });
     const included = resultValue({ roleId: "reviewer" }, [candidate]);
     expect(included.outcome).toBe("resolved");
@@ -475,7 +506,7 @@ scope.project: [acme]
     if (includedReason.kind === "included") expect(includedReason.rank).toEqual({ explicitPriority: -1, matchingAxisCount: 1, scopePrecedence: [30], directoryDepth: 0, sourceLayerPrecedence: 2 });
     const excluded = resultValue({ projectId: "project-b" }, [candidate]);
     expect(excluded.outcome).toBe("resolved");
-    expect(reason(excluded, "asset-project")).toEqual({ kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["projectId"] });
+    expect(reason(excluded, "asset-project")).toEqual({ kind: "excluded", cause: "scope_mismatch", matchedAxes: [], mismatchedAxes: ["projectId"] });
   });
 
   it("case 7: compares explicit priority before matching specificity", () => {
@@ -1544,7 +1575,7 @@ scope.project: [acme]
       candidateFromDocument(assetDocument("asset-target", "scope.role: [author]\n"), add()),
     ]);
 
-    expect(reason(result, "asset-target")).toEqual({ kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["roleId"] });
+    expect(reason(result, "asset-target")).toEqual({ kind: "excluded", cause: "scope_mismatch", matchedAxes: [], mismatchedAxes: ["roleId"] });
     expect(reason(result, "asset-dependent")).toEqual({ kind: "unavailable", availability: "unavailable", cause: "requirement_out_of_scope", failedRequirements: ["asset-target"] });
     expect(result.outcome).toBe("resolved");
   });
@@ -2207,7 +2238,7 @@ scope.project: [acme]
 
     expect(result.outcome).toBe("conflicted");
     expect(result.conflicts[0]).toEqual({ kind: "operation_conflict", targetAssetId: "asset-target", involvedAssetIds: ["asset-issuer", "asset-target"] });
-    expect(reason(result, "asset-target")).toEqual({ kind: "excluded", cause: "scope_mismatch", mismatchedAxes: ["roleId"] });
+    expect(reason(result, "asset-target")).toEqual({ kind: "excluded", cause: "scope_mismatch", matchedAxes: [], mismatchedAxes: ["roleId"] });
   });
 
   it("case 17.5 operation conflict: records a lower-ranked operation that loses to another kind", () => {
@@ -2303,7 +2334,7 @@ scope.project: [acme]
     if (firstAsset === undefined) throw new Error("Expected a projected asset.");
     expect(parseResolvedContextDto(resolvedContext)).toEqual(resolvedContext);
     expect(tryParseResolvedContextDto({ ...resolvedContext, unknown: true }).ok).toBe(false);
-    expect(tryParseResolvedContextDto({ ...resolvedContext, assets: [{ ...firstAsset, reason: { kind: "included", explanation: "" } }] }).ok).toBe(false);
+    expect(tryParseResolvedContextDto({ ...resolvedContext, assets: [{ ...firstAsset, reason: { kind: "included", explanation: "", matchedAxes: [] } }] }).ok).toBe(false);
     expect(tryParseResolvedContextDto({ ...resolvedContext, assets: [{ ...firstAsset, reason: { kind: "unavailable", explanation: "bad", availability: "available" } }] }).ok).toBe(false);
   });
 
@@ -2659,5 +2690,36 @@ scope.project: [acme]
       cause: "capability_not_allowed",
       failedCapabilities: [capabilityId("cap-denied"), capabilityId("cap-missing")],
     });
+  });
+
+  it("D7: projects a denied capability cause through the response schema", () => {
+    const candidate = candidateFromDocument(assetDocument("skill-denied", "", "skill"), {
+      ...add(),
+      capabilityDependencies: [{ strength: "required", capability: capabilityReference("cap-denied") }],
+    });
+    const result = resultValue({}, [candidate], capabilityContext(
+      [{ id: "cap-denied" }],
+      [capabilityOffer("cap-denied", [], "denied")],
+    ));
+    const wireReason = toResolutionReasonDto(reason(result, "skill-denied"));
+
+    expect(wireReason).toMatchObject({
+      kind: "unavailable",
+      availability: "unavailable",
+      detail: { cause: "capability_not_allowed", failedCapabilities: ["cap-denied"] },
+    });
+    expect(parseResolvedContextDto({
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      assets: [{
+        assetId: "skill-denied",
+        revision: "revision-skill-denied",
+        assetType: "skill",
+        loadingTier: "core",
+        reason: wireReason,
+      }],
+      conflicts: [],
+      cost: { totalTokenEstimate: 0, includedAssetCount: 0, excludedAssetCount: 1 },
+      resolvedAt: "2026-08-30T01:02:03+09:00",
+    }).assets[0]?.reason).toEqual(wireReason);
   });
 });

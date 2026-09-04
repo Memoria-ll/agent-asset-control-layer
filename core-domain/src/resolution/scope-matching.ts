@@ -45,7 +45,7 @@ export const matchesScope = (
     }
   }
 
-  if (mismatchedAxes.length > 0) return { matched: false, mismatchedAxes };
+  if (mismatchedAxes.length > 0) return { matched: false, matchedAxes, mismatchedAxes };
   return {
     matched: true,
     matchedAxes,
@@ -66,7 +66,7 @@ export const matchCandidates = (
   const states: CandidateState[] = deduplicated.map((normalized) => ({
     candidate: normalized.candidate,
     matched: false,
-    reason: { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: [] },
+    reason: { kind: "excluded", cause: "scope_mismatch", matchedAxes: [], mismatchedAxes: [] },
   }));
 
   for (const state of states) {
@@ -76,7 +76,12 @@ export const matchCandidates = (
       state.rank = decision.rank;
       state.reason = { kind: "included", matchedAxes: decision.matchedAxes, rank: decision.rank };
     } else {
-      state.reason = { kind: "excluded", cause: "scope_mismatch", mismatchedAxes: decision.mismatchedAxes };
+      state.reason = {
+        kind: "excluded",
+        cause: "scope_mismatch",
+        matchedAxes: decision.matchedAxes,
+        mismatchedAxes: decision.mismatchedAxes,
+      };
     }
   }
   return states;

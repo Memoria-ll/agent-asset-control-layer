@@ -57,6 +57,7 @@ export type ScopeMatchDecision =
     }
   | {
       readonly matched: false;
+      readonly matchedAxes: readonly ResolutionAxis[];
       readonly mismatchedAxes: readonly ResolutionAxis[];
     };
 
@@ -83,6 +84,7 @@ export type CandidateReason =
   | {
       readonly kind: "excluded";
       readonly cause: "scope_mismatch";
+      readonly matchedAxes: readonly ResolutionAxis[];
       readonly mismatchedAxes: readonly ResolutionAxis[];
     }
   | {

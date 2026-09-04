@@ -289,22 +289,118 @@ export const toResolutionReasonDto = (reason: CandidateReason): ResolutionReason
       explanation: reason.degradedInfo === undefined
         ? "The candidate matched the requested scope."
         : `The candidate matched the requested scope. ${reason.degradedInfo.reasons.join(" ")}`,
+      matchedAxes: [...reason.matchedAxes],
+      ...(reason.degradedInfo === undefined ? {} : { degradedInfo: reason.degradedInfo }),
+      ...(reason.degradedCapabilities === undefined ? {} : {
+        degradedCapabilities: reason.degradedCapabilities.map((degradation) => ({
+          capabilityId: degradation.capabilityId,
+          strength: degradation.strength,
+          ...(degradation.fallbackCapabilityId === undefined ? {} : {
+            fallbackCapabilityId: degradation.fallbackCapabilityId,
+          }),
+        })),
+      }),
     };
     case "excluded": {
-      if (reason.cause === "scope_mismatch") return { kind: "excluded", explanation: "The candidate did not match the requested scope." };
-      if (reason.cause === "invalid_directory") return { kind: "excluded", explanation: "The candidate has an invalid directory selector." };
-      return { kind: "excluded", explanation: "The candidate participated in a resolution conflict." };
+      if (reason.cause === "scope_mismatch") return {
+        kind: "excluded",
+        explanation: "The candidate did not match the requested scope.",
+        detail: { cause: "scope_mismatch", matchedAxes: [...reason.matchedAxes] },
+      };
+      if (reason.cause === "invalid_directory") return {
+        kind: "excluded",
+        explanation: "The candidate has an invalid directory selector.",
+        detail: { cause: "invalid_directory", diagnostics: [...reason.diagnostics] },
+      };
+      return {
+        kind: "excluded",
+        explanation: "The candidate participated in a resolution conflict.",
+        detail: { cause: "resolution_conflict", conflict: toResolutionConflictDto(reason.conflict) },
+      };
     }
-    case "overridden": return { kind: "overridden", explanation: "The candidate was overridden by a higher-ranked candidate.", overriddenBy: reason.overriddenBy };
+    case "overridden": return {
+      kind: "overridden",
+      explanation: "The candidate was overridden by a higher-ranked candidate.",
+      overriddenBy: reason.overriddenBy,
+      mergeGroup: reason.mergeGroup,
+    };
     case "disabled": return { kind: "disabled", explanation: "The candidate was disabled by an operation.", disabledBy: reason.disabledBy };
-    case "unavailable": return { kind: "unavailable", explanation: "The candidate is unavailable because a requirement failed.", availability: reason.availability };
+    case "unavailable": {
+      const requirementCause = reason.cause === "missing_requirement" ||
+        reason.cause === "requirement_out_of_scope" ||
+        reason.cause === "requirement_disabled" ||
+        reason.cause === "requirement_overridden" ||
+        reason.cause === "requirement_cycle" ||
+        reason.cause === "requirement_invalid";
+      return {
+        kind: "unavailable",
+        explanation: "The candidate is unavailable because a requirement failed.",
+        availability: "unavailable",
+        detail: requirementCause
+          ? { cause: reason.cause, failedRequirements: [...reason.failedRequirements] }
+          : {
+              cause: reason.cause,
+              failedCapabilities: [...(reason.failedCapabilities ?? [])],
+              ...(reason.failedRequirements.length === 0 ? {} : { failedRequirements: [...reason.failedRequirements] }),
+            },
+      };
+    }
   }
 };
 
-export const toResolutionConflictDto = (conflict: ResolutionConflict): ConflictDto => ({
-  explanation: conflictExplanation(conflict),
-  involvedAssetIds: [...canonicalIds(conflict.involvedAssetIds)],
-});
+const canonicalStrings = (values: readonly string[]): readonly string[] =>
+  [...new Set(values)].sort(codeUnitCompare);
+
+export const toResolutionConflictDto = (conflict: ResolutionConflict): ConflictDto => {
+  const involvedAssetIds = [...canonicalIds(conflict.involvedAssetIds)];
+  switch (conflict.kind) {
+    case "exclusive_tie": return {
+      kind: "exclusive_tie",
+      explanation: conflictExplanation(conflict),
+      mergeGroup: conflict.mergeGroup,
+      involvedAssetIds,
+    };
+    case "mandatory_conflict": return {
+      kind: "mandatory_conflict",
+      explanation: conflictExplanation(conflict),
+      involvedAssetIds,
+    };
+    case "operation_conflict": return {
+      kind: "operation_conflict",
+      explanation: conflictExplanation(conflict),
+      targetAssetId: conflict.targetAssetId,
+      involvedAssetIds,
+    };
+    case "duplicate_identity": return {
+      kind: "duplicate_identity",
+      explanation: conflictExplanation(conflict),
+      assetId: conflict.assetId,
+      involvedAssetIds,
+    };
+    case "dependency_cycle": return {
+      kind: "dependency_cycle",
+      explanation: conflictExplanation(conflict),
+      involvedAssetIds,
+    };
+    case "dependency_failure": return {
+      kind: "dependency_failure",
+      explanation: conflictExplanation(conflict),
+      failedRequirement: conflict.failedRequirement,
+      involvedAssetIds,
+    };
+    case "asset_type_conflict": return {
+      kind: "asset_type_conflict",
+      explanation: conflictExplanation(conflict),
+      involvedAssetIds,
+    };
+    case "capability_failure": return {
+      kind: "capability_failure",
+      explanation: conflictExplanation(conflict),
+      failedCapabilities: [...canonicalStrings(conflict.failedCapabilities)],
+      involvedAssetIds,
+    };
+  }
+};
 
 /**
  * One detail per involved asset, with the id in `path`.

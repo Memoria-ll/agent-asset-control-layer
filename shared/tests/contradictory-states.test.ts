@@ -29,7 +29,7 @@ const resolvedContext = (overrides: {
       revision: "revision-1",
       assetType: "skill",
       loadingTier: "core",
-      reason: overrides.reason ?? { kind: "included", explanation: "Matched scope" },
+      reason: overrides.reason ?? { kind: "included", explanation: "Matched scope", matchedAxes: [] },
       ...(overrides.body === undefined ? {} : { body: overrides.body }),
     },
   ],
@@ -120,24 +120,31 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseResolvedContextDto(
         resolvedContext({
-          reason: { kind: "unavailable", explanation: "Runtime is down", availability: "available" },
+          reason: {
+            kind: "unavailable",
+            explanation: "Runtime is down",
+            availability: "available",
+            detail: { cause: "missing_requirement", failedRequirements: ["asset-required"] },
+          },
         }),
       ),
     ).toThrow();
   });
 
-  it.each(["degraded", "unavailable"])(
-    "accepts an unavailable reason reporting %s",
-    (availability) => {
-      expect(() =>
-        parseResolvedContextDto(
-          resolvedContext({
-            reason: { kind: "unavailable", explanation: "Runtime is down", availability },
-          }),
-        ),
-      ).not.toThrow();
-    },
-  );
+  it("accepts an unavailable reason", () => {
+    expect(() =>
+      parseResolvedContextDto(
+        resolvedContext({
+          reason: {
+            kind: "unavailable",
+            explanation: "Runtime is down",
+            availability: "unavailable",
+            detail: { cause: "missing_requirement", failedRequirements: ["asset-required"] },
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
 
   it("rejects a degraded state carrying no reason", () => {
     expect(z.safeParse(DegradedInfo, { reasons: [] }).success).toBe(false);
@@ -161,14 +168,14 @@ describe("boundary states that cannot exist", () => {
 
   it("rejects a blank explanation on a resolution reason", () => {
     expect(() =>
-      parseResolvedContextDto(resolvedContext({ reason: { kind: "included", explanation: "" } })),
+      parseResolvedContextDto(resolvedContext({ reason: { kind: "included", explanation: "", matchedAxes: [] } })),
     ).toThrow();
   });
 
   it("rejects a conflict that involves no asset", () => {
     expect(() =>
       parseResolvedContextDto(
-        resolvedContext({ conflicts: [{ explanation: "Overlapping assets", involvedAssetIds: [] }] }),
+        resolvedContext({ conflicts: [{ kind: "mandatory_conflict", explanation: "Overlapping assets", involvedAssetIds: [] }] }),
       ),
     ).toThrow();
   });
@@ -177,7 +184,7 @@ describe("boundary states that cannot exist", () => {
     expect(() =>
       parseResolvedContextDto(
         resolvedContext({
-          conflicts: [{ explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] }],
+          conflicts: [{ kind: "mandatory_conflict", explanation: "Overlapping assets", involvedAssetIds: ["asset-1"] }],
         }),
       ),
     ).not.toThrow();
@@ -328,13 +335,13 @@ describe("published JSON Schema carries the same constraints", () => {
     expect(cost.excludedAssetCount.minimum).toBe(0);
   });
 
-  it("omits available from the unavailable resolution reason", () => {
+  it("fixes unavailable resolution reasons to unavailable", () => {
     const reason = (schemas().ResolvedContextDto as any).properties.assets.items.properties.reason;
     const unavailableArm = reason.oneOf.find(
       (arm: any) => arm.properties.kind.const === "unavailable",
     );
 
-    expect(unavailableArm.properties.availability.enum).toEqual(["degraded", "unavailable"]);
+    expect(unavailableArm.properties.availability.const).toBe("unavailable");
   });
 
   it("requires a reason on the blocked transition arm only", () => {

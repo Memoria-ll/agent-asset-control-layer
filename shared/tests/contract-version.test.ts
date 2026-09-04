@@ -6,7 +6,7 @@ import {
 
 describe("contract compatibility", () => {
   it("uses the current contract version", () => {
-    expect(CONTRACT_VERSION).toBe("0.4.0");
+    expect(CONTRACT_VERSION).toBe("0.5.0");
   });
 
   it("does not call two different versions a match", () => {
@@ -24,6 +24,8 @@ describe("contract compatibility", () => {
   it.each([
     [CONTRACT_VERSION, CONTRACT_VERSION, "compatible"],
     ["0.1.0", "0.2.0", "incompatible"],
+    ["0.4.9", "0.5.0", "incompatible"],
+    ["0.5.0", "0.4.9", "incompatible"],
     ["1.2.0", "2.0.0", "incompatible"],
     // A minor difference is breaking in both readings: whichever side holds the
     // newer number sends a field the other side's strict objects reject.
