@@ -1,5 +1,4 @@
 import type {
-  AssetId,
   AssetType,
   CoreErrorDetail,
   LoadingTier,
@@ -13,14 +12,12 @@ import type {
   CandidateReason,
   CandidateRecord,
   CandidateState,
-  DependencyCause,
   NormalizedCandidate,
   OperationConflictEntry,
   OperationPass,
   ResolutionConflict,
   ResolutionResult,
   ResolveScopeInput,
-  SelectionPass,
 } from "./resolution-types.ts";
 import {
   deduplicateExactCandidates,
@@ -34,15 +31,21 @@ import {
   validateCandidate,
 } from "./candidate-validation.ts";
 import { matchesScope } from "./scope-matching.ts";
-import { hasUnresolvedIdentityPair, isSameIdOverlayPair, runCurrentOperation, statusForState } from "./protection-overlay.ts";
+import { hasUnresolvedIdentityPair, isSameIdOverlayPair, runCurrentOperation } from "./protection-overlay.ts";
 import { buildCapabilityOutcomeByState } from "./dependency-evaluation.ts";
-import { selectExclusiveWinner } from "./ranking-precedence.ts";
 import {
   canonicalIds,
   compareCandidatesForOutput,
   conflictKey,
   resolutionConflictReason,
 } from "./result-assembly.ts";
+import {
+  candidateKey,
+  currentUnavailableReason,
+  dynamicReason,
+  selectCurrent,
+  type SelectionContext,
+} from "./type-resolution.ts";
 
 
 
@@ -257,176 +260,31 @@ const resolveScopeFixedPoint = (
     capabilityContext,
   });
 
-  const candidateKey = (state: CandidateState): string =>
-    `${String(state.candidate.assetId)}\u0000${String(state.candidate.revision)}\u0000${state.candidate.source.layer}\u0000${state.candidate.source.sourceId}`;
-  const selectCurrent = (): SelectionPass => {
-    const reasons = new Map(staticReasons);
-    const included = new Set<CandidateState>(
-      [...staticIncluded].filter((state) => !selectionExcluded.has(state)),
-    );
-    const exclusiveWinners: CandidateState[] = [];
-    const selectionConflicts: ResolutionConflict[] = [];
-    const groups = new Map<string, CandidateState[]>();
-    for (const state of staticIncluded) {
-      if (state.candidate.rule.mergeMode !== "exclusive") continue;
-      const group = groups.get(state.candidate.rule.mergeGroup) ?? [];
-      group.push(state);
-      groups.set(state.candidate.rule.mergeGroup, group);
-    }
-    for (const [mergeGroup, group] of groups) {
-      const unstableConflict = unstableExclusiveGroups.get(mergeGroup);
-      if (unstableConflict !== undefined) {
-        selectionConflicts.push(unstableConflict);
-        for (const state of group) {
-          included.delete(state);
-          reasons.set(state, resolutionConflictReason(unstableConflict, state.rank));
-        }
-        continue;
-      }
-      const candidates = group.filter((state) => !selectionExcluded.has(state));
-      const mandatory = candidates.filter((state) => state.candidate.rule.mandatory);
-      if (mandatory.length > 0) {
-        const winner = mandatory[0]!;
-        exclusiveWinners.push(winner);
-        included.add(winner);
-        for (const state of candidates) {
-          if (state === winner) continue;
-          included.delete(state);
-          reasons.set(state, {
-            kind: "overridden",
-            overriddenBy: winner.candidate.assetId,
-            mergeGroup,
-            winnerRank: winner.rank!,
-          });
-        }
-        continue;
-      }
-      if (candidates.length === 0) {
-        const groupIds = new Set(group.map((state) => String(state.candidate.assetId)));
-        const dependencyFeedback = group.every((state) => {
-          const evidence = selectionEvidence.get(state);
-          // A tie represents a selection cycle only when every failure is
-          // peer-related.  Independent failures keep the candidates
-          // unavailable even if a peer requirement also failed.
-          return evidence?.kind === "unavailable" &&
-            evidence.failedRequirements.length > 0 &&
-            evidence.failedRequirements.every((requiredId) => groupIds.has(String(requiredId)));
-        });
-        if (dependencyFeedback) {
-          const conflict: ResolutionConflict = {
-            kind: "exclusive_tie",
-            mergeGroup,
-            involvedAssetIds: canonicalIds(group.map((state) => state.candidate.assetId)),
-          };
-          selectionConflicts.push(conflict);
-          for (const state of group) reasons.set(state, resolutionConflictReason(conflict, state.rank));
-        }
-        continue;
-      }
-      const decision = selectExclusiveWinner(candidates.map((state) => ({
-        candidate: state.candidate,
-        rank: state.rank!,
-      })));
-      if (decision.kind === "conflict") {
-        selectionConflicts.push(decision.conflict);
-        for (const state of candidates) {
-          included.delete(state);
-          reasons.set(state, resolutionConflictReason(decision.conflict, state.rank));
-        }
-        continue;
-      }
-      const winner = candidates.find((state) => state.candidate === decision.candidate.candidate);
-      if (winner === undefined) throw new Error("Exclusive selection returned an unknown candidate.");
-      exclusiveWinners.push(winner);
-      included.add(winner);
-      for (const state of candidates) {
-        if (state === winner) continue;
-        included.delete(state);
-        reasons.set(state, {
-          kind: "overridden",
-          overriddenBy: winner.candidate.assetId,
-          mergeGroup,
-          winnerRank: winner.rank!,
-        });
-      }
-    }
-    const currentOperationIssuers = [...included]
-      .filter((state) => state.candidate.rule.operation.kind !== "add")
-      .sort(compareCandidatesForOutput);
-    return {
-      included,
-      reasons,
-      operationIssuers: currentOperationIssuers,
-      exclusiveWinners,
-      conflicts: selectionConflicts,
-    };
-  };
-  const dynamicReason = (state: CandidateState, pass: OperationPass): CandidateReason | undefined => {
-    const status = pass.statuses.get(state);
-    if (status?.kind === "disabled") return { kind: "disabled", disabledBy: status.disabledBy };
-    if (status?.kind === "overridden") return {
-      kind: "overridden",
-      overriddenBy: status.overriddenBy,
-      mergeGroup: status.mergeGroup,
-      winnerRank: status.winnerRank,
-    };
-    if (status?.kind === "conflict") return resolutionConflictReason(status.conflict, state.rank);
-    const outcome = pass.dependency.get(state);
-    if (outcome !== undefined && !outcome.ok) return {
-      kind: "unavailable",
-      availability: "unavailable",
-      cause: outcome.cause,
-      failedRequirements: [...outcome.failedRequirements],
-    };
-    return undefined;
-  };
-  const currentUnavailableReason = (
-    state: CandidateState,
-    pass: OperationPass,
-  ): CandidateReason | undefined => {
-    const failures: { readonly id: AssetId; readonly cause: DependencyCause }[] = [];
-    for (const requiredId of state.candidate.rule.requires) {
-      const activeTargets = [...baseIncluded].filter((candidate) =>
-        candidate.candidate.assetId === requiredId &&
-        pass.statuses.get(candidate)?.kind === "included"
-      );
-      if (activeTargets.length === 1) {
-        const outcome = pass.dependency.get(activeTargets[0]!);
-        if (outcome !== undefined && !outcome.ok) failures.push({ id: requiredId, cause: outcome.cause });
-        continue;
-      }
-      const candidatesForId = stateById.get(String(requiredId)) ?? [];
-      const matchedCandidates = candidatesForId.filter((candidate) => candidate.matched);
-      let cause: DependencyCause;
-      if (activeTargets.length > 1) cause = "requirement_invalid";
-      else if (matchedCandidates.length > 0) {
-        const kinds = matchedCandidates.map((candidate) => statusForState(candidate, pass.statuses, {
-          baseReasons,
-          selectionEvidence,
-        })?.kind);
-        if (kinds.every((kind) => kind === "disabled")) cause = "requirement_disabled";
-        else if (kinds.every((kind) => kind === "overridden")) cause = "requirement_overridden";
-        else cause = "requirement_invalid";
-      } else if (invalidById.has(String(requiredId))) cause = "requirement_invalid";
-      else if (candidatesForId.length === 0) cause = "missing_requirement";
-      else cause = "requirement_out_of_scope";
-      failures.push({ id: requiredId, cause });
-    }
-    failures.sort((left, right) => codeUnitCompare(left.id, right.id));
-    if (failures.length === 0) return undefined;
-    return {
-      kind: "unavailable",
-      availability: "unavailable",
-      cause: failures[0]!.cause,
-      failedRequirements: failures.map((failure) => failure.id),
-    };
-  };
-
-  let finalSelection = selectCurrent();
+  let finalSelection = selectCurrent({
+    staticReasons,
+    staticIncluded,
+    selectionEvidence,
+    selectionExcluded,
+    unstableExclusiveGroups,
+    baseIncluded,
+    baseReasons,
+    invalidById,
+    stateById,
+  });
   let operationResult: { readonly pass: OperationPass; readonly forcedConflicts: ReadonlyMap<CandidateState, ResolutionConflict> } | undefined;
   const seenSelections = new Set<string>();
   for (;;) {
-    finalSelection = selectCurrent();
+    finalSelection = selectCurrent({
+      staticReasons,
+      staticIncluded,
+      selectionEvidence,
+      selectionExcluded,
+      unstableExclusiveGroups,
+      baseIncluded,
+      baseReasons,
+      invalidById,
+      stateById,
+    });
     for (const conflict of finalSelection.conflicts) {
       if (conflict.kind !== "exclusive_tie") continue;
       for (const state of staticIncluded) {
@@ -478,7 +336,17 @@ const resolveScopeFixedPoint = (
       if (evidence.kind === "disabled") stillSupported = status?.kind === "disabled";
       else if (evidence.kind === "overridden") stillSupported = status?.kind === "overridden";
       else if (evidence.kind === "unavailable") {
-        const currentEvidence = currentUnavailableReason(state, operationResult.pass);
+        const currentEvidence = currentUnavailableReason(state, operationResult.pass, {
+          staticReasons,
+          staticIncluded,
+          selectionEvidence,
+          selectionExcluded,
+          unstableExclusiveGroups,
+          baseIncluded,
+          baseReasons,
+          invalidById,
+          stateById,
+        });
         stillSupported = currentEvidence !== undefined;
         if (currentEvidence !== undefined) selectionEvidence.set(state, currentEvidence);
       } else continue;
