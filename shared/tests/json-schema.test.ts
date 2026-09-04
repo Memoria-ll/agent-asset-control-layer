@@ -145,4 +145,23 @@ describe("contract JSON Schemas", () => {
       "registryProjectId",
     ]));
   });
+
+  it("D9: publishes strict nested reason and conflict arms", () => {
+    const schemas = contractJsonSchemas() as any;
+    const reason = schemas.ResolvedContextDto.properties.assets.items.properties.reason;
+    const excluded = reason.oneOf.find((arm: any) => arm.properties.kind.const === "excluded");
+    const unavailable = reason.oneOf.find((arm: any) => arm.properties.kind.const === "unavailable");
+
+    for (const arm of excluded.properties.detail.oneOf) {
+      expect(arm.additionalProperties).toBe(false);
+    }
+    for (const arm of unavailable.properties.detail.oneOf) {
+      expect(arm.additionalProperties).toBe(false);
+    }
+
+    const conflict = schemas.ResolvedContextDto.properties.conflicts.items;
+    for (const arm of conflict.oneOf) {
+      expect(arm.additionalProperties).toBe(false);
+    }
+  });
 });

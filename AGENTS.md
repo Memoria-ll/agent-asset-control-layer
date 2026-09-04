@@ -380,11 +380,12 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
   Agent Execution を永続化した時点で 2 document の更新になり、そこは transaction /
   idempotency を別に設計する必要がある (#7)
 
-- **公開 `ConflictDto` は `{ explanation, involvedAssetIds }` の 2 欄で `kind` を持たず、
-  `CoreErrorDetail.code` は `NonEmptyString` である。** したがって内部
-  `ResolutionConflict` に kind を足しても公開契約は変わらず、`CONTRACT_VERSION` の bump も要らない。
-  漏れは `conflictExplanation` の網羅 switch がコンパイル時に捕まえる。逆に、conflict の種別を
-  Extension 側へ機械可読に渡す必要が出たときは、そこが初めて公開契約の変更になる (#75)
+- **公開 `ConflictDto` は `kind` を判別子とする 8 arm の discriminated union で、値集合の正は
+  `CONFLICT_KINDS`（`shared/tests/enum-values.test.ts` が逐語で pin）。** したがって内部
+  `ResolutionConflict` に kind を足すことは公開 enum への値追加であり、
+  **`CONTRACT_VERSION` の bump を伴う破壊的変更になる。** 内部だけ足して公開側を忘れる漏れは
+  `conflictExplanation` の網羅 switch と `toResolutionConflictDto` がコンパイル時に捕まえるが、
+  **bump の要否はコンパイラが見ないので、追加する側が自分で判断する** (#100)
 
 - **`ResolveScopeInput.capabilityContext` の省略は「capability が要らない」ではなく
   「提供が 0 件」として評価される。** 渡し忘れた caller は capability dependency を持つ候補の
@@ -393,6 +394,12 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
 
 - **`CapabilityOffer.permission` は必須欄で、producer は畳み後の値を渡す。** 省略や既定値に
   頼らず、`allowed` / `denied` を明示すること (#100)
+
+- **`ResolutionResult` の `context.directory` は caller が送った文字列そのまま、
+  `scope.directory` は末尾スラッシュを落とした正規化形。** 両方 `DirectoryPath` なので
+  取り違えても typecheck も gate も緑のまま通り、`/repo/src/` と `/repo/src` が
+  一致しない。matching / 同一性判定に使うのは `scope`、resolved context の再現
+  （`ResolvedContextDto.context`、#12 / #13）に使うのは `context` (#100)
 
 - **Capability offer は provider を同定しないため、同一 capability・同一 features の複数 offer は
   permission が異なっても `duplicate_capability_offer` として扱う。** 複数 MCP の統合と

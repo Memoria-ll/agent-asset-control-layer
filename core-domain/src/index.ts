@@ -41,8 +41,8 @@ export type {
 export { parseExecutionTargetCatalog } from "./catalog-document.ts";
 export type { ExecutionTargetCatalogDocument } from "./catalog-document.ts";
 
-export { toResolutionContext } from "./resolution/resolution-context.ts";
-export type { ResolutionContext } from "./resolution/resolution-context.ts";
+export { toResolutionContext, toValidatedResolutionContext } from "./resolution/resolution-context.ts";
+export type { ResolutionContext, ValidatedExecutionContext } from "./resolution/resolution-context.ts";
 
 export { DEFAULT_ASSET_TYPE_CONTRACTS } from "./resolution/asset-type-contracts.ts";
 export type {

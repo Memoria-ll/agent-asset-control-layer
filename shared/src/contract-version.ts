@@ -22,7 +22,7 @@ import { tryParseWith, type ParseOutcome } from "./errors.ts";
  *     every boundary DTO is a strict object, so an old consumer rejects the new
  *     key
  */
-export const CONTRACT_VERSION = "0.4.0";
+export const CONTRACT_VERSION = "0.5.0";
 
 export const ContractVersion = SemanticVersion;
 export type ContractVersion = z.infer<typeof ContractVersion>;

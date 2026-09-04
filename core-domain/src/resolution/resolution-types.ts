@@ -1,7 +1,7 @@
-import type { AssetId, AssetRevision, AssetType, CoreErrorDetail, DegradedInfo, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
+import type { AssetId, AssetRevision, AssetType, CoreErrorDetail, DegradedInfo, LoadingTier, ResolutionContextInput } from "@aacl/shared";
 import type { AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import type { CapabilityDegradation, CapabilityDependency, CapabilityDependencyOutcome, CapabilityId, CapabilityResolutionContext } from "../capabilities/dependencies.ts";
-import type { ResolutionAxis, ResolutionContext } from "./resolution-context.ts";
+import type { ResolutionAxis, ResolutionContext, ValidatedExecutionContext } from "./resolution-context.ts";
 
 export type ResolutionSourceLayer = "global" | "personal" | "project";
 
@@ -57,6 +57,7 @@ export type ScopeMatchDecision =
     }
   | {
       readonly matched: false;
+      readonly matchedAxes: readonly ResolutionAxis[];
       readonly mismatchedAxes: readonly ResolutionAxis[];
     };
 
@@ -83,6 +84,7 @@ export type CandidateReason =
   | {
       readonly kind: "excluded";
       readonly cause: "scope_mismatch";
+      readonly matchedAxes: readonly ResolutionAxis[];
       readonly mismatchedAxes: readonly ResolutionAxis[];
     }
   | {
@@ -162,7 +164,7 @@ export type ResolutionConflict =
     };
 
 export type ResolveScopeInput = {
-  readonly scope: ResolutionScopeInput;
+  readonly context: ResolutionContextInput;
   readonly snapshot: ResolutionSnapshot;
   readonly contracts?: AssetTypeContractRegistry;
   readonly capabilityContext?: CapabilityResolutionContext;
@@ -174,6 +176,13 @@ export type ResolutionEvaluation = {
 };
 
 export type ResolutionResult = {
+  /**
+   * The explicit execution state the resolution ran against, as validated.
+   * `scope` is the projection of the axes it matched on, so it cannot carry
+   * `executionMode`, `workflow.kind` or a standalone `skillId` back to the
+   * caller that has to reproduce the resolved context.
+   */
+  readonly context: ValidatedExecutionContext;
   readonly scope: ResolutionContext;
   readonly evaluations: readonly ResolutionEvaluation[];
   readonly outcome: "resolved" | "conflicted";

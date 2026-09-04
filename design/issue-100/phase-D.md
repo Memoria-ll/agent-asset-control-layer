@@ -45,6 +45,15 @@ ResolutionContextInput = {
   すると `standalone` 実行が resolve 不能になる。
 - **parse 時の cross-arm 制約は 1 本だけ** —
   `development_execution` かつ `workflow.kind === "none"` を `invalid_request` にする（WFL-007）。
+- **この union の検証は core-domain の入口でも行う。** `resolveScope` は unparsed な
+  `ResolveScopeInput` を受けるので、`shared` の parser を通らない caller に対しては
+  `toValidatedResolutionContext` が唯一の関門になる。判別子の欠落・未知の
+  `workflow.kind`・`selected` の非文字列 id・上記 cross-arm 違反はすべてここで
+  `invalid_request` にする。
+- **`ResolutionResult` は正規化 scope と検証済み execution context を両方返す**
+  （親設計 §5.2 / §6 の `ResolutionResult = { context, scope, … }`）。9 軸への投影は
+  `executionMode` / `workflow.kind` / standalone `skillId` を落とすため、
+  scope だけでは #12 の adapter が `ResolvedContextDto.context` を組み立てられない。
 - **matching 意味論は変えない。** `workflow.kind: "none"` のとき workflow / stage selector を
   持つ候補を scope mismatch にしない。軸の不在は現行どおり neutral
   （`scope-matching.ts` の `if (requestValue === undefined) continue` と同じ結果）。
@@ -89,7 +98,25 @@ ResolutionContextInput = {
 | 投影 | `core-domain/src/resolution/result-assembly.ts`（`toResolutionReasonDto` / `toResolutionConflictDto`） |
 | core-domain のテスト | `core-domain/tests/scope-resolver.test.ts`（`resolve()` helper が `parseResolveRequest({ scope })` を呼ぶ） |
 
-**`core/` と `vscode-extension/` に Resolver consumer は 0 件**（実測）。route は #12。
+**`resolveScope` の consumer は 0 件だが、`parseResolveRequest`（shared の契約面）は
+package をまたいで消費されている**（実測 13 ファイル）。`scope` → `context` はこれら全部に及ぶ。
+
+| 消費側 | 備考 |
+|---|---|
+| `core/scripts/verify-node-resolution.mjs`（21-26 行） | **gate の node-resolution step 本体。落とすと gate が赤になる** |
+| `core/tests/shared-contract.test.ts`（7 行〜） | 契約消費の smoke |
+| `vscode-extension/tests/shared-contract.test.ts`（13 行〜） | 同上 |
+| `shared/tests/strict-object.test.ts`（10 / 18 / 40 / 59 行） | `ResolutionScopeInput` を直接組む |
+| `shared/tests/serialization-roundtrip.test.ts`（152-153 行） | omitted / explicit-undefined の往復 |
+| `shared/tests/errors.test.ts` | |
+| `core-domain/tests/scope-resolver.test.ts`（143 / 147 / 153 行） | `resolve()` helper |
+| `core-domain/tests/resolution-context.test.ts`（7 / 30 行） | |
+| `core-domain/tests/asset-type-contracts.test.ts`（141 行） | |
+
+**`SkillId` は `shared/src/identifiers.ts` に存在しない。この phase で足す**
+（設計 §6 の 525 行が `shared/src/index.ts` へ `SkillId` / `ExecutionMode` を公開すると定めている）。
+
+route の追加は #12。
 
 ---
 
@@ -102,7 +129,10 @@ ResolutionContextInput = {
 - **旧 `scope` の alias / 変換関数を作らない。**
 - **matching 意味論を変えない**（2-1 の 3 点目）。
 - **capability の判別ロジックを書き直さない**（Phase C の内部 cause を投影するだけ）。
-- `core/`、`vscode-extension/` を触らない。Resolve route を足さない。
+- **`core/` と `vscode-extension/` の production code を触らない。** ただし契約消費の
+  テスト（`core/tests/shared-contract.test.ts`、`vscode-extension/tests/shared-contract.test.ts`）と
+  **gate step の `core/scripts/verify-node-resolution.mjs` は更新が要る** — `scope` を組んでおり、
+  放置すると gate が落ちる。Resolve route は足さない（#12）。
 - `resolution/` の 7 seam 構造を変えない。
 
 ---

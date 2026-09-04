@@ -1,11 +1,11 @@
 import { ASSET_TYPES, LOADING_TIERS } from "@aacl/shared";
-import type { AssetType, CoreErrorDetail, LoadingTier, ResolutionScopeInput } from "@aacl/shared";
+import type { AssetType, CoreErrorDetail, LoadingTier, ResolutionContextInput } from "@aacl/shared";
 import { DEFAULT_ASSET_TYPE_CONTRACTS } from "./asset-type-contracts.ts";
 import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry } from "./asset-type-contracts.ts";
 import { evaluateCapabilityDependenciesInValidatedContext, validateCapabilityContext } from "../capabilities/dependencies.ts";
 import type { CapabilityDependency, CapabilityResolutionContext, CapabilityId } from "../capabilities/dependencies.ts";
 import { coreFailure, type AssetResult } from "../failures.ts";
-import { normalizeResolutionDirectory, RESOLUTION_AXES, type NormalizedDirectory, type ResolutionAxis, type ResolutionContext, toResolutionContext } from "./resolution-context.ts";
+import { normalizeResolutionDirectory, RESOLUTION_AXES, type NormalizedDirectory, type ResolutionAxis, type ResolutionContext, type ValidatedExecutionContext, toValidatedResolutionContext } from "./resolution-context.ts";
 import { codeUnitCompare } from "../ordering.ts";
 import type { AssetCandidate, CandidateReason, CandidateRecord, CandidateState, NormalizedCandidate, ResolutionOperation, ResolutionRule, ResolveScopeInput } from "./resolution-types.ts";
 import { sourceLayerPrecedence } from "./ranking-precedence.ts";
@@ -315,15 +315,16 @@ export const validateCandidate = (
 
 
 export const toResolutionContextSafely = (
-  scope: unknown,
-): AssetResult<ResolutionContext> => {
-  if (!isRecord(scope)) return invalidRequest([detail(["scope"], "invalid_value", "The resolution scope must be an object.")]);
-  const input = scope as ResolutionScopeInput;
-  return toResolutionContext(input);
+  context: unknown,
+): AssetResult<{ readonly execution: ValidatedExecutionContext; readonly scope: ResolutionContext }> => {
+  if (!isRecord(context)) return invalidRequest([detail(["context"], "invalid_value", "The resolution context must be an object.")]);
+  const input = context as ResolutionContextInput;
+  return toValidatedResolutionContext(input);
 };
 
 export type ValidatedResolutionInput = {
-  readonly context: ResolutionContext;
+  readonly execution: ValidatedExecutionContext;
+  readonly scope: ResolutionContext;
   readonly capabilityContext: CapabilityResolutionContext | undefined;
   readonly invalidStates: CandidateState[];
   readonly deduplicated: readonly NormalizedCandidate[];
@@ -332,7 +333,7 @@ export type ValidatedResolutionInput = {
 export const validateResolutionInput = (
   input: ResolveScopeInput,
 ): AssetResult<ValidatedResolutionInput> => {
-  const contextResult = toResolutionContextSafely(input?.scope);
+  const contextResult = toResolutionContextSafely(input?.context);
   if (!contextResult.ok) return contextResult;
   if (!isRecord(input) || !isRecord(input.snapshot) || !Array.isArray(input.snapshot.candidates)) {
     return invalidRequest([detail(["snapshot", "candidates"], "invalid_value", "Snapshot candidates must be a list.")]);
@@ -411,7 +412,8 @@ export const validateResolutionInput = (
   return {
     ok: true,
     value: {
-      context: contextResult.value,
+      execution: contextResult.value.execution,
+      scope: contextResult.value.scope,
       ...(capabilityContext === undefined ? {} : { capabilityContext }),
       invalidStates,
       deduplicated,

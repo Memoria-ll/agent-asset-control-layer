@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 // The .js suffix is required for NodeNext resolution of the TypeScript source.
 import type {
   IdeContextInput,
-  ResolutionScopeInput,
+  ResolutionContextInput,
   WorkflowBindingInput,
 } from "../src/index.ts";
 import {
@@ -13,7 +13,10 @@ import {
 
 describe("strict boundary objects", () => {
   it("rejects unknown fields at runtime", () => {
-    const input = { scope: {}, zzz: true };
+    const input = {
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      zzz: true,
+    };
 
     expect(() => parseResolveRequest(input)).toThrow();
 
@@ -37,7 +40,9 @@ describe("strict boundary objects", () => {
  * unsatisfiable for a consumer that holds no schema and no zod. This is a
  * compile-time assertion: it fails `tsc`, not the runner.
  */
-const composedScope: ResolutionScopeInput = {
+const composedContext: ResolutionContextInput = {
+  executionMode: "advisory_preparation",
+  workflow: { kind: "none" },
   projectId: "project-1",
   directory: "/workspace",
 };
@@ -57,11 +62,11 @@ const composedIdeContext: IdeContextInput = {
 describe("input aliases are composable from plain strings", () => {
   it("accepts the composed values through the real parser", () => {
     const request = parseResolveRequest({
-      scope: composedScope,
+      context: composedContext,
       ide: composedIdeContext,
     });
 
-    expect(request.scope.projectId).toBe("project-1");
+    expect(request.context.projectId).toBe("project-1");
     expect(request.ide?.workspaceFolder).toBe("/workspace");
 
     const execution = parseAgentExecutionDto({

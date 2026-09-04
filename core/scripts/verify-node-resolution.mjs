@@ -18,12 +18,21 @@ if (!/^\d+\.\d+\.\d+$/.test(shared.CONTRACT_VERSION)) {
   fail("shared", `CONTRACT_VERSION is not a version: ${shared.CONTRACT_VERSION}`);
 }
 
-const parsed = shared.parseResolveRequest({ scope: { projectId: "project-1" } });
-if (parsed.scope.projectId !== "project-1") {
-  fail("shared", "parseResolveRequest did not return the parsed scope");
+const parsed = shared.parseResolveRequest({
+  context: {
+    executionMode: "advisory_preparation",
+    workflow: { kind: "none" },
+    projectId: "project-1",
+  },
+});
+if (parsed.context.projectId !== "project-1") {
+  fail("shared", "parseResolveRequest did not return the parsed context");
 }
 
-const rejected = shared.tryParseResolveRequest({ scope: {}, zzz: 1 });
+const rejected = shared.tryParseResolveRequest({
+  context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+  zzz: 1,
+});
 if (rejected.ok) {
   fail("shared", "tryParseResolveRequest accepted an unknown key");
 }

@@ -21,7 +21,11 @@ const validationErrorFor = (value: unknown): z.core.$ZodError => {
 describe("Core error mapping", () => {
   it("preserves every unknown top-level key as a detail", () => {
     const error = toCoreError(
-      validationErrorFor({ scope: {}, zzz: 1, yyy: 2 }),
+      validationErrorFor({
+        context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+        zzz: 1,
+        yyy: 2,
+      }),
       "request",
     );
 
@@ -34,11 +38,16 @@ describe("Core error mapping", () => {
   });
 
   it("includes the path to an unknown nested key", () => {
-    const error = toCoreError(validationErrorFor({ scope: { zz: 1 } }), "request");
+    const error = toCoreError(
+      validationErrorFor({
+        context: { executionMode: "advisory_preparation", workflow: { kind: "none" }, zz: 1 },
+      }),
+      "request",
+    );
 
     expect(error.details).toEqual([
       expect.objectContaining({
-        path: ["scope", "zz"],
+        path: ["context", "zz"],
         code: "unrecognized_keys",
       }),
     ]);
@@ -47,7 +56,10 @@ describe("Core error mapping", () => {
 
   it("serializes array indices as strings in details", () => {
     const error = toCoreError(
-      validationErrorFor({ scope: {}, loadingTiers: ["core", 123] }),
+      validationErrorFor({
+        context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+        loadingTiers: ["core", 123],
+      }),
       "request",
     );
 
@@ -88,7 +100,10 @@ describe("boundary direction decides the failure code", () => {
   });
 
   it("keeps a malformed response distinguishable from a bad request", () => {
-    const request = tryParseResolveRequest({ scope: {}, zzz: 1 });
+    const request = tryParseResolveRequest({
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      zzz: 1,
+    });
     const response = tryParseResolveResponse({ resolvedContext: {}, zzz: 1 });
 
     if (request.ok || response.ok) throw new Error("Expected both to fail");

@@ -2,7 +2,7 @@ import * as z from "zod/mini";
 import { DirectoryPath } from "./primitives.ts";
 import {
   LoadingTier,
-  ResolutionScopeInput,
+  ResolutionContextInput,
   ResolvedContextDto,
 } from "./resolved-context.ts";
 import { tryParseWith, type ParseOutcome } from "./errors.ts";
@@ -21,18 +21,18 @@ export const IdeContextInput = z.strictObject({
   activeFilePath: z.optional(DirectoryPath),
   selectedFilePaths: z.optional(z.array(DirectoryPath).check(z.minLength(1))),
 });
-// `z.input` for the same reason as `ResolutionScopeInput`.
+// `z.input` for the same reason as `ResolutionContextInput`.
 export type IdeContextInput = z.input<typeof IdeContextInput>;
 
 /**
- * A request to resolve the asset context for a scope.
+ * A request to resolve the asset context for an explicit execution context.
  *
  * It carries no contract version: versions are matched once when the connection
  * is established (#32), and a per-request copy would be a second place to keep
  * that agreement in step.
  */
 export const ResolveRequest = z.strictObject({
-  scope: ResolutionScopeInput,
+  context: ResolutionContextInput,
   ide: z.optional(IdeContextInput),
   loadingTiers: z.optional(z.array(LoadingTier).check(z.minLength(1))),
 });
