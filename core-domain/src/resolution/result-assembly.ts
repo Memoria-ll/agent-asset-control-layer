@@ -1,13 +1,14 @@
 import type { AssetId, ConflictDto, CoreErrorDetail, ResolutionReason } from "@aacl/shared";
 import type { AssetResult } from "../failures.ts";
 import { codeUnitCompare } from "../ordering.ts";
-import { RESOLUTION_AXES, type ResolutionContext } from "./resolution-context.ts";
+import { RESOLUTION_AXES, type ResolutionContext, type ValidatedExecutionContext } from "./resolution-context.ts";
 import type { CandidateReason, CandidateState, OperationConflictEntry, OperationPass, ResolutionConflict, ResolutionRank, ResolutionResult, SelectionPass } from "./resolution-types.ts";
 import { canonicalCapabilityDependencyKeys } from "./candidate-validation.ts";
 import { compareRank } from "./ranking-precedence.ts";
 
 export type ResultAssemblyContext = {
-  readonly context: ResolutionContext;
+  readonly execution: ValidatedExecutionContext;
+  readonly scope: ResolutionContext;
   readonly states: readonly CandidateState[];
   readonly invalidStates: readonly CandidateState[];
   readonly conflicts: ReadonlyMap<string, ResolutionConflict>;
@@ -21,7 +22,7 @@ export type ResultAssemblyContext = {
 };
 
 export const assembleResult = (ctx: ResultAssemblyContext): AssetResult<ResolutionResult> => {
-  const { context, states, invalidStates, conflicts, addConflict, baseIncluded, baseReasons,
+  const { execution, scope, states, invalidStates, conflicts, addConflict, baseIncluded, baseReasons,
           selectionEvidence, selectionExcluded, finalSelection, operationResult } = ctx;
   const finalPass = operationResult.pass;
   const forcedConflicts = operationResult.forcedConflicts;
@@ -161,7 +162,8 @@ export const assembleResult = (ctx: ResultAssemblyContext): AssetResult<Resoluti
   return {
     ok: true,
     value: {
-      scope: context,
+      context: execution,
+      scope,
       evaluations: allStates.map((state) => ({ candidate: state.candidate, reason: finalReasons.get(state) ?? state.reason })),
       outcome: resultConflicts.length === 0 ? "resolved" : "conflicted",
       conflicts: resultConflicts,
@@ -292,13 +294,19 @@ export const toResolutionReasonDto = (reason: CandidateReason): ResolutionReason
       matchedAxes: [...reason.matchedAxes],
       ...(reason.degradedInfo === undefined ? {} : { degradedInfo: reason.degradedInfo }),
       ...(reason.degradedCapabilities === undefined ? {} : {
-        degradedCapabilities: reason.degradedCapabilities.map((degradation) => ({
-          capabilityId: degradation.capabilityId,
-          strength: degradation.strength,
-          ...(degradation.fallbackCapabilityId === undefined ? {} : {
-            fallbackCapabilityId: degradation.fallbackCapabilityId,
-          }),
-        })),
+        degradedCapabilities: reason.degradedCapabilities.map((degradation) => degradation.strength === "required"
+          ? {
+              capabilityId: degradation.capabilityId,
+              strength: degradation.strength,
+              fallbackCapabilityId: degradation.fallbackCapabilityId,
+            }
+          : {
+              capabilityId: degradation.capabilityId,
+              strength: degradation.strength,
+              ...(degradation.fallbackCapabilityId === undefined ? {} : {
+                fallbackCapabilityId: degradation.fallbackCapabilityId,
+              }),
+            }),
       }),
     };
     case "excluded": {

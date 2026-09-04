@@ -46,14 +46,31 @@ export const DegradedInfo = z.strictObject({
 });
 export type DegradedInfo = z.infer<typeof DegradedInfo>;
 
-const CAPABILITY_DEGRADATION_STRENGTHS = ["required", "optional", "preferred"] as const;
-const CapabilityDegradationStrength = z.enum(CAPABILITY_DEGRADATION_STRENGTHS);
+const SOFT_CAPABILITY_DEGRADATION_STRENGTHS = ["optional", "preferred"] as const;
 
-const CapabilityDegradationDto = z.strictObject({
-  capabilityId: NonEmptyString,
-  strength: CapabilityDegradationStrength,
-  fallbackCapabilityId: z.optional(NonEmptyString),
-});
+/**
+ * A `required` degradation always names the fallback that stood in for the
+ * capability: a required dependency with no usable fallback is a hard failure
+ * (`kind: "unavailable"`), never a degradation. Modelling the strengths as a
+ * union is what stops `{ strength: "required" }` alone — a state asserting a
+ * required dependency was degraded while naming nothing that satisfied it —
+ * from parsing, and publishes the same requirement in the JSON Schema.
+ *
+ * A soft degradation carries the fallback only when one was selected: an
+ * optional or preferred dependency degrades on its own when none exists.
+ */
+const CapabilityDegradationDto = z.discriminatedUnion("strength", [
+  z.strictObject({
+    capabilityId: NonEmptyString,
+    strength: z.literal("required"),
+    fallbackCapabilityId: NonEmptyString,
+  }),
+  z.strictObject({
+    capabilityId: NonEmptyString,
+    strength: z.enum(SOFT_CAPABILITY_DEGRADATION_STRENGTHS),
+    fallbackCapabilityId: z.optional(NonEmptyString),
+  }),
+]);
 export type CapabilityDegradationDto = z.infer<typeof CapabilityDegradationDto>;
 
 const REQUIREMENT_FAILURE_CAUSES = [
@@ -73,7 +90,12 @@ const excludedReasonDetail = z.discriminatedUnion("cause", [
   }),
   z.strictObject({
     cause: z.literal("invalid_directory"),
-    diagnostics: z.array(CoreErrorDetail),
+    /**
+     * At least one diagnostic: this array is the whole account of why the
+     * directory selector is invalid, so an empty one excludes the candidate
+     * while explaining nothing.
+     */
+    diagnostics: z.array(CoreErrorDetail).check(z.minLength(1)),
   }),
   z.strictObject({
     cause: z.literal("resolution_conflict"),
@@ -81,15 +103,22 @@ const excludedReasonDetail = z.discriminatedUnion("cause", [
   }),
 ]);
 
+/**
+ * Every arm names at least one failed item. An unavailable candidate whose
+ * failure list is empty asserts a hard failure while identifying nothing that
+ * failed, which leaves the consumer nothing to display and nothing to act on.
+ * `failedRequirements` on the capability arm keeps "absent means none": it is
+ * omitted rather than sent empty.
+ */
 const unavailableReasonDetail = z.discriminatedUnion("cause", [
   z.strictObject({
     cause: z.enum(REQUIREMENT_FAILURE_CAUSES),
-    failedRequirements: z.array(AssetId),
+    failedRequirements: z.array(AssetId).check(z.minLength(1)),
   }),
   z.strictObject({
     cause: z.enum(CAPABILITY_FAILURE_CAUSES),
-    failedCapabilities: z.array(NonEmptyString),
-    failedRequirements: z.optional(z.array(AssetId)),
+    failedCapabilities: z.array(NonEmptyString).check(z.minLength(1)),
+    failedRequirements: z.optional(z.array(AssetId).check(z.minLength(1))),
   }),
 ]);
 

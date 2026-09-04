@@ -394,6 +394,12 @@ src の変更に対してテストを足す）が箱の外にあるなら、そ�
 - **`CapabilityOffer.permission` は必須欄で、producer は畳み後の値を渡す。** 省略や既定値に
   頼らず、`allowed` / `denied` を明示すること (#100)
 
+- **`ResolutionResult` の `context.directory` は caller が送った文字列そのまま、
+  `scope.directory` は末尾スラッシュを落とした正規化形。** 両方 `DirectoryPath` なので
+  取り違えても typecheck も gate も緑のまま通り、`/repo/src/` と `/repo/src` が
+  一致しない。matching / 同一性判定に使うのは `scope`、resolved context の再現
+  （`ResolvedContextDto.context`、#12 / #13）に使うのは `context` (#100)
+
 - **Capability offer は provider を同定しないため、同一 capability・同一 features の複数 offer は
   permission が異なっても `duplicate_capability_offer` として扱う。** 複数 MCP の統合と
   permission の畳み規則は producer 側の責務である (#100)

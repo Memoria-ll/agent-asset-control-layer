@@ -45,6 +45,15 @@ ResolutionContextInput = {
   すると `standalone` 実行が resolve 不能になる。
 - **parse 時の cross-arm 制約は 1 本だけ** —
   `development_execution` かつ `workflow.kind === "none"` を `invalid_request` にする（WFL-007）。
+- **この union の検証は core-domain の入口でも行う。** `resolveScope` は unparsed な
+  `ResolveScopeInput` を受けるので、`shared` の parser を通らない caller に対しては
+  `toValidatedResolutionContext` が唯一の関門になる。判別子の欠落・未知の
+  `workflow.kind`・`selected` の非文字列 id・上記 cross-arm 違反はすべてここで
+  `invalid_request` にする。
+- **`ResolutionResult` は正規化 scope と検証済み execution context を両方返す**
+  （親設計 §5.2 / §6 の `ResolutionResult = { context, scope, … }`）。9 軸への投影は
+  `executionMode` / `workflow.kind` / standalone `skillId` を落とすため、
+  scope だけでは #12 の adapter が `ResolvedContextDto.context` を組み立てられない。
 - **matching 意味論は変えない。** `workflow.kind: "none"` のとき workflow / stage selector を
   持つ候補を scope mismatch にしない。軸の不在は現行どおり neutral
   （`scope-matching.ts` の `if (requestValue === undefined) continue` と同じ結果）。

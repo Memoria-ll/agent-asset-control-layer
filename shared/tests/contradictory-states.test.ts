@@ -190,6 +190,73 @@ describe("boundary states that cannot exist", () => {
     ).not.toThrow();
   });
 
+  it.each([
+    ["an excluded candidate whose invalid directory has no diagnostic", {
+      kind: "excluded",
+      explanation: "The candidate has an invalid directory selector.",
+      detail: { cause: "invalid_directory", diagnostics: [] },
+    }],
+    ["an unavailable candidate that names no failed requirement", {
+      kind: "unavailable",
+      explanation: "A requirement failed.",
+      availability: "unavailable",
+      detail: { cause: "missing_requirement", failedRequirements: [] },
+    }],
+    ["an unavailable candidate that names no denied capability", {
+      kind: "unavailable",
+      explanation: "A capability is not permitted.",
+      availability: "unavailable",
+      detail: { cause: "capability_not_allowed", failedCapabilities: [] },
+    }],
+    ["a capability failure whose requirement list is present but empty", {
+      kind: "unavailable",
+      explanation: "A capability is not permitted.",
+      availability: "unavailable",
+      detail: { cause: "capability_not_allowed", failedCapabilities: ["cap-a"], failedRequirements: [] },
+    }],
+    // A required dependency with no usable fallback is a hard failure, so a
+    // required degradation naming none describes a state the resolver cannot
+    // reach and a consumer cannot explain.
+    ["a required capability degradation with no fallback", {
+      kind: "included",
+      explanation: "Matched scope",
+      matchedAxes: [],
+      degradedCapabilities: [{ capabilityId: "cap-a", strength: "required" }],
+    }],
+  ])("rejects %s", (_name, reason) => {
+    expect(() => parseResolvedContextDto(resolvedContext({ reason }))).toThrow();
+  });
+
+  it("accepts a required capability degradation that names its fallback", () => {
+    const parsed = parseResolvedContextDto(resolvedContext({
+      reason: {
+        kind: "included",
+        explanation: "Matched scope",
+        matchedAxes: [],
+        degradedCapabilities: [{ capabilityId: "cap-a", strength: "required", fallbackCapabilityId: "cap-b" }],
+      },
+    }));
+
+    expect(parsed.assets[0]?.reason).toMatchObject({
+      degradedCapabilities: [{ capabilityId: "cap-a", strength: "required", fallbackCapabilityId: "cap-b" }],
+    });
+  });
+
+  it("keeps a soft capability degradation representable without a fallback", () => {
+    const parsed = parseResolvedContextDto(resolvedContext({
+      reason: {
+        kind: "included",
+        explanation: "Matched scope",
+        matchedAxes: [],
+        degradedCapabilities: [{ capabilityId: "cap-a", strength: "preferred" }],
+      },
+    }));
+
+    expect(parsed.assets[0]?.reason).toMatchObject({
+      degradedCapabilities: [{ capabilityId: "cap-a", strength: "preferred" }],
+    });
+  });
+
   it("keeps an empty asset body representable", () => {
     const parsed = parseResolvedContextDto(resolvedContext({ body: "" }));
 
@@ -333,6 +400,33 @@ describe("published JSON Schema carries the same constraints", () => {
 
     expect(cost.includedAssetCount.minimum).toBe(0);
     expect(cost.excludedAssetCount.minimum).toBe(0);
+  });
+
+  it("states the minimum evidence on every negative-state array", () => {
+    const reason = (schemas().ResolvedContextDto as any).properties.assets.items.properties.reason;
+    const armsFor = (kind: string) => reason.oneOf
+      .find((arm: any) => arm.properties.kind.const === kind)
+      .properties.detail.oneOf;
+    const invalidDirectory = armsFor("excluded")
+      .find((arm: any) => arm.properties.cause.const === "invalid_directory");
+    const [requirementArm, capabilityArm] = armsFor("unavailable");
+
+    expect(invalidDirectory.properties.diagnostics.minItems).toBe(1);
+    expect(requirementArm.properties.failedRequirements.minItems).toBe(1);
+    expect(capabilityArm.properties.failedCapabilities.minItems).toBe(1);
+    expect(capabilityArm.properties.failedRequirements.minItems).toBe(1);
+  });
+
+  it("requires a fallback on the required capability-degradation arm only", () => {
+    const reason = (schemas().ResolvedContextDto as any).properties.assets.items.properties.reason;
+    const arms = reason.oneOf
+      .find((arm: any) => arm.properties.kind.const === "included")
+      .properties.degradedCapabilities.items.oneOf;
+    const required = arms.find((arm: any) => arm.properties.strength.const === "required");
+    const soft = arms.find((arm: any) => arm.properties.strength.const === undefined);
+
+    expect(required.required).toContain("fallbackCapabilityId");
+    expect(soft.required).not.toContain("fallbackCapabilityId");
   });
 
   it("fixes unavailable resolution reasons to unavailable", () => {

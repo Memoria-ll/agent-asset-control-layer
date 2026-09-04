@@ -47,7 +47,7 @@ export const resolveScope = (
 ): AssetResult<ResolutionResult> => {
   const validated = validateResolutionInput(input);
   if (!validated.ok) return validated;
-  const { context, capabilityContext, invalidStates, deduplicated } = validated.value;
+  const { execution, scope, capabilityContext, invalidStates, deduplicated } = validated.value;
 
   const conflicts = new Map<string, ResolutionConflict>();
   const addConflict = (conflict: ResolutionConflict): void => {
@@ -59,7 +59,7 @@ export const resolveScope = (
   };
 
 
-  const states = matchCandidates(deduplicated, context);
+  const states = matchCandidates(deduplicated, scope);
 
   const matchedById = buildIdentityGroups(states, addConflict);
 
@@ -199,7 +199,8 @@ export const resolveScope = (
   }
   if (operationResult === undefined) throw new Error("Scope operation fixed point was not reached.");
   return assembleResult({
-    context,
+    execution,
+    scope,
     states,
     invalidStates,
     conflicts,

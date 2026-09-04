@@ -43,11 +43,24 @@ export type CapabilityResolutionContext = {
   readonly offers: readonly CapabilityOffer[];
 };
 
-export type CapabilityDegradation = {
-  readonly capabilityId: CapabilityId;
-  readonly strength: "required" | "optional" | "preferred";
-  readonly fallbackCapabilityId?: CapabilityId;
-};
+/**
+ * A `required` dependency degrades only by standing a usable fallback in its
+ * place; with none it is a hard failure and the candidate leaves the context.
+ * Splitting the arms is what stops a `required` degradation from being built
+ * without naming what satisfied it — the state the public
+ * `CapabilityDegradationDto` also refuses.
+ */
+export type CapabilityDegradation =
+  | {
+      readonly capabilityId: CapabilityId;
+      readonly strength: "required";
+      readonly fallbackCapabilityId: CapabilityId;
+    }
+  | {
+      readonly capabilityId: CapabilityId;
+      readonly strength: "optional" | "preferred";
+      readonly fallbackCapabilityId?: CapabilityId;
+    };
 
 export type CapabilityDependencyOutcome =
   | {

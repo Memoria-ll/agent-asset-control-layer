@@ -5,7 +5,7 @@ import type { AssetOperationKind, AssetTypeContract, AssetTypeContractRegistry }
 import { evaluateCapabilityDependenciesInValidatedContext, validateCapabilityContext } from "../capabilities/dependencies.ts";
 import type { CapabilityDependency, CapabilityResolutionContext, CapabilityId } from "../capabilities/dependencies.ts";
 import { coreFailure, type AssetResult } from "../failures.ts";
-import { normalizeResolutionDirectory, RESOLUTION_AXES, type NormalizedDirectory, type ResolutionAxis, type ResolutionContext, toResolutionContext } from "./resolution-context.ts";
+import { normalizeResolutionDirectory, RESOLUTION_AXES, type NormalizedDirectory, type ResolutionAxis, type ResolutionContext, type ValidatedExecutionContext, toValidatedResolutionContext } from "./resolution-context.ts";
 import { codeUnitCompare } from "../ordering.ts";
 import type { AssetCandidate, CandidateReason, CandidateRecord, CandidateState, NormalizedCandidate, ResolutionOperation, ResolutionRule, ResolveScopeInput } from "./resolution-types.ts";
 import { sourceLayerPrecedence } from "./ranking-precedence.ts";
@@ -316,14 +316,15 @@ export const validateCandidate = (
 
 export const toResolutionContextSafely = (
   context: unknown,
-): AssetResult<ResolutionContext> => {
+): AssetResult<{ readonly execution: ValidatedExecutionContext; readonly scope: ResolutionContext }> => {
   if (!isRecord(context)) return invalidRequest([detail(["context"], "invalid_value", "The resolution context must be an object.")]);
   const input = context as ResolutionContextInput;
-  return toResolutionContext(input);
+  return toValidatedResolutionContext(input);
 };
 
 export type ValidatedResolutionInput = {
-  readonly context: ResolutionContext;
+  readonly execution: ValidatedExecutionContext;
+  readonly scope: ResolutionContext;
   readonly capabilityContext: CapabilityResolutionContext | undefined;
   readonly invalidStates: CandidateState[];
   readonly deduplicated: readonly NormalizedCandidate[];
@@ -411,7 +412,8 @@ export const validateResolutionInput = (
   return {
     ok: true,
     value: {
-      context: contextResult.value,
+      execution: contextResult.value.execution,
+      scope: contextResult.value.scope,
       ...(capabilityContext === undefined ? {} : { capabilityContext }),
       invalidStates,
       deduplicated,

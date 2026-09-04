@@ -2357,7 +2357,7 @@ scope.project: [acme]
   it("case 17.5 result clock boundary: contains only semantic result fields", () => {
     const result = resultValue({}, []);
 
-    expect(Object.keys(result).sort()).toEqual(["conflicts", "evaluations", "outcome", "scope"]);
+    expect(Object.keys(result).sort()).toEqual(["conflicts", "context", "evaluations", "outcome", "scope"]);
     expect("resolvedAt" in result).toBe(false);
     expect("cost" in result).toBe(false);
     expect("body" in result).toBe(false);

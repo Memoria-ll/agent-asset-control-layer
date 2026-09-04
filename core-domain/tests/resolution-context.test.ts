@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { parseResolveRequest } from "@aacl/shared";
-import { toResolutionContext } from "../src/index.ts";
+import { toResolutionContext, toValidatedResolutionContext } from "../src/index.ts";
+
+type ContextInput = Parameters<typeof toResolutionContext>[0];
+
+const firstFailure = (input: unknown): { readonly path: readonly string[]; readonly code: string } => {
+  const result = toValidatedResolutionContext(input as ContextInput);
+  if (result.ok) throw new Error("Expected the resolution context to be rejected.");
+  expect(result.failure.code).toBe("invalid_request");
+  const detail = result.failure.details?.[0];
+  if (detail === undefined) throw new Error("Expected a failure detail.");
+  return detail;
+};
 
 describe("resolution context", () => {
   it("keeps agent execution out of the resolution scope", () => {
@@ -91,4 +102,75 @@ describe("resolution context", () => {
       }
     },
   );
+});
+
+describe("execution context validation", () => {
+  it("rejects development execution without a workflow selection", () => {
+    expect(firstFailure({
+      executionMode: "development_execution",
+      workflow: { kind: "none" },
+    })).toEqual({
+      path: ["context", "workflow", "kind"],
+      code: "workflow_selection_required",
+      message: expect.any(String),
+    });
+  });
+
+  it.each([
+    ["a missing execution mode", { workflow: { kind: "none" } }, ["context", "executionMode"], "invalid_value"],
+    ["an unknown execution mode", { executionMode: "batch", workflow: { kind: "none" } }, ["context", "executionMode"], "invalid_value"],
+    ["a missing workflow selection", { executionMode: "advisory_preparation" }, ["context", "workflow"], "invalid_value"],
+    ["an unknown workflow kind", { executionMode: "advisory_preparation", workflow: { kind: "resumed" } }, ["context", "workflow", "kind"], "invalid_value"],
+    ["a non-string selected workflow id", { executionMode: "advisory_preparation", workflow: { kind: "selected", workflowId: 42, stageId: "review" } }, ["context", "workflow", "workflowId"], "invalid_value"],
+    ["an empty selected stage id", { executionMode: "advisory_preparation", workflow: { kind: "selected", workflowId: "review-flow", stageId: "" } }, ["context", "workflow", "stageId"], "empty_identifier"],
+    ["a standalone selection without a skill", { executionMode: "advisory_preparation", workflow: { kind: "standalone" } }, ["context", "workflow", "skillId"], "invalid_value"],
+    ["an unknown workflow selection key", { executionMode: "advisory_preparation", workflow: { kind: "none", stageId: "review" } }, ["context", "workflow", "stageId"], "unknown_key"],
+    // The union carries these inside `workflow`, so a top-level pair is a shape
+    // the published contract rejects.
+    ["a top-level workflow id", { executionMode: "advisory_preparation", workflow: { kind: "none" }, workflowId: "review-flow" }, ["context", "workflowId"], "unknown_key"],
+  ])("rejects %s", (_name, input, path, code) => {
+    expect(firstFailure(input)).toEqual({ path, code, message: expect.any(String) });
+  });
+
+  it("keeps the explicit execution state next to the projected matching axes", () => {
+    const result = toValidatedResolutionContext({
+      executionMode: "development_execution",
+      workflow: { kind: "standalone", skillId: "skill-review" },
+      roleId: "reviewer",
+      // A trailing slash separates the two: the scope is normalized for
+      // matching, the echoed context is what the caller sent.
+      directory: "/repo/src/",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        execution: {
+          executionMode: "development_execution",
+          workflow: { kind: "standalone", skillId: "skill-review" },
+          roleId: "reviewer",
+          directory: "/repo/src/",
+        },
+        scope: { roleId: "reviewer", directory: "/repo/src" },
+      },
+    });
+  });
+
+  it("carries a selected workflow into both the execution state and the scope", () => {
+    const request = parseResolveRequest({
+      context: {
+        executionMode: "development_execution",
+        workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+      },
+    });
+    const result = toValidatedResolutionContext(request.context);
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        execution: request.context,
+        scope: { workflowId: "review-flow", stageId: "review" },
+      },
+    });
+  });
 });
