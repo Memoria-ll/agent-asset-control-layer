@@ -58,7 +58,7 @@ export {
   evaluateCapabilityDependencies,
   featureSetContains,
   validateCapabilityContext,
-} from "./resolution/capabilities.ts";
+} from "./capabilities/dependencies.ts";
 export type {
   CapabilityCatalog,
   CapabilityDefinition,
@@ -70,7 +70,7 @@ export type {
   CapabilityOffer,
   CapabilityReference,
   CapabilityResolutionContext,
-} from "./resolution/capabilities.ts";
+} from "./capabilities/dependencies.ts";
 
 export {
   resolveScope,

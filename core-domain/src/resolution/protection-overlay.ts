@@ -1,6 +1,6 @@
 import type { AssetId } from "@aacl/shared";
 import { codeUnitCompare } from "../ordering.ts";
-import type { CapabilityDependencyOutcome } from "./capabilities.ts";
+import type { CapabilityDependencyOutcome } from "../capabilities/dependencies.ts";
 import { dependencyOutcomes } from "./dependency-evaluation.ts";
 import type {
   CandidateReason,

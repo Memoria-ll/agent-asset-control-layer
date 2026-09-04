@@ -71,7 +71,8 @@ issue #100 / 統合ブランチ `integration/issue-100`。着地方法: **PR**�
 3. `core-domain/tests/**` の diff が 0 行。
 4. `pnpm -r test` で `core-domain` 231 件緑。
 5. `bash ~/.claude/scripts/run-gate.sh` が exit 0（4 step すべて PASS）。
-6. `git grep -c "resolution/capabilities"` が 0。
+6. コードに旧 path が残っていない — `git grep -n "resolution/capabilities" -- '*.ts'` が 0 件。
+   設計・仕様文書は移設前の状態や移設そのものを述べるので、この検査の対象外とする。
 
 ---
 
