@@ -1,6 +1,7 @@
 import type { DegradedInfo, CoreErrorDetail } from "@aacl/shared";
 import { codeUnitCompare } from "../ordering.ts";
 import { coreFailure, type AssetResult } from "../failures.ts";
+import { isLowerKebabToken } from "../tokens.ts";
 
 declare const capabilityIdBrand: unique symbol;
 declare const capabilityFeatureIdBrand: unique symbol;
@@ -98,6 +99,14 @@ const invalidCapabilityInput = (
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
+/**
+ * Capability and feature ids share the identifier shape the Canonical Asset
+ * frontmatter is written in: an id this rejects cannot be persisted, so
+ * accepting it here would build a dependency the store can never round-trip.
+ */
+const isCapabilityToken = (value: unknown): value is string =>
+  typeof value === "string" && isLowerKebabToken(value);
+
 const isStrictlySorted = (values: readonly string[]): boolean =>
   values.every((value, index) => index === 0 || codeUnitCompare(values[index - 1] ?? "", value) < 0);
 
@@ -116,8 +125,8 @@ const normalizeFeatureList = (
 
   const features: CapabilityFeatureId[] = [];
   for (const [index, feature] of value.entries()) {
-    if (!isNonEmptyString(feature)) {
-      details.push(detail([...path, String(index)], "invalid_feature_id", "The capability feature id must not be empty."));
+    if (!isCapabilityToken(feature)) {
+      details.push(detail([...path, String(index)], "invalid_feature_id", "The capability feature id must be a lower-kebab token."));
       continue;
     }
     features.push(feature as CapabilityFeatureId);
@@ -136,8 +145,8 @@ const normalizeReference = (
   path: readonly string[],
   details: CoreErrorDetail[],
 ): CapabilityReference | undefined => {
-  if (!isRecord(value) || !isNonEmptyString(value.capabilityId)) {
-    details.push(detail([...path, "capabilityId"], "invalid_capability_id", "The capability id must not be empty."));
+  if (!isRecord(value) || !isCapabilityToken(value.capabilityId)) {
+    details.push(detail([...path, "capabilityId"], "invalid_capability_id", "The capability id must be a lower-kebab token."));
     return undefined;
   }
 
@@ -163,14 +172,14 @@ const normalizeDefinition = (
     details.push(detail(path, "invalid_definition", "The capability definition must be an object."));
     return undefined;
   }
-  if (!isNonEmptyString(value.capabilityId)) {
-    details.push(detail([...path, "capabilityId"], "invalid_capability_id", "The capability id must not be empty."));
+  if (!isCapabilityToken(value.capabilityId)) {
+    details.push(detail([...path, "capabilityId"], "invalid_capability_id", "The capability id must be a lower-kebab token."));
   }
   if (!isNonEmptyString(value.displayName) || value.displayName.trim() === "") {
     details.push(detail([...path, "displayName"], "invalid_display_name", "The capability display name must not be empty."));
   }
   const features = normalizeFeatureList(value.features, [...path, "features"], details, true);
-  if (!isNonEmptyString(value.capabilityId) || !isNonEmptyString(value.displayName) || value.displayName.trim() === "" || features === undefined) {
+  if (!isCapabilityToken(value.capabilityId) || !isNonEmptyString(value.displayName) || value.displayName.trim() === "" || features === undefined) {
     return undefined;
   }
   return {
@@ -257,8 +266,8 @@ export const validateCapabilityContext = (
   const offers: CapabilityOffer[] = [];
   const seenOffers = new Set<string>();
   for (const [index, offerValue] of context.offers.entries()) {
-    if (!isRecord(offerValue) || !isNonEmptyString(offerValue.capabilityId)) {
-      details.push(detail(["offers", String(index), "capabilityId"], "invalid_capability_id", "The capability id must not be empty."));
+    if (!isRecord(offerValue) || !isCapabilityToken(offerValue.capabilityId)) {
+      details.push(detail(["offers", String(index), "capabilityId"], "invalid_capability_id", "The capability id must be a lower-kebab token."));
       continue;
     }
     const offerId = offerValue.capabilityId as CapabilityId;

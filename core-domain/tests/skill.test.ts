@@ -178,27 +178,51 @@ Modify the selected repository.
     }));
   });
 
-  it("rejects an unknown metadata key instead of dropping it", () => {
+  it("carries metadata outside the Skill contract through parse and update", () => {
     const asset = parseAsset(`---
-id: typo-skill
+id: annotated-skill
 type: skill
 tier: on-demand
-metadata.description: Contains a typo.
-metadata.display-name: Typo Skill
-metadata.execution-mdoe: advisory_preparation
+metadata.description: Carries its own annotations.
+metadata.display-name: Annotated Skill
 metadata.execution-mode: advisory_preparation
 metadata.execution-permission: advisory-only
 metadata.kind: advisory
+metadata.owning-team: [platform, tooling]
+metadata.review-note: Authored outside the Skill contract.
 metadata.workflow-relation: standalone
 ---
 Report advice.
 `);
-    const result = parseSkillAsset(asset);
+    const skill = expectOk(parseSkillAsset(asset));
+    expect(skill.additionalMetadata).toEqual({
+      "owning-team": ["platform", "tooling"],
+      "review-note": "Authored outside the Skill contract.",
+    });
+
+    const updated = expectOk(updateSkillAsset(asset, { description: "Still carries them." }));
+    expect(updated.metadata["owning-team"]).toEqual(["platform", "tooling"]);
+    expect(expectOk(serializeCanonicalAsset(updated))).toContain("metadata.review-note: Authored outside the Skill contract.");
+  });
+
+  it("rejects additional metadata that claims a Skill contract key", () => {
+    const result = createSkillAsset({
+      id: assetId("reserved-metadata"),
+      tier: "on-demand",
+      displayName: "Reserved metadata",
+      description: "Claims a contract key.",
+      kind: "advisory",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      additionalMetadata: { kind: "procedure" },
+      body: "Report advice.",
+    });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("Expected failure.");
     expect(result.failure.details).toContainEqual(expect.objectContaining({
-      path: ["document", "frontmatter", "metadata.execution-mdoe"],
-      code: "unknown_key",
+      path: ["document", "frontmatter", "metadata.kind"],
+      code: "reserved_key",
     }));
   });
 

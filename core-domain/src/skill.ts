@@ -6,6 +6,7 @@ import {
   parseAssetDocument,
   serializeCanonicalAsset,
   validateAsset,
+  type AssetFieldValue,
   type AssetScopeAxis,
   type CanonicalAsset,
 } from "./assets.ts";
@@ -56,6 +57,13 @@ export type CanonicalSkill = {
   readonly expectedOutput?: string;
   readonly completionCriteria: readonly string[];
   readonly capabilityDependencies: readonly CapabilityDependency[];
+  /**
+   * The `metadata.*` entries the Skill contract does not name. `metadata.*` is
+   * an open namespace until the type-specific contract validation of #87 lands,
+   * so they are carried here and written back verbatim rather than rejected —
+   * a Skill authored with its own metadata stays loadable and survives update.
+   */
+  readonly additionalMetadata: Readonly<Record<string, AssetFieldValue>>;
 };
 
 export type SkillInput = {
@@ -76,6 +84,7 @@ export type SkillInput = {
   readonly expectedOutput?: string;
   readonly completionCriteria?: readonly string[];
   readonly capabilityDependencies?: readonly CapabilityDependency[];
+  readonly additionalMetadata?: Readonly<Record<string, AssetFieldValue>>;
   readonly body: string;
 };
 
@@ -96,6 +105,7 @@ export type SkillPatch = {
   readonly expectedOutput?: string | null;
   readonly completionCriteria?: readonly string[];
   readonly capabilityDependencies?: readonly CapabilityDependency[];
+  readonly additionalMetadata?: Readonly<Record<string, AssetFieldValue>>;
   readonly body?: string;
 };
 
@@ -197,10 +207,9 @@ export const parseSkillAsset = (asset: CanonicalAsset): AssetResult<CanonicalSki
   if (asset.type !== "skill") {
     details.push(detail(["document", "frontmatter", "type"], "wrong_asset_type", 'Skill Asset type must be "skill".'));
   }
-  for (const key of Object.keys(asset.metadata)) {
-    if (!SKILL_METADATA_KEYS.has(key)) {
-      details.push(detail(metadataPath(key), "unknown_key", `Unknown Skill metadata key "${key}".`));
-    }
+  const additionalMetadata: Record<string, AssetFieldValue> = {};
+  for (const [key, value] of Object.entries(asset.metadata)) {
+    if (!SKILL_METADATA_KEYS.has(key)) additionalMetadata[key] = value;
   }
 
   const displayName = scalar(asset, "display-name", true, details);
@@ -273,6 +282,7 @@ export const parseSkillAsset = (asset: CanonicalAsset): AssetResult<CanonicalSki
       ...(expectedOutput === undefined ? {} : { expectedOutput }),
       completionCriteria,
       capabilityDependencies: asset.capabilityDependencies ?? [],
+      additionalMetadata,
     },
   };
 };
@@ -291,6 +301,12 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
   optionalMetadata(metadata, "activation-condition", input.activationCondition);
   optionalMetadata(metadata, "expected-output", input.expectedOutput);
   if ((input.completionCriteria?.length ?? 0) > 0) metadata["completion-criteria"] = input.completionCriteria!;
+  for (const [key, value] of Object.entries(input.additionalMetadata ?? {})) {
+    if (SKILL_METADATA_KEYS.has(key)) {
+      return invalidSkill([detail(metadataPath(key), "reserved_key", `Skill metadata.${key} is owned by the Skill contract.`)]);
+    }
+    metadata[key] = value;
+  }
 
   const asset: CanonicalAsset = {
     schemaVersion: 1,
@@ -346,6 +362,7 @@ export const updateSkillAsset = (asset: CanonicalAsset, patch: SkillPatch): Asse
       : { expectedOutput: patch.expectedOutput === undefined ? skill.expectedOutput : patch.expectedOutput }),
     completionCriteria: patch.completionCriteria ?? skill.completionCriteria,
     capabilityDependencies: patch.capabilityDependencies ?? skill.capabilityDependencies,
+    additionalMetadata: patch.additionalMetadata ?? skill.additionalMetadata,
     body: patch.body ?? asset.body,
   });
 };

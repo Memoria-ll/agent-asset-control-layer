@@ -8,6 +8,7 @@ import type {
 } from "./capabilities/dependencies.ts";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import { codeUnitCompare } from "./ordering.ts";
+import { isLowerKebabToken } from "./tokens.ts";
 
 const ASSET_SCOPE_AXES = [
   "project",
@@ -64,12 +65,6 @@ const detail = (
 ): Detail => ({ path: [...path], code, message });
 
 const trimAscii = (value: string): string => value.replace(/^[ \t]+|[ \t]+$/g, "");
-
-const isLowerKebabToken = (value: string): boolean =>
-  value.length > 0 &&
-  value.length <= 64 &&
-  /^[a-z](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(value) &&
-  !value.includes("--");
 
 const isAssetScopeAxis = (value: string): value is AssetScopeAxis =>
   ASSET_SCOPE_AXES.includes(value as AssetScopeAxis);

@@ -70,6 +70,20 @@ describe("capability catalog and dependency semantics", () => {
     if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("duplicate_capability_id");
   });
 
+  it("C2-b rejects ids and features the Canonical Asset frontmatter cannot carry", () => {
+    const dotted = buildCapabilityCatalog([definition("browser.dom")]);
+    expect(dotted.ok).toBe(false);
+    if (!dotted.ok) expect(dotted.failure.details?.map((item) => item.code)).toContain("invalid_capability_id");
+
+    const overlong = buildCapabilityCatalog([definition("a".repeat(65))]);
+    expect(overlong.ok).toBe(false);
+    if (!overlong.ok) expect(overlong.failure.details?.map((item) => item.code)).toContain("invalid_capability_id");
+
+    const dottedFeature = buildCapabilityCatalog([definition("browser", ["dom.tree"])]);
+    expect(dottedFeature.ok).toBe(false);
+    if (!dottedFeature.ok) expect(dottedFeature.failure.details?.map((item) => item.code)).toContain("invalid_feature_id");
+  });
+
   it("C3 rejects duplicate features", () => {
     const result = buildCapabilityCatalog([definition("filesystem", ["read", "read"])]);
 
