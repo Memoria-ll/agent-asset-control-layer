@@ -50,8 +50,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 
 ### Project identity
 
-- Project identity の正は `<project-root>/.aacl/project.json`。Git repository root ではなく、
-  init に指定された directory を Project root とする。
+- Project identity の正は `<project-root>/.aacl/project.json`。Marker は schema version 1 の
+  strict object で、`projectId` は `^project-[a-z0-9-]+$`、全長128文字以内とする。Git repository
+  root ではなく、init に指定された directory を Project root とする。
 - discovery は workspace から filesystem root へ向かい、最寄りの `.aacl` で確定する。
   その Project marker が不正でも上位 Project へ抜けない。
 - `~/.aacl-state/project-registry.json` は Marker から再構築できる索引であり、identity の正にしない。
@@ -96,6 +97,12 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   正規化表現。再現には前者、同一性判定には後者を使う。
 - capability offer は provider identity を持たない。同一 capability と features の offer は
   producer が permission を `allowed` / `denied` に畳み、1件として渡す。
+- on-disk scope axis と resolution context axis は名前が異なる。`CanonicalAsset.scope` から
+  resolution candidate への projection は明示的な対応表で行う。
+- `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
+  内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
+- `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、
+  保存済み state の所属不一致を検出する値として扱う。
 - package を増減するときは workspace package 検査と `gate.json` の typecheck / test /
   node-resolution の期待数を同じ変更で更新する。
 - `tsconfig.base.json` は `noUnusedLocals` を有効にしていない。コード移動では追加元に残った

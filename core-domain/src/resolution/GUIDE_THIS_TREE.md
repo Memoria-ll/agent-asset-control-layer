@@ -13,7 +13,3 @@
 - Type 固有 semantics は `asset-type-contracts.ts` の `Record<AssetType, AssetTypeContract>` に集約し、共通 pipeline へ Type 分岐を置かない。
 - exclusive winner は他の全 candidate に負けない candidate が一意な場合だけ選ぶ。非推移な比較を段階的な脱落処理へ変換しない。
 - degraded candidate は `kind: "included"` のまま degradation を付ける。required capability の hard failure だけを unavailable にする。
-
-## Change considerations
-
-- on-disk scope axis と resolution context axis は名前が異なるため、`CanonicalAsset.scope` から candidate への投影は明示的な対応表で行う。
