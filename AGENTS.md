@@ -63,8 +63,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 
 - `shared/src/` の公開型が公開契約。network / IPC / filesystem 境界を越える値には明示的な
   serialization schema を持たせ、TypeScript 型は schema から導出する。
-- 境界 DTO は strict object とし、成立し得ない状態を parse させない。JSON Schema で表せる
-  制約は parser と draft 2020-12 schema の両方へ反映する。
+- 境界 DTO は成立し得ない状態を parse させない。JSON Schema で表せる制約は parser と
+  draft 2020-12 schema の両方へ反映する。
 - `zod` は `shared` の実装詳細。consumer へは TypeScript 型と素の JavaScript の関数・データだけを
   export し、consumer が必要とする runtime validator や値集合をその都度明示的に追加する。
 - 契約全体のバージョンは `shared` の `CONTRACT_VERSION` だけで管理する。enum 値、union arm、
@@ -103,6 +103,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、
   保存済み state の所属不一致を検出する値として扱う。
+- `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding` は双方向の link。
+  片側を生成・変更する producer は対応する鏡像も維持する。
 - package を増減するときは workspace package 検査と `gate.json` の typecheck / test /
   node-resolution の期待数を同じ変更で更新する。
 - `tsconfig.base.json` は `noUnusedLocals` を有効にしていない。コード移動では追加元に残った

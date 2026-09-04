@@ -12,4 +12,4 @@
 - Asset Type 単体で判定できる違反は input validation、複数 candidate の関係で決まる違反は candidate reason と conflict にする。cross-Type relation は applicability で候補を絞る前に判定する。
 - Type 固有 semantics は `asset-type-contracts.ts` の `Record<AssetType, AssetTypeContract>` に集約し、共通 pipeline へ Type 分岐を置かない。
 - exclusive winner は他の全 candidate に負けない candidate が一意な場合だけ選ぶ。非推移な比較を段階的な脱落処理へ変換しない。
-- degraded candidate は `kind: "included"` のまま degradation を付ける。required capability の hard failure だけを unavailable にする。
+- capability dependency では optional failure を `kind: "included"` の degradation、required capability の hard failure を unavailable にする。required asset の missing / out-of-scope / disabled / overridden / invalid も unavailable にする。
