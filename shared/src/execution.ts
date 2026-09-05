@@ -1,7 +1,7 @@
 import * as z from "zod/mini";
 import { AgentExecutionId, AssetRevision, SessionId, SkillId, WorkflowId } from "./identifiers.ts";
 import { NonEmptyString } from "./primitives.ts";
-import { ResolutionContextInput } from "./resolved-context.ts";
+import { ResolutionContextInput, WorkflowStartPreconditionContext } from "./resolved-context.ts";
 import { AgentExecutionDto } from "./sessions.ts";
 import { WorkflowStateDto } from "./workflow.ts";
 import { tryParseWith, type ParseOutcome } from "./errors.ts";
@@ -93,13 +93,30 @@ const InitialWorkflowState = z.extend(WorkflowStateDto, { stateVersion: z.litera
  * record disagrees with its own next context on any of them cannot reproduce the context
  * it was resolved against, so the pair is checked as a whole rather than per axis: the
  * routing tuple and the scope axes fail the same way and are missed the same way.
+ *
+ * `directory` is absent because the execution record has no such field.
  */
 const MIRRORED_CONTEXT_AXES = ["projectId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId"] as const;
 
+/**
+ * The axes a start carries over unchanged. Selecting a workflow does not move the caller to
+ * another project, task, machine or directory. `roleId` is deliberately absent: it is the one
+ * axis the start itself sets, from the state the definition initialized.
+ */
+const PRESERVED_CONTEXT_AXES = ["projectId", "taskTypeId", "providerId", "runtimeId", "modelId", "directory"] as const;
+
+/**
+ * What this refinement is, and is not: it checks the four documents in the bundle against
+ * each other, and nothing else. The workflow definition is not part of the bundle, so facts
+ * derived from it — stage requirements, catalog membership, whether a role exists — cannot be
+ * checked here and belong to the application that loads the definition. Everything that IS
+ * decidable from the bundle alone is listed below, so a later reader can see the set is closed
+ * rather than guess which case was forgotten.
+ */
 export const WorkflowStartCommitRequest = z.strictObject({
   operation: z.literal("workflow_start"),
   idempotencyKey: NonEmptyString,
-  precondition: z.strictObject({ context: ResolutionContextInput, target: workflowTarget }),
+  precondition: z.strictObject({ context: WorkflowStartPreconditionContext, target: workflowTarget }),
   nextContext: ResolutionContextInput,
   agentExecution: AgentExecutionDto,
   workflowState: InitialWorkflowState,
@@ -117,10 +134,19 @@ export const WorkflowStartCommitRequest = z.strictObject({
   if (binding.executionInstanceId !== state.executionInstanceId) return false;
   if (value.agentExecution.stageId !== state.currentStageId || selected.stageId !== state.currentStageId) return false;
   if (MIRRORED_CONTEXT_AXES.some((axis) => value.nextContext[axis] !== value.agentExecution[axis])) return false;
+  if (PRESERVED_CONTEXT_AXES.some((axis) => value.precondition.context[axis] !== value.nextContext[axis])) return false;
   // The state names the role the instance runs in. It is checked here rather than left to
-  // the producer, because a commit adapter is not bound by the domain's start path.
+  // the producer, because a commit adapter is not bound by the domain's start path. The two
+  // state roles agree at version 0: a definition's entry stage must require its entry role,
+  // so initialization has nowhere else to take `currentRoleId` from.
   if (value.agentExecution.roleId !== state.currentRoleId) return false;
-  if (!state.linkedAgentExecutionIds.includes(value.agentExecution.agentExecutionId)) return false;
+  if (state.entryRoleId !== state.currentRoleId) return false;
+  // A just-minted instance is linked to this one execution and to no snapshot. `includes`
+  // would admit links whose counterpart document the bundle does not carry.
+  if (state.linkedAgentExecutionIds.length !== 1) return false;
+  if (state.linkedAgentExecutionIds[0] !== value.agentExecution.agentExecutionId) return false;
+  if (state.linkedSnapshotIds.length !== 0) return false;
+  if (value.agentExecution.snapshotId !== undefined || value.agentExecution.endedAt !== undefined) return false;
   if (value.agentExecution.sessionId === undefined) return value.sessionUpdate === undefined;
   return value.sessionUpdate?.sessionId === value.agentExecution.sessionId
     && value.sessionUpdate.addAgentExecutionId === value.agentExecution.agentExecutionId;

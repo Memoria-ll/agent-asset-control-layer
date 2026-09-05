@@ -203,6 +203,37 @@ describe("workflow start application boundary", () => {
     expect(commits).toBe(1);
   });
 
+  it("starts a project-owned workflow only under its own project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-execution-project-")); directories.push(root);
+    const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });
+    const stored = asset(workflow); await writeFile(assetPath, unwrap(serializeCanonicalAsset(stored)), "utf8");
+    const assets = unwrap(createFilesystemAssetStore([{ rootId: "project-a-root", kind: "project", projectId: "project-a", directory: join(root, "assets") }]));
+    let instanceNumber = 0;
+    const stateStore = unwrap(await createWorkflowStateStore({ stateDirectory: join(root, "state"), newInstanceSuffix: () => `run-${instanceNumber += 1}` }));
+    let commits = 0;
+    const port: WorkflowStartCommitPort = { commit: async (value) => { commits += 1; return { ok: true, value }; } };
+    const lookup = await assets.get("review-flow" as never);
+    const revision = lookup.matches[0]?.revision;
+    if (revision === undefined) throw new Error("fixture revision missing");
+    const options = { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never };
+    const advisory = (projectId?: string): WorkflowStartRequestInput["context"] => ({
+      executionMode: "advisory_preparation",
+      workflow: { kind: "none" },
+      roleId: "reviewer",
+      ...(projectId === undefined ? {} : { projectId }),
+    });
+
+    const otherProject = await startWorkflowExecution(request(revision, advisory("project-b")), options);
+    expect(otherProject).toMatchObject({ ok: false, failure: { code: "invalid_request", details: [{ code: "workflow_project_mismatch" }] } });
+    const noProject = await startWorkflowExecution(request(revision, advisory()), options);
+    expect(noProject).toMatchObject({ ok: false, failure: { details: [{ code: "workflow_project_mismatch" }] } });
+    expect(commits).toBe(0);
+
+    const owningProject = await startWorkflowExecution(request(revision, advisory("project-a")), options);
+    expect(owningProject.ok).toBe(true);
+    expect(commits).toBe(1);
+  });
+
   it("rejects a stale target revision before invoking the commit port", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-execution-stale-")); directories.push(root);
     const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });

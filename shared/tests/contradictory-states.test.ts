@@ -45,12 +45,17 @@ const resolvedContext = (overrides: {
 
 const workflowStartBundle = (
   stateVersion: number,
-  axes: { nextContext?: Record<string, unknown>; agentExecution?: Record<string, unknown> } = {},
+  axes: {
+    nextContext?: Record<string, unknown>;
+    agentExecution?: Record<string, unknown>;
+    preconditionContext?: Record<string, unknown>;
+    workflowState?: Record<string, unknown>;
+  } = {},
 ): unknown => ({
   operation: "workflow_start",
   idempotencyKey: "start-1",
   precondition: {
-    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" }, ...axes.preconditionContext },
     target: { workflowId: "workflow-1", workflowRevision: "revision-1" },
   },
   nextContext: {
@@ -79,6 +84,7 @@ const workflowStartBundle = (
     linkedAgentExecutionIds: ["execution-1"],
     linkedSnapshotIds: [],
     updatedAt: "2026-08-30T01:02:03+09:00",
+    ...axes.workflowState,
   },
 });
 
@@ -408,6 +414,26 @@ describe("boundary states that cannot exist", () => {
     }))).toThrow();
   });
 
+  // The bundle carries four documents and no workflow definition, so this is the whole set of
+  // states it can be internally inconsistent in. Listed exhaustively so a gap is visible.
+  it.each([
+    ["the start is issued from a development context", {
+      preconditionContext: { executionMode: "development_execution", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
+    }],
+    ["the start is issued from an already selected workflow", {
+      preconditionContext: { workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
+    }],
+    ["the start moves the execution to another project", { preconditionContext: { projectId: "project-a" } }],
+    ["the start moves the execution to another directory", { preconditionContext: { directory: "/a" } }],
+    ["the initial state entered in a different role than it runs in", { workflowState: { entryRoleId: "role-2" } }],
+    ["the initial state links an execution the bundle does not carry", { workflowState: { linkedAgentExecutionIds: ["execution-1", "execution-2"] } }],
+    ["the initial state already links a snapshot", { workflowState: { linkedSnapshotIds: ["snapshot-1"] } }],
+    ["the started execution already names a snapshot", { agentExecution: { snapshotId: "snapshot-1" } }],
+    ["the started execution has already ended", { agentExecution: { endedAt: "2026-08-30T02:02:03+09:00" } }],
+  ])("rejects a workflow start where %s", (_name, axes) => {
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, axes))).toThrow();
+  });
+
   it("rejects an invalid transition kind", () => {
     expect(() =>
       parseTransitionCandidateDto({
@@ -576,6 +602,14 @@ describe("published JSON Schema carries the same constraints", () => {
 
       expect(bundle.properties.workflowState.properties.stateVersion.const, name).toBe(0);
     }
+  });
+
+  it("publishes the workflow-start precondition as an advisory, unselected context", () => {
+    const precondition = (schemas().WorkflowStartCommitRequest as any).properties.precondition.properties.context;
+    const kinds = precondition.properties.workflow.oneOf.map((arm: any) => arm.properties.kind.const).sort();
+
+    expect(precondition.properties.executionMode.const).toBe("advisory_preparation");
+    expect(kinds).toEqual(["none", "standalone"]);
   });
 
   it("states uniqueness on every requirement reference list", () => {

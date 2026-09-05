@@ -67,6 +67,16 @@ export const startWorkflowExecution = async (
 
   const loaded = await loadWorkflowDefinitionAtRevision(options.assetStore, request.target.workflowId, request.target.workflowRevision, options.catalog);
   if (!loaded.ok) return loaded;
+  // A workflow read from a project root applies to that project only: its on-disk location is
+  // the applicability condition. Selection is by id and revision alone, so without this a
+  // uniquely-named definition owned by one project starts under another one's context.
+  if (loaded.source.kind === "project" && loaded.source.projectId !== request.context.projectId) {
+    return { ok: false, failure: coreFailure("invalid_request", "The workflow definition belongs to another project.", [{
+      path: ["target", "workflowId"],
+      code: "workflow_project_mismatch",
+      message: `Workflow "${request.target.workflowId}" is owned by project "${loaded.source.projectId}".`,
+    }]) };
+  }
   const issuedExecutionInstanceId = options.stateStore.issueExecutionInstanceId();
   if (!issuedExecutionInstanceId.ok) return issuedExecutionInstanceId;
   const executionInstanceId = issuedExecutionInstanceId.value;
