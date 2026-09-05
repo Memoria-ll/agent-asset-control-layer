@@ -18,6 +18,49 @@ import type { StoredAsset } from "./filesystem-store.ts";
 import { withFilePath } from "../internal/diagnostics.ts";
 import { resolveAssets, type ResolveAssetsOptions } from "./resolve-assets.ts";
 import { sourceIdFor } from "./resolution-input.ts";
+import { selectWorkflowDefinition } from "../workflow/filesystem-definition-loader.ts";
+
+/**
+ * Fill the Role and Task Type the selected Stage requires, which the Workflow
+ * Definition owns and no Binding repeats. Without it scope matching reads those
+ * axes as absent and therefore neutral, so a Binding scoped to any other Role
+ * stays eligible for the selected Stage. An axis the caller supplied is left
+ * alone: it is the caller's own input, not a value derived here.
+ */
+const workflowStageContext = (
+  catalog: MetadataCatalog,
+): NonNullable<ResolveAssetsOptions["deriveContext"]> => (context, assets) => {
+  const selection = context.workflow;
+  if (selection.kind !== "selected") return { ok: true, value: context };
+  if (context.roleId !== undefined && context.taskTypeId !== undefined) return { ok: true, value: context };
+
+  const matches = assets.filter((stored) => String(stored.asset.id) === String(selection.workflowId));
+  const selected = selectWorkflowDefinition(matches, catalog);
+  if (!selected.ok) return selected;
+
+  const stage = selected.value.definition.stages.find((item) => item.stageId === selection.stageId);
+  if (stage === undefined) {
+    const message = "The selected Stage is not part of the Workflow Definition.";
+    return {
+      ok: false,
+      failure: coreFailure("invalid_request", message, [{
+        path: ["context", "workflow", "stageId"],
+        code: "workflow_stage_missing",
+        message,
+      }]),
+    };
+  }
+
+  const derivedAxes = {
+    ...(context.roleId === undefined && stage.requiredRoleId !== undefined
+      ? { roleId: stage.requiredRoleId }
+      : {}),
+    ...(context.taskTypeId === undefined && stage.requiredTaskTypeId !== undefined
+      ? { taskTypeId: stage.requiredTaskTypeId }
+      : {}),
+  };
+  return { ok: true, value: { ...context, ...derivedAxes } };
+};
 
 const candidateKey = (
   assetId: string,
@@ -74,7 +117,10 @@ export const resolveBindingAssets = async (
   }
 
   const { loadingTiers, ...unfilteredRequest } = parsed.value;
-  const resolved = await resolveAssets(unfilteredRequest, options);
+  const resolved = await resolveAssets(unfilteredRequest, {
+    ...options,
+    deriveContext: workflowStageContext(catalog),
+  });
   if (!resolved.ok) return resolved;
 
   const bindingsByCandidate = new Map<string, StoredAsset>();

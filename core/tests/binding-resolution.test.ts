@@ -10,7 +10,13 @@ import {
   type CapabilityId,
   type CapabilityResolutionContext,
 } from "@aacl/core-domain";
-import { parseBindingResolutionResponse, type ModelId, type ProviderId } from "@aacl/shared";
+import {
+  parseBindingResolutionResponse,
+  type ModelId,
+  type ProviderId,
+  type RoleId,
+  type TaskTypeId,
+} from "@aacl/shared";
 import {
   createProjectRegistry,
   createProjectService,
@@ -56,8 +62,11 @@ const makeFixture = async (): Promise<{
 
 const catalog = unwrap(buildMetadataCatalog({
   revision: "catalog-revision" as never,
-  roles: [],
-  taskTypes: [],
+  roles: [
+    { roleId: "reviewer" as RoleId, displayName: "Reviewer" },
+    { roleId: "implementer" as RoleId, displayName: "Implementer" },
+  ],
+  taskTypes: [{ taskTypeId: "code-review" as TaskTypeId, displayName: "Code review" }],
   providers: [{ providerId: "openai" as ProviderId, displayName: "OpenAI" }],
   runtimes: [],
   models: [{ modelId: "gpt-5" as ModelId, displayName: "GPT-5", providerId: "openai" as ProviderId }],
@@ -93,6 +102,7 @@ const binding = (
     readonly body?: string;
     readonly tier?: "core" | "discoverable" | "on-demand";
     readonly fallbackFor?: string;
+    readonly role?: string;
   } = {},
 ): string => `---
 schema-version: 3
@@ -100,10 +110,46 @@ id: ${id}
 type: binding
 tier: ${options.tier ?? "core"}
 operation: ${options.operation ?? "add"}
-${options.capability === undefined ? "" : `capability.required: [${options.capability === "required" ? "filesystem-read" : ""}]\n`}scope.role: [reviewer]
+${options.capability === undefined ? "" : `capability.required: [${options.capability === "required" ? "filesystem-read" : ""}]\n`}scope.role: [${options.role ?? "reviewer"}]
 ${options.operation === "disable" ? "" : `metadata.target-kind: model\nmetadata.model-id: gpt-5\n${options.fallbackFor === undefined ? "" : `metadata.fallback-for: ${options.fallbackFor}\n`}`}---
 ${options.body ?? id}
 `;
+
+const workflowDocument = (): string => [
+  "---",
+  "schema-version: 3",
+  "id: review-flow",
+  "type: workflow",
+  "tier: core",
+  "operation: add",
+  "---",
+  "```aacl-workflow",
+  JSON.stringify({
+    entryRoleId: "reviewer",
+    entryStageId: "review",
+    terminalStageId: "done",
+    stages: [
+      {
+        stageId: "review",
+        displayName: "Review",
+        description: "Review the change",
+        requiredRoleId: "reviewer",
+        requiredTaskTypeId: "code-review",
+      },
+      { stageId: "done", displayName: "Done", description: "Finish" },
+    ],
+    transitions: [{ fromStageId: "review", toStageId: "done", transitionKind: "advance" }],
+  }),
+  "```",
+  "",
+].join("\n");
+
+const selectedStageRequest = () => ({
+  context: {
+    executionMode: "advisory_preparation",
+    workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+  },
+});
 
 const write = async (directory: string, name: string, document: string): Promise<void> => {
   await writeFile(join(directory, name), document, "utf8");
@@ -187,6 +233,35 @@ malformed
     expect(response.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "missing_field", path: ["root", "global", "file", "malformed.md", "frontmatter", "metadata.target-kind"] }),
     ]));
+  });
+
+  it("narrows candidates by the Role and Task Type the selected Stage requires", async () => {
+    const fixture = await makeFixture();
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding", { role: "reviewer" }));
+    await write(fixture.globalRoot.directory, "implementer.md", binding("implementer-binding", { role: "implementer" }));
+
+    const response = unwrap(await resolve(fixture, selectedStageRequest()));
+
+    expect(response.context).toMatchObject({ roleId: "reviewer", taskTypeId: "code-review" });
+    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "reviewer-binding"))
+      .toMatchObject({ status: "eligible" });
+    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
+  });
+
+  it("keeps a Role the caller supplied over the one the selected Stage requires", async () => {
+    const fixture = await makeFixture();
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
+    await write(fixture.globalRoot.directory, "implementer.md", binding("implementer-binding", { role: "implementer" }));
+
+    const response = unwrap(await resolve(fixture, {
+      context: { ...selectedStageRequest().context, roleId: "implementer" },
+    }));
+
+    expect(response.context).toMatchObject({ roleId: "implementer", taskTypeId: "code-review" });
+    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
+      .toMatchObject({ status: "eligible" });
   });
 
   it("resolves fallback relations before applying the requested loading tiers", async () => {

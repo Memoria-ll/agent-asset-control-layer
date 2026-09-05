@@ -102,6 +102,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - scope matching は context に載っていない軸の selector を中立として読み飛ばす。候補が宣言した
   適用条件は、その軸が context にあるときだけ絞り込みに効く。宣言を必須条件として扱わせたい
   candidate projector は、この経路だけでは表現できない (#121)。
+- 別 Asset が正である context 軸 (Workflow Definition が持つ Stage の required Role / Task Type) は、
+  `resolveAssets` の `deriveContext` で store 列挙後かつ `resolveScope` 前に埋める。埋め忘れた軸は
+  上記の中立読み飛ばしに落ちるため、その軸で絞るはずだった候補が全件 eligible のまま返る。
 - `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
   除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
   `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は

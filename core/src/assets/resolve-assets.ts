@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { tryParseResolveRequest } from "@aacl/shared";
+import { tryParseResolveRequest, type ResolutionContextDto } from "@aacl/shared";
 import {
   coreFailure,
   resolveScope,
@@ -27,6 +27,16 @@ export type ResolveAssetsOptions = {
   readonly projectService: ProjectService;
   readonly capabilityContext: CapabilityResolutionContext;
   readonly contracts?: AssetTypeContractRegistry;
+  /**
+   * Fill context axes an Asset is the source of truth for, once the store is
+   * listed and before scope matching runs. Scope matching reads an axis the
+   * context omits as neutral, so an axis derived after `resolveScope` narrows
+   * nothing and an axis derived before the store is listed cannot be read.
+   */
+  readonly deriveContext?: (
+    context: ResolutionContextDto,
+    assets: readonly StoredAsset[],
+  ) => AssetResult<ResolutionContextDto>;
 };
 
 export type ResolvedAssets = {
@@ -132,6 +142,12 @@ export const resolveAssets = async (
   const listed = await storeResult.value.list();
   const rootFailure = listed.failures.find(({ source }) => source.relativePath === undefined);
   if (rootFailure !== undefined) return { ok: false, failure: rootFailure.failure };
+
+  if (options.deriveContext !== undefined) {
+    const derived = options.deriveContext(context, listed.assets);
+    if (!derived.ok) return derived;
+    context = derived.value;
+  }
 
   const projection = toResolutionSnapshot(listed.assets, options.contracts);
   const resolved = resolveScope({
