@@ -154,6 +154,8 @@ export type {
 } from "./assets/resolve-assets.ts";
 export { resolveBindingAssets } from "./assets/binding-resolution.ts";
 export type { BindingResolutionServiceResult } from "./assets/binding-resolution.ts";
+export { resolveSelectedStageRequirements } from "./workflow/selected-stage-requirements.ts";
+export type { SelectedStageRequirementsServiceResult } from "./workflow/selected-stage-requirements.ts";
 
 export { loadMetadataCatalog } from "./catalog/filesystem-catalog.ts";
 export type {

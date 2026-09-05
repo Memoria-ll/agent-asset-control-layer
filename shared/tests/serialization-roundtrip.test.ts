@@ -167,20 +167,36 @@ const representativeInputs: Record<string, unknown> = {
     revision: "revision-1",
     loadingTier: "core",
   },
-  BindingReasonDto: { kind: "eligible" },
+  BindingTargetIssueDto: { kind: "target_missing", targetId: "model-1" },
+  BindingTargetAvailabilityDto: { status: "available" },
+  BindingFallbackRelationDto: { kind: "none" },
   BindingCandidateDto: {
-    status: "eligible",
+    operation: "add",
     definition: {
       bindingId: "binding-1",
       target: { kind: "model", modelId: "model-1" },
       description: "Binding description",
     },
-    reasons: [{ kind: "eligible" }],
+    applicability: { kind: "included", explanation: "Matched.", matchedAxes: ["role"] },
+    targetAvailability: { status: "available" },
+    fallbackRelation: { kind: "none" },
     source: { layer: "project", projectId: "project-1" },
     revision: "revision-1",
     loadingTier: "core",
   },
   BindingResolutionRequest: {
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+  },
+  SelectedStageRequirementsDto: {
+    workflowId: "workflow-1",
+    stageId: "stage-1",
+    requiredRoleId: "role-1",
+    requiredTaskTypeId: "task-type-1",
+  },
+  SelectedStageRequirementsRequest: {
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+  },
+  SelectedStageRequirementsResponse: {
     context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
   },
   BindingResolutionResponse: {

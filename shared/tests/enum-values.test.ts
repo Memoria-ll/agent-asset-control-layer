@@ -13,8 +13,9 @@ import {
   TRANSITION_KINDS,
   BINDING_TARGET_KINDS,
   BINDING_SCOPE_AXES,
-  BINDING_CANDIDATE_STATUSES,
-  BINDING_REASON_KINDS,
+  BINDING_TARGET_AVAILABILITY_STATUSES,
+  BINDING_TARGET_ISSUE_KINDS,
+  BINDING_FALLBACK_RELATION_KINDS,
   BINDING_SOURCE_LAYERS,
 } from "../src/index.ts";
 // The schemas these arrays build are internal; the test reaches them through the
@@ -39,8 +40,9 @@ describe("frozen contract enum values", () => {
     ["PROJECT_DISCOVERY_STATUSES", PROJECT_DISCOVERY_STATUSES, ["initialized", "uninitialized", "invalid", "mismatch"]],
     ["BINDING_TARGET_KINDS", BINDING_TARGET_KINDS, ["provider", "runtime", "model", "runtime-model"]],
     ["BINDING_SCOPE_AXES", BINDING_SCOPE_AXES, ["projectId", "workflowId", "stageId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId", "directory"]],
-    ["BINDING_CANDIDATE_STATUSES", BINDING_CANDIDATE_STATUSES, ["eligible", "unavailable", "fallback"]],
-    ["BINDING_REASON_KINDS", BINDING_REASON_KINDS, ["eligible", "scope_mismatch", "binding_disabled", "binding_overridden", "target_missing", "target_provider_mismatch", "capability_unavailable", "capability_not_allowed", "fallback_not_needed", "fallback_primary_unavailable", "invalid_binding"]],
+    ["BINDING_TARGET_AVAILABILITY_STATUSES", BINDING_TARGET_AVAILABILITY_STATUSES, ["available", "unavailable"]],
+    ["BINDING_TARGET_ISSUE_KINDS", BINDING_TARGET_ISSUE_KINDS, ["target_missing", "target_provider_mismatch"]],
+    ["BINDING_FALLBACK_RELATION_KINDS", BINDING_FALLBACK_RELATION_KINDS, ["none", "linked", "missing", "cycle"]],
     ["BINDING_SOURCE_LAYERS", BINDING_SOURCE_LAYERS, ["global", "personal", "project"]],
   ])("keeps %s stable", (_name, members, expected) => {
     expect(

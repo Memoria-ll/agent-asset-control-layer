@@ -66,63 +66,61 @@ describe("Binding shared contract", () => {
     })).toThrow();
   });
 
-  it("requires fallbackFor on fallback candidates and retains structured reasons", () => {
+  it("keeps applicability, target availability, and fallback relation independent", () => {
     const definition = parseBindingDefinitionDto({ bindingId: "binding-1", target, description: "" });
     expect(definition.description).toBe("");
     expect(parseBindingCandidateDto({
-      status: "fallback",
+      operation: "add",
       definition: { ...definition, fallbackFor: "primary-1" },
-      reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "primary-1" }],
+      applicability: { kind: "included", explanation: "Matched.", matchedAxes: [] },
+      targetAvailability: { status: "available" },
+      fallbackRelation: { kind: "linked", primaryBindingId: "primary-1" },
       source: { layer: "global" },
       revision: "revision-1",
       loadingTier: "core",
-    })).toMatchObject({ status: "fallback", definition: { fallbackFor: "primary-1" } });
+    })).toMatchObject({
+      operation: "add",
+      applicability: { kind: "included" },
+      targetAvailability: { status: "available" },
+      fallbackRelation: { kind: "linked" },
+    });
+
+    expect(parseBindingCandidateDto({
+      operation: "disable",
+      bindingId: "binding-1",
+      applicability: { kind: "disabled", explanation: "Disabled.", disabledBy: "binding-1" },
+      source: { layer: "project", projectId: "project-1" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toMatchObject({ operation: "disable", bindingId: "binding-1" });
+
     expect(() => parseBindingCandidateDto({
-      status: "fallback",
+      operation: "add",
       definition,
-      reasons: [{ kind: "eligible" }],
+      applicability: { kind: "included", explanation: "Matched.", matchedAxes: [] },
+      targetAvailability: { status: "unavailable", issues: [] },
+      fallbackRelation: { kind: "none" },
       source: { layer: "global" },
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
     expect(() => parseBindingCandidateDto({
-      status: "fallback",
-      definition: { ...definition, fallbackFor: "primary-1" },
-      fallbackFor: "primary-1",
-      reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "primary-1" }],
-      source: { layer: "global" },
-      revision: "revision-1",
-      loadingTier: "core",
-    })).toThrow();
-    expect(() => parseBindingCandidateDto({
-      status: "unavailable",
+      operation: "disable",
       bindingId: "binding-1",
-      reasons: [{ kind: "eligible" }],
-      source: { layer: "global" },
+      applicability: { kind: "disabled", explanation: "Disabled.", disabledBy: "binding-1" },
+      targetAvailability: { status: "available" },
+      source: { layer: "project", projectId: "project-1" },
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
-    expect(() => parseBindingCandidateDto({
-      status: "eligible",
-      definition: { ...definition, fallbackFor: "primary-1" },
-      reasons: [{ kind: "eligible" }],
-      source: { layer: "global" },
-      revision: "revision-1",
-      loadingTier: "core",
-    })).toThrow();
-    expect(() => parseBindingCandidateDto({
-      status: "fallback",
-      definition: { ...definition, fallbackFor: "primary-1" },
-      reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "primary-2" }],
-      source: { layer: "global" },
-      revision: "revision-1",
-      loadingTier: "core",
-    })).toThrow();
-    expect(() => parseBindingCandidateDto({
-      status: "unavailable",
-      bindingId: "binding-1",
-      definition: { ...definition, bindingId: "binding-2" },
-      reasons: [{ kind: "target_missing", targetId: "missing" }],
+  });
+
+  it("accepts only marker-shaped project ids", () => {
+    expect(parseBindingScopeDto({ projectId: ["project-a"] })).toEqual({ projectId: ["project-a"] });
+    expect(() => parseBindingScopeDto({ projectId: ["plain-a"] })).toThrow();
+    expect(() => parseBindingRecordDto({
+      operation: "override",
+      definition: { bindingId: "binding-1", target, description: "" },
       source: { layer: "global" },
       revision: "revision-1",
       loadingTier: "core",

@@ -80,6 +80,7 @@ const REQUEST_PARSERS = new Set([
   "tryParseProjectInitRequest",
   "tryParseProjectDiscoveryRequest",
   "tryParseBindingResolutionRequest",
+  "tryParseSelectedStageRequirementsRequest",
 ]);
 
 describe("boundary direction decides the failure code", () => {

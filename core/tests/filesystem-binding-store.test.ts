@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +37,30 @@ metadata.model-id: gpt-5
 ${body}
 `));
 
+const disable = (id: string): CanonicalBinding => unwrap(parseBindingDocument(`---
+schema-version: 3
+id: ${id}
+type: binding
+tier: core
+operation: disable
+---
+disable
+`));
+
+const exclusive = (id: string): CanonicalBinding => unwrap(parseBindingDocument(`---
+schema-version: 3
+id: ${id}
+type: binding
+tier: core
+operation: add
+merge-mode: exclusive
+merge-group: reviewer
+metadata.target-kind: model
+metadata.model-id: gpt-5
+---
+exclusive
+`));
+
 const rule = (id: string): string => `---
 schema-version: 3
 id: ${id}
@@ -65,6 +89,32 @@ const makeStore = async () => {
 };
 
 describe("filesystem Binding store", () => {
+  it("refuses a project-only overlay before writing to a global root", async () => {
+    const { directory, store } = await makeStore();
+    const saved = await saveBinding(store, {
+      rootId: "global",
+      relativePath: "bindings/disable.md",
+      asset: disable("reviewer-binding").asset,
+    });
+    expect(saved).toMatchObject({ ok: false, failure: { details: expect.arrayContaining([
+      expect.objectContaining({ code: "operation_requires_project_source" }),
+    ]) } });
+    await expect(readdir(directory)).resolves.toEqual([]);
+  });
+
+  it("refuses a merge mode excluded by the Binding contract before writing", async () => {
+    const { directory, store } = await makeStore();
+    const saved = await saveBinding(store, {
+      rootId: "global",
+      relativePath: "exclusive.md",
+      asset: exclusive("exclusive-binding").asset,
+    });
+    expect(saved).toMatchObject({ ok: false, failure: { details: expect.arrayContaining([
+      expect.objectContaining({ code: "merge_mode_not_allowed" }),
+    ]) } });
+    await expect(readdir(directory)).resolves.toEqual([]);
+  });
+
   it("saves, reloads, and preserves the stored revision and source", async () => {
     const { store } = await makeStore();
     const saved = await saveBinding(store, {

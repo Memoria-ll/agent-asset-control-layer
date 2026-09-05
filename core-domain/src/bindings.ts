@@ -1,18 +1,22 @@
 import type {
   BindingCandidateDto,
   BindingDefinitionDto,
+  BindingFallbackRelationDto,
   BindingId,
-  BindingReasonDto,
   BindingScopeDto,
   BindingSourceDto,
   BindingTargetDto,
+  BindingTargetAvailabilityDto,
+  BindingTargetIssueDto,
   CoreErrorDetail,
   ModelId,
   ProviderId,
   RuntimeId,
 } from "@aacl/shared";
+import { isProjectMarkerId } from "@aacl/shared";
 import type { AssetId } from "@aacl/shared";
 import {
+  asAssetId,
   parseAssetDocument,
   validateAsset,
   type AssetFieldValue,
@@ -22,9 +26,9 @@ import {
 import { coreFailure, type AssetResult } from "./failures.ts";
 import type { MetadataCatalog } from "./catalog.ts";
 import type {
-  CandidateReason,
   ResolutionEvaluation,
 } from "./resolution/resolution-types.ts";
+import { toResolutionReasonDto } from "./resolution/result-assembly.ts";
 import { codeUnitCompare } from "./ordering.ts";
 
 export const asBindingId = (assetId: AssetId): BindingId => assetId as string as BindingId;
@@ -118,6 +122,15 @@ export const parseBindingAsset = (asset: CanonicalAsset): AssetResult<CanonicalB
   for (const key of metadataKeys) {
     if (!allowed.has(key)) details.push(detail(["document", "frontmatter", `metadata.${key}`], "unknown_metadata", `Unknown Binding metadata key "${key}".`));
   }
+  for (const projectId of asset.scope.project ?? []) {
+    if (!isProjectMarkerId(projectId)) {
+      details.push(detail(
+        ["document", "frontmatter", "scope.project"],
+        "invalid_project_id",
+        "Binding scope.project values must use the Project marker id shape.",
+      ));
+    }
+  }
 
   const target = asset.operation === "disable" ? undefined : targetFromMetadata(asset, details);
   if (asset.operation !== "disable" && target === undefined && details.length === 0) {
@@ -127,8 +140,9 @@ export const parseBindingAsset = (asset: CanonicalAsset): AssetResult<CanonicalB
     details.push(detail(["document", "frontmatter", "metadata"], "disable_target_metadata", "A disabled Binding must not declare target or fallback metadata."));
   }
   const fallbackValue = scalarMetadata(asset, "fallback-for", details, false);
-  const fallbackFor = fallbackValue === undefined ? undefined : asBindingId(fallbackValue as AssetId);
-  if (fallbackValue !== undefined && !/^(?!.*--)[a-z](?:[a-z0-9-]{0,126}[a-z0-9])?$/.test(fallbackValue)) {
+  const fallbackAssetId = fallbackValue === undefined ? undefined : asAssetId(fallbackValue);
+  const fallbackFor = fallbackAssetId?.ok === true ? asBindingId(fallbackAssetId.value) : undefined;
+  if (fallbackAssetId?.ok === false) {
     details.push(detail(["document", "frontmatter", "metadata.fallback-for"], "invalid_binding_id", "Binding metadata.fallback-for must be a lowercase kebab identifier."));
   }
   if (asset.operation === "disable" && fallbackFor !== undefined) {
@@ -177,53 +191,9 @@ const entryKey = (entry: BindingResolutionEntry): string => [
   entry.evaluation.candidate.source.layer,
   entry.evaluation.candidate.source.sourceId,
 ].join("\u0000");
-const targetKey = (target: BindingTargetDto): string => {
-  switch (target.kind) {
-    case "provider": return `${target.kind}:${target.providerId}`;
-    case "runtime": return `${target.kind}:${target.runtimeId}`;
-    case "model": return `${target.kind}:${target.modelId}`;
-    case "runtime-model": return `${target.kind}:${target.runtimeId}:${target.modelId}`;
-  }
-};
-
-const reasonForGeneric = (reason: CandidateReason, bindingId: BindingId): BindingReasonDto[] => {
-  switch (reason.kind) {
-    case "included": {
-      const degradedCapabilities = reason.degradedCapabilities?.map((degradation) =>
-        degradation.strength === "required"
-          ? {
-              capabilityId: degradation.capabilityId,
-              strength: degradation.strength,
-              fallbackCapabilityId: degradation.fallbackCapabilityId,
-            }
-          : {
-              capabilityId: degradation.capabilityId,
-              strength: degradation.strength,
-              ...(degradation.fallbackCapabilityId === undefined ? {} : { fallbackCapabilityId: degradation.fallbackCapabilityId }),
-            });
-      return [{
-        kind: "eligible",
-        ...(degradedCapabilities === undefined ? {} : { degradedCapabilities }),
-      }];
-    }
-    case "excluded":
-      if (reason.cause === "scope_mismatch") {
-        const axes = reason.mismatchedAxes.length > 0 ? reason.mismatchedAxes : (["directory"] as const);
-        return axes.map((axis) => ({ kind: "scope_mismatch", axis }));
-      }
-      return [{ kind: "invalid_binding", bindingId }];
-    case "disabled": return [{ kind: "binding_disabled", actorBindingId: asBindingId(reason.disabledBy) }];
-    case "overridden": return [{ kind: "binding_overridden", actorBindingId: asBindingId(reason.overriddenBy) }];
-    case "unavailable":
-      if (reason.cause === "capability_not_allowed") return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_not_allowed", capabilityId: id }));
-      if (reason.cause === "capability_unavailable") return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_unavailable", capabilityId: id }));
-      return [{ kind: "invalid_binding", bindingId }];
-  }
-};
-
-const targetReason = (binding: CanonicalBinding, catalog: MetadataCatalog): BindingReasonDto[] => {
+const targetIssues = (binding: CanonicalBinding, catalog: MetadataCatalog): BindingTargetIssueDto[] => {
   const target = binding.target;
-  if (target === undefined) return [{ kind: "invalid_binding", bindingId: binding.bindingId }];
+  if (target === undefined) return [];
   switch (target.kind) {
     case "provider":
       return catalog.providers.has(target.providerId) ? [] : [{ kind: "target_missing", targetId: target.providerId }];
@@ -241,14 +211,45 @@ const targetReason = (binding: CanonicalBinding, catalog: MetadataCatalog): Bind
   }
 };
 
-const sortReasons = (left: BindingReasonDto, right: BindingReasonDto): number => codeUnitCompare(JSON.stringify(left), JSON.stringify(right));
+const targetAvailability = (binding: CanonicalBinding, catalog: MetadataCatalog): BindingTargetAvailabilityDto => {
+  const issues = targetIssues(binding, catalog);
+  return issues.length === 0 ? { status: "available" } : { status: "unavailable", issues };
+};
+
+const cycleFrom = (
+  binding: CanonicalBinding,
+  fallbackIds: ReadonlyMap<BindingId, readonly BindingId[]>,
+): readonly BindingId[] | undefined => {
+  const primary = binding.fallbackFor;
+  if (primary === undefined) return undefined;
+  const visit = (current: BindingId, path: readonly BindingId[]): readonly BindingId[] | undefined => {
+    const repeatedAt = path.indexOf(current);
+    if (repeatedAt >= 0) return [...path.slice(repeatedAt), current];
+    for (const next of fallbackIds.get(current) ?? []) {
+      const cycle = visit(next, [...path, current]);
+      if (cycle !== undefined) return cycle;
+    }
+    return undefined;
+  };
+  return visit(primary, [binding.bindingId]);
+};
+
+const fallbackRelation = (
+  binding: CanonicalBinding,
+  bindingIds: ReadonlySet<BindingId>,
+  fallbackIds: ReadonlyMap<BindingId, readonly BindingId[]>,
+): BindingFallbackRelationDto => {
+  const primaryBindingId = binding.fallbackFor;
+  if (primaryBindingId === undefined) return { kind: "none" };
+  if (!bindingIds.has(primaryBindingId)) return { kind: "missing", primaryBindingId };
+  const cycle = cycleFrom(binding, fallbackIds);
+  return cycle === undefined
+    ? { kind: "linked", primaryBindingId }
+    : { kind: "cycle", primaryBindingId, cycle: [...cycle] };
+};
 
 /** Resolve validated binding assets without choosing a winner or creating an assignment. */
 export const resolveBindings = (input: BindingResolutionInput): AssetResult<BindingResolutionResult> => {
-  type BindingState = BindingResolutionEntry & {
-    readonly reasons: readonly BindingReasonDto[];
-    readonly eligible: boolean;
-  };
   const sourceMismatch = input.entries.find(({ evaluation, source }) => evaluation.candidate.source.layer !== source.layer);
   if (sourceMismatch !== undefined) {
     return invalidBinding([detail(
@@ -257,123 +258,43 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
       "The Binding source layer must match its resolution candidate source layer.",
     )]);
   }
-  const base = [...input.entries]
-    .sort((left, right) => codeUnitCompare(entryKey(left), entryKey(right)))
-    .map((entry): BindingState => {
-      const genericReasons = reasonForGeneric(entry.evaluation.reason, entry.binding.bindingId);
-      let reasons: BindingReasonDto[] = genericReasons;
-      if (entry.evaluation.reason.kind === "included") {
-        const availabilityReasons = targetReason(entry.binding, input.catalog);
-        reasons = availabilityReasons.length === 0 ? genericReasons : availabilityReasons;
-      }
-      return {
-        ...entry,
-        reasons: [...reasons].sort(sortReasons),
-        eligible: reasons.length === 1 && reasons[0]?.kind === "eligible",
-      };
-    });
-  const statesByBindingId = new Map<BindingId, BindingState[]>();
-  for (const state of base) {
-    const states = statesByBindingId.get(state.binding.bindingId) ?? [];
-    states.push(state);
-    statesByBindingId.set(state.binding.bindingId, states);
+  const entries = [...input.entries].sort((left, right) => codeUnitCompare(entryKey(left), entryKey(right)));
+  const bindingIds = new Set(entries
+    .filter(({ binding }) => binding.asset.operation !== "disable")
+    .map(({ binding }) => binding.bindingId));
+  const fallbackIds = new Map<BindingId, BindingId[]>();
+  for (const { binding } of entries) {
+    if (binding.fallbackFor === undefined) continue;
+    const targets = fallbackIds.get(binding.bindingId) ?? [];
+    if (!targets.includes(binding.fallbackFor)) targets.push(binding.fallbackFor);
+    fallbackIds.set(binding.bindingId, targets);
   }
   const diagnostics: Detail[] = [];
-
-  const fallbackIds = new Map<BindingId, BindingId>();
-  for (const item of base) {
-    if (!item.eligible) continue;
-    if (item.binding.fallbackFor !== undefined) fallbackIds.set(item.binding.bindingId, item.binding.fallbackFor);
-  }
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const cyclic = new Set<BindingId>();
-  const visit = (id: BindingId, path: BindingId[]): void => {
-    if (visiting.has(String(id))) {
-      const index = path.findIndex((value) => value === id);
-      for (const cycleId of path.slice(index < 0 ? 0 : index)) cyclic.add(cycleId);
-      return;
-    }
-    if (visited.has(String(id))) return;
-    visiting.add(String(id));
-    const primary = fallbackIds.get(id);
-    if (primary !== undefined) visit(primary, [...path, id]);
-    visiting.delete(String(id));
-    visited.add(String(id));
-  };
-  for (const id of fallbackIds.keys()) visit(id, []);
-
-  const effectiveAvailability = new Map<BindingId, boolean>();
-  const isEffectivelyAvailable = (id: BindingId, path: ReadonlySet<string> = new Set()): boolean => {
-    const cached = effectiveAvailability.get(id);
-    if (cached !== undefined) return cached;
-    if (path.has(String(id))) return false;
-    const states = statesByBindingId.get(id);
-    if (states === undefined) {
-      effectiveAvailability.set(id, false);
-      return false;
-    }
-    const available = states.some((state) => {
-      if (!state.eligible) return false;
-      const primary = state.binding.fallbackFor;
-      return primary === undefined || !isEffectivelyAvailable(primary, new Set([...path, String(id)]));
-    });
-    effectiveAvailability.set(id, available);
-    return available;
-  };
-
   const candidates: BindingCandidateDto[] = [];
-  for (const item of base) {
+  for (const item of entries) {
     const { binding } = item;
     const candidateBase = {
       revision: item.evaluation.candidate.revision,
       source: item.source,
       loadingTier: item.evaluation.candidate.loadingTier,
+      applicability: toResolutionReasonDto(item.evaluation.reason),
     };
-    const primaryId = binding.fallbackFor;
-    if (!item.eligible) {
+    if (binding.asset.operation === "disable") {
       candidates.push({
-        status: "unavailable",
+        operation: "disable",
         bindingId: binding.bindingId,
-        ...optionalDefinition(binding),
-        reasons: (item.reasons.length > 0 ? [...item.reasons] : [{ kind: "invalid_binding", bindingId: binding.bindingId }]) as Extract<BindingCandidateDto, { status: "unavailable" }>['reasons'],
+        ...(bindingScope(binding.asset) === undefined ? {} : { scope: bindingScope(binding.asset) }),
         ...candidateBase,
       });
       continue;
     }
-    if (primaryId !== undefined && !statesByBindingId.has(primaryId)) {
-      candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "invalid_binding", bindingId: binding.bindingId }], ...candidateBase });
-      diagnostics.push(detail(["binding", binding.bindingId, "fallbackFor"], "missing_fallback_primary", "The fallback primary Binding is missing."));
-      continue;
-    }
-    if (cyclic.has(binding.bindingId)) {
-      candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "invalid_binding", bindingId: binding.bindingId }], ...candidateBase });
-      diagnostics.push(detail(["binding", binding.bindingId, "fallbackFor"], "fallback_cycle", "The Binding fallback relation contains a cycle."));
-      continue;
-    }
-    if (primaryId === undefined) {
-      const definition = definitionDto(binding)!;
-      const { fallbackFor: _fallbackFor, ...eligibleDefinition } = definition;
-      candidates.push({ status: "eligible", definition: eligibleDefinition, reasons: item.reasons as Extract<BindingCandidateDto, { status: "eligible" }>['reasons'], ...candidateBase });
-      continue;
-    }
-    if (isEffectivelyAvailable(primaryId)) {
-      candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "fallback_not_needed", primaryBindingId: primaryId }], ...candidateBase });
-    } else {
-      const degradedCapabilities = item.reasons[0]?.kind === "eligible"
-        ? item.reasons[0].degradedCapabilities
-        : undefined;
-      candidates.push({
-        status: "fallback",
-        definition: { ...definitionDto(binding)!, fallbackFor: primaryId },
-        reasons: [{
-          kind: "fallback_primary_unavailable",
-          primaryBindingId: primaryId,
-          ...(degradedCapabilities === undefined ? {} : { degradedCapabilities }),
-        }],
-        ...candidateBase,
-      });
-    }
+    candidates.push({
+      operation: binding.asset.operation,
+      definition: definitionDto(binding)!,
+      targetAvailability: targetAvailability(binding, input.catalog),
+      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackIds),
+      ...candidateBase,
+    });
   }
   candidates.sort((left, right) => codeUnitCompare(candidateSortKey(left), candidateSortKey(right)));
   return { ok: true, value: { candidates, diagnostics } };
@@ -390,21 +311,11 @@ const definitionDto = (binding: CanonicalBinding): BindingDefinitionDto | undefi
   };
 };
 
-const optionalDefinition = (binding: CanonicalBinding): { readonly definition?: BindingDefinitionDto } => {
-  const definition = definitionDto(binding);
-  return definition === undefined ? {} : { definition };
-};
-
 const candidateSortKey = (candidate: BindingCandidateDto): string => {
-  const definition = "definition" in candidate ? candidate.definition : undefined;
+  const definition = candidate.operation === "disable" ? undefined : candidate.definition;
   return [
-    candidate.status,
-    ("bindingId" in candidate ? candidate.bindingId : definition?.bindingId) ?? "",
-    definition === undefined ? "" : targetKey(definition.target),
-    definition === undefined ? "" : JSON.stringify(definition.scope ?? null),
-    definition !== undefined && "fallbackFor" in definition ? definition.fallbackFor ?? "" : "",
-    definition?.description ?? "",
-    JSON.stringify(candidate.reasons),
+    candidate.operation,
+    candidate.operation === "disable" ? candidate.bindingId : candidate.definition.bindingId,
     candidate.source.layer,
     candidate.source.layer === "project" ? candidate.source.projectId : "",
     candidate.revision,

@@ -107,7 +107,7 @@ describe("contract JSON Schemas", () => {
     expect(unblocked.properties.blockedReasons).toBeUndefined();
   });
 
-  it("publishes strict Binding target, scope, record, reason, and candidate arms", () => {
+  it("publishes strict Binding target, scope, record, availability, relation, and candidate arms", () => {
     const schemas = contractJsonSchemas() as any;
     for (const arm of schemas.BindingTargetDto.oneOf) expect(arm.additionalProperties).toBe(false);
     expect(schemas.BindingScopeDto.additionalProperties).toBe(false);
@@ -117,7 +117,9 @@ describe("contract JSON Schemas", () => {
     for (const arm of schemas.BindingSourceDto.oneOf) expect(arm.additionalProperties).toBe(false);
     const projectSource = schemas.BindingSourceDto.oneOf.find((arm: any) => arm.properties.layer.const === "project");
     expect(projectSource.required).toEqual(["layer", "projectId"]);
-    for (const arm of schemas.BindingReasonDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingTargetIssueDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingTargetAvailabilityDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingFallbackRelationDto.oneOf) expect(arm.additionalProperties).toBe(false);
     for (const arm of schemas.BindingCandidateDto.oneOf) expect(arm.additionalProperties).toBe(false);
     const disabled = schemas.BindingRecordDto.oneOf.find((arm: any) => arm.properties.operation.const === "disable");
     expect(disabled.required).toEqual(expect.arrayContaining(["operation", "bindingId", "revision", "source", "loadingTier"]));

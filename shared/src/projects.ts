@@ -6,9 +6,11 @@ import { DirectoryPath, NonEmptyString } from "./primitives.ts";
 export const PROJECT_MARKER_SCHEMA_VERSION = 1;
 export const PROJECT_MARKER_ID_MAX_LENGTH = 128;
 
-const ProjectMarkerId = ProjectId
+export const ProjectMarkerId = ProjectId
   .check(z.regex(/^project-[a-z0-9-]+$/))
   .check(z.maxLength(PROJECT_MARKER_ID_MAX_LENGTH));
+
+export const isProjectMarkerId = (value: string): boolean => z.safeParse(ProjectMarkerId, value).success;
 
 /** The durable identity stored at `<project-root>/.aacl/project.json`. */
 export const ProjectMarkerDto = z.strictObject({

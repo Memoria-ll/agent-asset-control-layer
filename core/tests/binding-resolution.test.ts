@@ -10,11 +10,12 @@ import {
   type CapabilityId,
   type CapabilityResolutionContext,
 } from "@aacl/core-domain";
-import { parseBindingResolutionResponse, type ModelId, type ProviderId } from "@aacl/shared";
+import { parseBindingResolutionResponse, type ModelId, type ProviderId, type RoleId, type TaskTypeId } from "@aacl/shared";
 import {
   createProjectRegistry,
   createProjectService,
   resolveBindingAssets,
+  resolveSelectedStageRequirements,
   type ProjectService,
   type SharedManagedAssetRoot,
 } from "../src/index.ts";
@@ -56,8 +57,11 @@ const makeFixture = async (): Promise<{
 
 const catalog = unwrap(buildMetadataCatalog({
   revision: "catalog-revision" as never,
-  roles: [],
-  taskTypes: [],
+  roles: [
+    { roleId: "reviewer" as RoleId, displayName: "Reviewer" },
+    { roleId: "implementer" as RoleId, displayName: "Implementer" },
+  ],
+  taskTypes: [{ taskTypeId: "code-review" as TaskTypeId, displayName: "Code review" }],
   providers: [{ providerId: "openai" as ProviderId, displayName: "OpenAI" }],
   runtimes: [],
   models: [{ modelId: "gpt-5" as ModelId, displayName: "GPT-5", providerId: "openai" as ProviderId }],
@@ -105,6 +109,35 @@ ${options.operation === "disable" ? "" : `metadata.target-kind: model\nmetadata.
 ${options.body ?? id}
 `;
 
+const workflow = (): string => [
+  "---",
+  "schema-version: 3",
+  "id: review-flow",
+  "type: workflow",
+  "tier: core",
+  "operation: add",
+  "---",
+  "```aacl-workflow",
+  JSON.stringify({
+    entryRoleId: "reviewer",
+    entryStageId: "review",
+    terminalStageId: "done",
+    stages: [
+      {
+        stageId: "review",
+        displayName: "Review",
+        description: "Review the change",
+        requiredRoleId: "reviewer",
+        requiredTaskTypeId: "code-review",
+      },
+      { stageId: "done", displayName: "Done", description: "Finish" },
+    ],
+    transitions: [{ fromStageId: "review", toStageId: "done", transitionKind: "advance" }],
+  }),
+  "```",
+  "",
+].join("\n");
+
 const write = async (directory: string, name: string, document: string): Promise<void> => {
   await writeFile(join(directory, name), document, "utf8");
 };
@@ -131,8 +164,8 @@ describe("Core Binding resolution", () => {
     const response = unwrap(await resolve(fixture, request(projectRoot)));
     expect(response.candidates).toHaveLength(2);
     expect(response.candidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ status: "unavailable", reasons: [{ kind: "binding_overridden", actorBindingId: "same-id" }], source: { layer: "global" } }),
-      expect.objectContaining({ status: "eligible", source: { layer: "project", projectId: project.projectId } }),
+      expect.objectContaining({ operation: "add", applicability: expect.objectContaining({ kind: "overridden" }), source: { layer: "global" } }),
+      expect.objectContaining({ operation: "override", applicability: expect.objectContaining({ kind: "included" }), source: { layer: "project", projectId: project.projectId } }),
     ]));
     expect(response.candidates.every((candidate) => !Object.hasOwn(candidate.source, "rootId"))).toBe(true);
     expect(response.candidates.every((candidate) => !Object.hasOwn(candidate.source, "sourceId"))).toBe(true);
@@ -145,25 +178,25 @@ describe("Core Binding resolution", () => {
 
     const response = unwrap(await resolve(fixture, request()));
     expect(parseBindingResolutionResponse(response)).toEqual(response);
-    expect(response.candidates.filter((candidate) => candidate.status === "eligible")).toHaveLength(2);
+    expect(response.candidates.filter((candidate) => candidate.applicability.kind === "included")).toHaveLength(2);
     expect(response.candidates.every((candidate) => !Object.hasOwn(candidate, "winner"))).toBe(true);
     expect(response.candidates.every((candidate) => !Object.hasOwn(candidate, "assignment"))).toBe(true);
   });
 
   it.each([
-    ["allowed", capabilities("allowed"), "eligible"],
+    ["allowed", capabilities("allowed"), "included"],
     ["denied", capabilities("denied"), "unavailable"],
     ["missing", capabilities(), "unavailable"],
-  ] as const)("routes required capability %s through resolveAssets", async (_name, capabilityContext, status) => {
+  ] as const)("routes required capability %s through resolveAssets", async (_name, capabilityContext, kind) => {
     const fixture = await makeFixture();
     await write(fixture.globalRoot.directory, "capability.md", binding("capability", { capability: "required" }));
 
     const response = unwrap(await resolve(fixture, request(), capabilityContext));
-    expect(response.candidates[0]?.status).toBe(status);
-    if (status === "unavailable") {
-      expect(response.candidates[0]?.reasons[0]?.kind).toBe(
-        capabilityContext.offers[0]?.permission === "denied" ? "capability_not_allowed" : "capability_unavailable",
-      );
+    expect(response.candidates[0]?.applicability.kind).toBe(kind);
+    if (kind === "unavailable") {
+      expect(response.candidates[0]?.applicability).toMatchObject({
+        detail: { cause: capabilityContext.offers[0]?.permission === "denied" ? "capability_not_allowed" : "capability_unavailable" },
+      });
     }
   });
 
@@ -183,7 +216,7 @@ malformed
 
     const response = unwrap(await resolve(fixture, request()));
     expect(response.candidates).toHaveLength(1);
-    expect(response.candidates[0]).toMatchObject({ status: "eligible", definition: { bindingId: "valid" } });
+    expect(response.candidates[0]).toMatchObject({ applicability: { kind: "included" }, definition: { bindingId: "valid" } });
     expect(response.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "missing_field", path: ["root", "global", "file", "malformed.md", "frontmatter", "metadata.target-kind"] }),
     ]));
@@ -205,10 +238,37 @@ malformed
 
     expect(response.candidates).toHaveLength(1);
     expect(response.candidates[0]).toMatchObject({
-      status: "unavailable",
       definition: { bindingId: "fallback" },
-      reasons: [{ kind: "fallback_not_needed", primaryBindingId: "primary" }],
+      fallbackRelation: { kind: "linked", primaryBindingId: "primary" },
       loadingTier: "core",
     });
+  });
+
+  it("resolves selected Stage requirements without applying them to Bindings", async () => {
+    const fixture = await makeFixture();
+    await write(fixture.globalRoot.directory, "review-flow.md", workflow());
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding"));
+
+    const selected = {
+      context: {
+        executionMode: "advisory_preparation",
+        workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+      },
+    };
+    const requirements = unwrap(await resolveSelectedStageRequirements(selected, {
+      roots: [fixture.globalRoot, fixture.personalRoot],
+      projectService: fixture.service,
+      capabilityContext: capabilities(),
+    }, catalog));
+    const bindings = unwrap(await resolve(fixture, selected));
+
+    expect(requirements.requirements).toEqual({
+      workflowId: "review-flow",
+      stageId: "review",
+      requiredRoleId: "reviewer",
+      requiredTaskTypeId: "code-review",
+    });
+    expect(bindings.context).not.toHaveProperty("roleId");
+    expect(bindings.candidates[0]).toMatchObject({ applicability: { kind: "included" } });
   });
 });

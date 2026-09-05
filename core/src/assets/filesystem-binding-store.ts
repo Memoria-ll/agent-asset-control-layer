@@ -2,7 +2,9 @@ import {
   bindingAssetId,
   coreFailure,
   parseBindingAsset,
+  toAssetCandidate,
   type AssetResult,
+  type AssetTypeContractRegistry,
   type CanonicalAsset,
   type CanonicalBinding,
   type CoreFailure,
@@ -15,6 +17,8 @@ import type {
   StoredAsset,
   StoredAssetSource,
 } from "./filesystem-store.ts";
+
+const PROJECTION_PROBE_REVISION = "pending-save" as AssetRevision;
 
 export type StoredBinding = {
   readonly binding: CanonicalBinding;
@@ -40,6 +44,7 @@ export type SaveBindingInput = {
   readonly relativePath: string;
   readonly asset: CanonicalAsset;
   readonly expectedRevision?: AssetRevision;
+  readonly contracts?: AssetTypeContractRegistry;
 };
 
 const failureResult = (
@@ -115,6 +120,26 @@ export const saveBinding = async (
   if (!parsed.ok) {
     return failureResult(
       withFilePath(input.rootId, input.relativePath, parsed.failure),
+      [],
+      [],
+    );
+  }
+  const destination = assetStore.roots.find((root) => root.rootId === input.rootId);
+  const projected = toAssetCandidate(
+    parsed.value.asset,
+    {
+      revision: PROJECTION_PROBE_REVISION,
+      source: {
+        layer: destination?.kind ?? "global",
+        sourceId: `${input.rootId}:${input.relativePath}`,
+      },
+      ...(destination?.kind === "project" ? { owningProjectId: destination.projectId } : {}),
+    },
+    ...(input.contracts === undefined ? [] : [input.contracts]),
+  );
+  if (!projected.ok) {
+    return failureResult(
+      withFilePath(input.rootId, input.relativePath, projected.failure),
       [],
       [],
     );

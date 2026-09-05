@@ -3,13 +3,18 @@ import { VersionInfo } from "./contract-version.ts";
 import {
   BindingCandidateDto,
   BindingDefinitionDto,
-  BindingReasonDto,
+  BindingFallbackRelationDto,
   BindingRecordDto,
   BindingResolutionRequest,
   BindingResolutionResponse,
   BindingScopeDto,
   BindingSourceDto,
   BindingTargetDto,
+  BindingTargetAvailabilityDto,
+  BindingTargetIssueDto,
+  SelectedStageRequirementsDto,
+  SelectedStageRequirementsRequest,
+  SelectedStageRequirementsResponse,
 } from "./bindings.ts";
 import { CoreErrorDto } from "./errors.ts";
 import { ModelDto, ProviderDto, RuntimeDto } from "./execution-targets.ts";
@@ -64,10 +69,15 @@ export const contractSchemas: Readonly<Record<string, z.core.$ZodType>> = {
   BindingDefinitionDto,
   BindingSourceDto,
   BindingRecordDto,
-  BindingReasonDto,
+  BindingTargetIssueDto,
+  BindingTargetAvailabilityDto,
+  BindingFallbackRelationDto,
   BindingCandidateDto,
   BindingResolutionRequest,
   BindingResolutionResponse,
+  SelectedStageRequirementsDto,
+  SelectedStageRequirementsRequest,
+  SelectedStageRequirementsResponse,
 };
 
 /**
