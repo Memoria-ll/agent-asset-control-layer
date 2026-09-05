@@ -100,11 +100,37 @@ describe("asset candidate projection", () => {
     expect(defaultModeReads).toBe(1);
   });
 
-  it("uses add as the operation and omits capability dependencies", () => {
+  it("uses add as the operation and omits capability dependencies when none are declared", () => {
     const candidate = unwrap(toAssetCandidate(assetFromDocument(assetDocument("operation", "rule")), origin));
 
     expect(candidate.rule.operation).toEqual({ kind: "add" });
     expect(Object.hasOwn(candidate.rule, "capabilityDependencies")).toBe(false);
+  });
+
+  it("carries declared capability dependencies for a type that allows them", () => {
+    const candidate = unwrap(toAssetCandidate(
+      assetFromDocument(assetDocument("cap-skill", "skill", "capability.required: [filesystem-read]\n")),
+      origin,
+    ));
+
+    expect(candidate.rule.capabilityDependencies).toEqual([
+      { strength: "required", capability: { capabilityId: "filesystem-read" } },
+    ]);
+  });
+
+  it("excludes a candidate whose type does not allow capability dependencies", () => {
+    const result = toAssetCandidate(
+      assetFromDocument(assetDocument("cap-rule", "rule", "capability.required: [filesystem-read]\n")),
+      origin,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: {
+        code: "invalid_request",
+        details: [{ code: "capability_dependencies_not_allowed", path: ["asset", "cap-rule", "capability"] }],
+      },
+    });
   });
 
   it("does not copy non-candidate asset fields", () => {

@@ -3,13 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseResolveRequest } from "@aacl/shared";
+import type { SkillId } from "@aacl/shared";
 import {
   buildCapabilityCatalog,
+  createSkillAsset,
   parseAssetDocument,
   resolveScope,
   validateAsset,
   type AssetResult,
   type CanonicalAsset,
+  type CapabilityId,
 } from "@aacl/core-domain";
 import {
   createFilesystemAssetStore,
@@ -271,5 +274,42 @@ foreign
       cause: "scope_mismatch",
       mismatchedAxes: ["projectId"],
     });
+  });
+
+  it("gives a saved Skill the priority and capability dependencies it declared", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aacl-resolution-skill-"));
+    temporaryDirectories.push(directory);
+    const store = unwrap(createFilesystemAssetStore([
+      { rootId: "global-root", kind: "global", directory },
+    ]));
+
+    const saved = unwrap(createSkillAsset({
+      id: "review-skill" as SkillId,
+      tier: "on-demand",
+      displayName: "Review Skill",
+      description: "Reviews a change.",
+      kind: "advisory",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      priority: 5,
+      capabilityDependencies: [{ strength: "required", capability: { capabilityId: "filesystem-read" as CapabilityId } }],
+      body: "Review it.",
+    }));
+    // The Skill contract authors its priority as metadata, never as the asset directive.
+    expect(Object.hasOwn(saved, "priority")).toBe(false);
+    expect(saved.metadata.priority).toBe("5");
+    expect((await store.save({ rootId: "global-root", relativePath: "skills/review.md", asset: saved })).ok).toBe(true);
+
+    const listed = await store.list();
+    expect(listed.failures).toHaveLength(0);
+    const projection = toResolutionSnapshot(listed.assets);
+    expect(projection.excluded).toHaveLength(0);
+    const candidate = projection.snapshot.candidates.find((item) => String(item.assetId) === "review-skill");
+
+    expect(candidate?.rule.explicitPriority).toBe(5);
+    expect(candidate?.rule.capabilityDependencies).toEqual([
+      { strength: "required", capability: { capabilityId: "filesystem-read" } },
+    ]);
   });
 });

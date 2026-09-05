@@ -110,6 +110,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   `AssetProjectionSource.owningProjectId` を渡す。省略すると project A のファイルが project B の
   候補になり、型検査もゲートも黙って通る。宣言 `scope.project` は所属 project との積を取り、
   空になる候補は診断として除く。
+- 解決指定を type 固有の欄へ載せる Asset Type は、汎用投影へ渡す前にその値を asset 欄へ解決する。
+  `toAssetCandidate` は `CanonicalAsset` の欄しか読まないので、type 固有表現は無言で 0 件扱いになる。
+  現に Skill の優先度は `metadata.priority` にあり、asset の `priority` directive とは別欄。
 - Skill を指名する値は `SkillId`、Asset 層が索く値は `AssetId`。公開 API の引数と
   `CanonicalSkill.skillId` は前者で受け、Asset store を呼ぶ直前に `skillAssetId` /
   `asSkillId` で変換する。両 brand とも値制約は非空文字列だけなので、変換を各所で直接

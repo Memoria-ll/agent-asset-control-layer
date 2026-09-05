@@ -495,4 +495,32 @@ Inspect input.
       failure: { details: [{ code: "invalid_capability_reference" }] },
     });
   });
+
+  it("keeps the asset resolution directives across an unrelated Skill update", () => {
+    const asset = parseAsset(`---
+schema-version: 2
+id: directive-skill
+type: skill
+tier: on-demand
+mandatory: true
+priority: 3
+merge-mode: exclusive
+merge-group: review
+metadata.description: Carries asset directives.
+metadata.display-name: Directive Skill
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Body.
+`);
+    expect(asset).toMatchObject({ mandatory: true, priority: 3, mergeMode: "exclusive", mergeGroup: "review" });
+
+    const updated = expectOk(updateSkillAsset(asset, { displayName: "Renamed Skill" }));
+
+    expect(updated).toMatchObject({ mandatory: true, priority: 3, mergeMode: "exclusive", mergeGroup: "review" });
+    expect(expectOk(parseSkillAsset(updated)).displayName).toBe("Renamed Skill");
+    expect(expectOk(serializeCanonicalAsset(updated))).toContain("merge-group: review");
+  });
 });

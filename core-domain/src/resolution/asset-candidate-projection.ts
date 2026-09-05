@@ -72,6 +72,14 @@ export const toAssetCandidate = (
       "The asset type does not allow an exclusive merge.",
     );
   }
+  const capabilityDependencies = asset.capabilityDependencies ?? [];
+  if (capabilityDependencies.length > 0 && !contract.allowsCapabilityDependencies) {
+    return projectionFailure(
+      "capability_dependencies_not_allowed",
+      ["asset", asset.id, "capability"],
+      "The asset type does not allow capability dependencies.",
+    );
+  }
 
   const declaredProjects = asset.scope.project;
   const owningProjectId = origin.owningProjectId;
@@ -111,6 +119,7 @@ export const toAssetCandidate = (
     operation: { kind: PROJECTED_OPERATION_KIND },
     ...(Object.hasOwn(asset, "priority") ? { explicitPriority: asset.priority as number } : {}),
     requires: asset.requires,
+    ...(capabilityDependencies.length === 0 ? {} : { capabilityDependencies }),
     ...merge,
   };
 

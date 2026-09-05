@@ -32,6 +32,7 @@ export type {
   SkillInput,
   SkillKind,
   SkillPatch,
+  SkillResolutionDirectives,
   SkillWorkflowRelation,
   SkillWorkflowRelationKind,
 } from "./skill.ts";
