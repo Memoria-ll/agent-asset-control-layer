@@ -121,10 +121,15 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   cast すると片方向の取り違えが型検査を素通りする。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
+- Workflow State の revision は resolved Workflow Definition から導出する。request や別の link から
+  独立に与えず、state の read / transition / compare-and-swap は definition と同じ revision を要求する。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、
   保存済み state の所属不一致を検出する値として扱う。
 - `WorkflowStateDto.linkedAgentExecutionIds` と `AgentExecutionDto.workflowBinding` は双方向の link。
-  片側を生成・変更する producer は対応する鏡像も維持する。
+  片側を生成・変更する producer は対応する鏡像も維持し、複合 commit の parser は workflow ID / revision /
+  execution instance と Agent ID の一致を保存前に検証する。
+- Development operation の認可は `development_execution` と selected Workflow の両方を要求する。
+  bounded Skill の完了は public request の自己申告で認めず、host lifecycle state を読む verifier の結果を使う。
 - package を増減するときは workspace package 検査と `gate.json` の typecheck / test /
   node-resolution の期待数を同じ変更で更新する。
 - `tsconfig.base.json` は `noUnusedLocals` を有効にしていない。コード移動では追加元に残った

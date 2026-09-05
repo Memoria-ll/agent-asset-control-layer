@@ -196,6 +196,20 @@ describe("filesystem workflow state store", () => {
     if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
   });
 
+  it("refuses an invalid generated instance id before exposing it", async () => {
+    const directory = await temporaryDirectory();
+    const store = await createStore({
+      stateDirectory: directory,
+      newInstanceSuffix: () => "INVALID/SUFFIX",
+    });
+
+    const issued = store.issueExecutionInstanceId();
+    expect(issued).toMatchObject({
+      ok: false,
+      failure: { code: "invalid_request", details: [{ code: "invalid_execution_instance_id" }] },
+    });
+  });
+
   it("refuses a state file holding malformed UTF-8 instead of substituting it", async () => {
     const directory = await temporaryDirectory();
     const store = await createStore({

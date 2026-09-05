@@ -73,7 +73,6 @@ describe("workflow loader and state integration", () => {
       newInstanceSuffix: () => "one",
     }));
     const seed = unwrap(initializeWorkflowState(loaded.definition, {
-      workflowRevision: loaded.revision,
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
       linkedSnapshotIds: ["snapshot-1" as SnapshotId],
     }, { roleId: "reviewer" as RoleId, availableCapabilityRefs: [], availableArtifactRefs: [] }));

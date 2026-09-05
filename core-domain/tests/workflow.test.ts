@@ -414,7 +414,6 @@ ${JSON.stringify(basicDefinitionBody)}
       ],
     });
     const links = {
-      workflowRevision: "sha256:workflow" as never,
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
       linkedSnapshotIds: ["snapshot-1" as SnapshotId],
     };
@@ -465,7 +464,6 @@ ${JSON.stringify(basicDefinitionBody)}
   it("initializes state fields from the definition and caller links", () => {
     const value = definition();
     const seed = unwrap(initializeWorkflowState(value, {
-      workflowRevision: "sha256:workflow" as never,
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
       linkedSnapshotIds: ["snapshot-1" as SnapshotId],
     }, { roleId: "reviewer" as RoleId, taskTypeId: "drafting" as TaskTypeId, availableCapabilityRefs: [], availableArtifactRefs: [] }));

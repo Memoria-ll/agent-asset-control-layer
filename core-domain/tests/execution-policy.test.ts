@@ -9,8 +9,8 @@ const selected: ResolutionContextInput = { executionMode: "development_execution
 describe("execution operation policy", () => {
   it("allows only explicit advisory origins to start a workflow", () => {
     expect(authorizeExecutionOperation("workflow_start", none, { kind: "advisory_none" })).toEqual({ decision: "allowed", operation: "workflow_start" });
-    expect(authorizeExecutionOperation("workflow_start", skill, { kind: "bounded_skill_completed", skillId: "skill-a" as SkillId })).toEqual({ decision: "allowed", operation: "workflow_start" });
-    expect(authorizeExecutionOperation("workflow_start", skill, { kind: "bounded_skill_completed", skillId: "skill-b" as SkillId })).toMatchObject({ decision: "denied", reason: "workflow_start_requires_completed_skill" });
+    expect(authorizeExecutionOperation("workflow_start", skill, { kind: "verified_bounded_skill_completion", skillId: "skill-a" as SkillId })).toEqual({ decision: "allowed", operation: "workflow_start" });
+    expect(authorizeExecutionOperation("workflow_start", skill, { kind: "verified_bounded_skill_completion", skillId: "skill-b" as SkillId })).toMatchObject({ decision: "denied", reason: "workflow_start_requires_completed_skill" });
     expect(authorizeExecutionOperation("workflow_start", selected, { kind: "advisory_none" })).toMatchObject({ decision: "denied", reason: "workflow_already_selected" });
   });
 
@@ -19,5 +19,6 @@ describe("execution operation policy", () => {
     expect(authorizeExecutionOperation("implementation", skill)).toMatchObject({ decision: "denied", reason: "workflow_selection_required" });
     expect(authorizeExecutionOperation("repository_change", selected)).toEqual({ decision: "allowed", operation: "repository_change" });
     expect(authorizeExecutionOperation("pull_request", selected)).toEqual({ decision: "allowed", operation: "pull_request" });
+    expect(authorizeExecutionOperation("implementation", { ...selected, executionMode: "advisory_preparation" })).toMatchObject({ decision: "denied", reason: "development_mode_required" });
   });
 });

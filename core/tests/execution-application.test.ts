@@ -12,6 +12,7 @@ const unwrap = <T>(value: AssetResult<T>): T => { if (!value.ok) throw new Error
 const asset = (source: string) => unwrap(validateAsset(unwrap(parseAssetDocument(source))));
 const catalog = (): MetadataCatalog => unwrap(buildMetadataCatalog({ revision: "sha256:catalog" as CatalogRevision, roles: [unwrap(projectRoleDefinition(asset("---\nid: reviewer\ntype: role\nschema-version: 3\noperation: add\ntier: core\nmetadata.display-name: Reviewer\n---\n")))], taskTypes: [], providers: [], runtimes: [], models: [], roleModelRelations: [] }));
 const workflow = `---\nid: review-flow\ntype: workflow\nschema-version: 3\noperation: add\ntier: core\n---\n\`\`\`aacl-workflow\n${JSON.stringify({ entryRoleId: "reviewer", entryStageId: "start", terminalStageId: "start", stages: [{ stageId: "start", displayName: "Start", description: "Begin", requiredRoleId: "reviewer" }], transitions: [] })}\n\`\`\``;
+const completedSkillVerifier = { verify: async () => ({ ok: true as const, value: undefined }) };
 
 const request = (
   revision: string,
@@ -55,7 +56,7 @@ describe("workflow start application boundary", () => {
     const lookup = await assets.get("review-flow" as never);
     const revision = lookup.matches[0]?.revision;
     if (revision === undefined) throw new Error("fixture revision missing");
-    const result = await startWorkflowExecution(request(revision), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
+    const result = await startWorkflowExecution(request(revision), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
     expect(result).toMatchObject({ ok: true }); expect(submitted).toBe(1);
     if (!result.ok) return;
     expect(result.value.workflowState.workflowRevision).toBe(revision);
@@ -63,14 +64,14 @@ describe("workflow start application boundary", () => {
     expect(result.value.agentExecution.workflowBinding).toMatchObject({ kind: "workflow", workflowId: "review-flow", workflowRevision: revision, executionInstanceId: "instance-one" });
     expect(result.value.nextContext.workflow).toMatchObject({ kind: "selected", workflowRevision: revision, stageId: "start" });
     expect("sessionUpdate" in result.value).toBe(false);
-    const withSession = await startWorkflowExecution(request(revision, undefined, undefined, "session-1"), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-2" as never });
+    const withSession = await startWorkflowExecution(request(revision, undefined, undefined, "session-1"), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-2" as never });
     expect(withSession.ok).toBe(true);
     if (withSession.ok) expect(withSession.value.sessionUpdate).toEqual({ sessionId: "session-1", addAgentExecutionId: "agent-2" });
     const boundedSkill = await startWorkflowExecution(request(
       revision,
       { executionMode: "advisory_preparation", workflow: { kind: "standalone", skillId: "skill-a" }, roleId: "reviewer" },
-      { kind: "bounded_skill_completed", skillId: "skill-a" },
-    ), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-3" as never });
+      { kind: "bounded_skill_execution", skillId: "skill-a", agentExecutionId: "skill-execution-1" },
+    ), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-3" as never });
     expect(boundedSkill.ok).toBe(true);
   });
 
@@ -84,9 +85,48 @@ describe("workflow start application boundary", () => {
     const lookup = await assets.get("review-flow" as never);
     const revision = lookup.matches[0]?.revision;
     if (revision === undefined) throw new Error("fixture revision missing");
-    const result = await startWorkflowExecution(request(revision), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
+    const result = await startWorkflowExecution(request(revision), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
     expect(result).toMatchObject({ ok: false, failure: { code: "unavailable" } });
     await expect(stateStore.get("review-flow" as never, revision, "instance-one" as never)).resolves.toMatchObject({ ok: false, failure: { code: "not_found" } });
+  });
+
+  it("requires trusted Skill completion and known execution references before committing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-execution-validation-")); directories.push(root);
+    const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });
+    const stored = asset(workflow); await writeFile(assetPath, unwrap(serializeCanonicalAsset(stored)), "utf8");
+    const assets = unwrap(createFilesystemAssetStore([{ rootId: "global", kind: "global", directory: join(root, "assets") }]));
+    const stateStore = unwrap(await createWorkflowStateStore({ stateDirectory: join(root, "state"), newInstanceSuffix: () => "one" }));
+    let commits = 0;
+    const verificationReferences: unknown[] = [];
+    const port: WorkflowStartCommitPort = { commit: async (value) => { commits += 1; return { ok: true, value }; } };
+    const lookup = await assets.get("review-flow" as never);
+    const revision = lookup.matches[0]?.revision;
+    if (revision === undefined) throw new Error("fixture revision missing");
+    const skillRequest = request(
+      revision,
+      { executionMode: "advisory_preparation", workflow: { kind: "standalone", skillId: "skill-a" }, roleId: "reviewer" },
+      { kind: "bounded_skill_execution", skillId: "skill-a", agentExecutionId: "skill-execution-1" },
+    );
+    const unverified = await startWorkflowExecution(skillRequest, {
+      assetStore: assets,
+      catalog: catalog(),
+      stateStore,
+      commitPort: port,
+      boundedSkillCompletionVerifier: { verify: async (reference) => { verificationReferences.push(reference); return { ok: false, failure: { code: "conflict", message: "Skill execution is incomplete." } }; } },
+      now: () => "2026-09-01T10:00:00Z",
+      newAgentExecutionId: () => "agent-1" as never,
+    });
+    expect(unverified).toMatchObject({ ok: false, failure: { code: "conflict" } });
+    expect(verificationReferences).toEqual([{ agentExecutionId: "skill-execution-1", skillId: "skill-a" }]);
+
+    const unknownTask = await startWorkflowExecution(request(revision, {
+      executionMode: "advisory_preparation",
+      workflow: { kind: "none" },
+      roleId: "reviewer",
+      taskTypeId: "unknown-task",
+    }), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-2" as never });
+    expect(unknownTask).toMatchObject({ ok: false, failure: { code: "invalid_request", details: [{ code: "unknown_task_type_id" }] } });
+    expect(commits).toBe(0);
   });
 
   it("rejects a stale target revision before invoking the commit port", async () => {
@@ -100,7 +140,7 @@ describe("workflow start application boundary", () => {
     const lookup = await assets.get("review-flow" as never);
     const revision = lookup.matches[0]?.revision;
     if (revision === undefined) throw new Error("fixture revision missing");
-    const result = await startWorkflowExecution(request(`${revision}-stale`), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
+    const result = await startWorkflowExecution(request(`${revision}-stale`), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
     expect(result).toMatchObject({ ok: false, failure: { code: "conflict" } });
     expect(commits).toBe(0);
   });

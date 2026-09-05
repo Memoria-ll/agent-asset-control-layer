@@ -10,6 +10,7 @@ import {
   parseResolveRequest,
   parseExecutionAuthorizationRequest,
   parseExecutionAuthorizationResult,
+  parseWorkflowStartCommitRequest,
   tryParseResolveRequest,
 } from "../src/index.ts";
 
@@ -56,6 +57,53 @@ describe("strict boundary objects", () => {
       operation: "implementation",
       reason: "workflow_selection_required",
       guidance: { kind: "use_advisory_mode", requiredMode: "advisory_preparation" },
+    })).toThrow();
+    expect(() => parseExecutionAuthorizationResult({
+      decision: "denied",
+      operation: "research",
+      reason: "workflow_already_selected",
+      guidance: { kind: "continue_selected_workflow", nextOperation: "implementation" },
+    })).toThrow();
+  });
+
+  it("rejects workflow-start bundles with inconsistent execution links", () => {
+    const bundle = {
+      operation: "workflow_start",
+      idempotencyKey: "start-1",
+      precondition: {
+        context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+        target: { workflowId: "workflow-1", workflowRevision: "revision-1" },
+      },
+      nextContext: { executionMode: "development_execution", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
+      agentExecution: {
+        agentExecutionId: "agent-1",
+        executionMode: "development_execution",
+        workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "revision-1", executionInstanceId: "instance-1" },
+        stageId: "stage-1",
+        startedAt: "2026-09-05T10:00:00Z",
+      },
+      workflowState: {
+        workflowId: "workflow-1",
+        workflowRevision: "revision-1",
+        executionInstanceId: "instance-1",
+        stateVersion: 0,
+        currentStageId: "stage-1",
+        entryRoleId: "role-1",
+        currentRoleId: "role-1",
+        linkedAgentExecutionIds: ["agent-1"],
+        linkedSnapshotIds: [],
+        updatedAt: "2026-09-05T10:00:00Z",
+      },
+    };
+
+    expect(parseWorkflowStartCommitRequest(bundle)).toEqual(bundle);
+    expect(() => parseWorkflowStartCommitRequest({
+      ...bundle,
+      workflowState: { ...bundle.workflowState, executionInstanceId: "instance-2" },
+    })).toThrow();
+    expect(() => parseWorkflowStartCommitRequest({
+      ...bundle,
+      workflowState: { ...bundle.workflowState, linkedAgentExecutionIds: [] },
     })).toThrow();
   });
 });

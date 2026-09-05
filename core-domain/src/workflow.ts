@@ -541,7 +541,6 @@ export type WorkflowStateSeed = {
 };
 
 export type WorkflowStateLinks = {
-  readonly workflowRevision: AssetRevision;
   readonly linkedAgentExecutionIds: readonly AgentExecutionId[];
   readonly linkedSnapshotIds: readonly SnapshotId[];
 };
@@ -556,7 +555,7 @@ export type WorkflowStateLinks = {
  * with none of them, while the identical stage reached by an edge stays blocked.
  */
 export const initializeWorkflowState = (
-  definition: AuthoredWorkflowDefinition,
+  definition: ResolvedWorkflowDefinition,
   links: WorkflowStateLinks,
   input: WorkflowEvaluationInput,
 ): AssetResult<WorkflowStateSeed> => {
@@ -576,7 +575,7 @@ export const initializeWorkflowState = (
     ok: true,
     value: {
       workflowId: definition.workflowId,
-      workflowRevision: links.workflowRevision,
+      workflowRevision: definition.workflowRevision,
       currentStageId: definition.entryStageId,
       entryRoleId: definition.entryRoleId,
       currentRoleId: entryStage.requiredRoleId ?? definition.entryRoleId,

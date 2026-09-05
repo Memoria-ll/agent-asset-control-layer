@@ -2,12 +2,15 @@ import {
   authorizeExecutionOperation,
   initializeWorkflowState,
   toAgentExecutionDto,
+  validateAgentExecutionReferences,
   type AssetResult,
   type AgentExecutionRecord,
   type MetadataCatalog,
+  type WorkflowStartOrigin,
 } from "@aacl/core-domain";
 import {
   parseWorkflowStartCommitRequest,
+  parseWorkflowStartResult,
   tryParseWorkflowStartRequest,
   type AgentExecutionId,
   type ResolutionContextDtoInput,
@@ -19,12 +22,13 @@ import { coreFailure } from "@aacl/core-domain";
 import type { WorkflowStateStore } from "../workflow/filesystem-state-store.ts";
 import type { AssetStore } from "../assets/filesystem-store.ts";
 import { loadWorkflowDefinitionAtRevision } from "../workflow/filesystem-definition-loader.ts";
-import type { WorkflowStartCommitPort } from "./ports.ts";
+import type { BoundedSkillCompletionVerifier, WorkflowStartCommitPort } from "./ports.ts";
 
 export type WorkflowStartApplicationOptions = {
   readonly assetStore: AssetStore;
   readonly catalog: MetadataCatalog;
   readonly commitPort: WorkflowStartCommitPort;
+  readonly boundedSkillCompletionVerifier: BoundedSkillCompletionVerifier;
   readonly stateStore: WorkflowStateStore;
   readonly now: () => string;
   readonly newAgentExecutionId: () => AgentExecutionId;
@@ -40,17 +44,34 @@ export const startWorkflowExecution = async (
   const parsedRequest = tryParseWorkflowStartRequest(input);
   if (!parsedRequest.ok) return { ok: false, failure: coreFailure("invalid_request", parsedRequest.error.message, parsedRequest.error.details) };
   const request: WorkflowStartRequest = parsedRequest.value;
-  const authorization = authorizeExecutionOperation(request.operation, request.context, request.startFrom);
+  let verifiedOrigin: WorkflowStartOrigin | undefined;
+  if (request.startFrom.kind === "advisory_none") {
+    verifiedOrigin = request.startFrom;
+  } else if (
+    request.context.executionMode === "advisory_preparation"
+    && request.context.workflow.kind === "standalone"
+    && request.context.workflow.skillId === request.startFrom.skillId
+  ) {
+    const verified = await options.boundedSkillCompletionVerifier.verify({
+      agentExecutionId: request.startFrom.agentExecutionId,
+      skillId: request.startFrom.skillId,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+    });
+    if (!verified.ok) return verified;
+    verifiedOrigin = { kind: "verified_bounded_skill_completion", skillId: request.startFrom.skillId };
+  }
+  const authorization = authorizeExecutionOperation(request.operation, request.context, verifiedOrigin);
   if (authorization.decision === "denied") {
     return { ok: false, failure: coreFailure("invalid_request", authorization.reason, [{ path: ["context"], code: authorization.reason, message: authorization.reason }]) };
   }
 
   const loaded = await loadWorkflowDefinitionAtRevision(options.assetStore, request.target.workflowId, request.target.workflowRevision, options.catalog);
   if (!loaded.ok) return loaded;
-  const executionInstanceId = options.stateStore.issueExecutionInstanceId();
+  const issuedExecutionInstanceId = options.stateStore.issueExecutionInstanceId();
+  if (!issuedExecutionInstanceId.ok) return issuedExecutionInstanceId;
+  const executionInstanceId = issuedExecutionInstanceId.value;
   const agentExecutionId = options.newAgentExecutionId();
   const initialized = initializeWorkflowState(loaded.definition, {
-    workflowRevision: loaded.revision,
     linkedAgentExecutionIds: [agentExecutionId],
     linkedSnapshotIds: [],
   }, {
@@ -89,6 +110,8 @@ export const startWorkflowExecution = async (
     ...(request.context.taskTypeId === undefined ? {} : { taskTypeId: request.context.taskTypeId }),
     ...(request.context.roleId === undefined ? {} : { roleId: request.context.roleId }),
   };
+  const references = validateAgentExecutionReferences(options.catalog, record);
+  if (!references.ok) return references;
   const agent = toAgentExecutionDto(record);
   if (!agent.ok) return agent;
   const bundleInput = {
@@ -109,7 +132,7 @@ export const startWorkflowExecution = async (
   const committed = await options.commitPort.commit(bundle);
   if (!committed.ok) return committed;
   try {
-    return { ok: true, value: parseWorkflowStartCommitRequest(committed.value) };
+    return { ok: true, value: parseWorkflowStartResult(committed.value) };
   } catch {
     return { ok: false, failure: coreFailure("internal", "The workflow start commit receipt is invalid.") };
   }

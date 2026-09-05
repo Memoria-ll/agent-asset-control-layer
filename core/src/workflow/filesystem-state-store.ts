@@ -41,7 +41,7 @@ export type WorkflowStateStoreOptions = {
 };
 
 export type WorkflowStateStore = {
-  readonly issueExecutionInstanceId: () => ExecutionInstanceId;
+  readonly issueExecutionInstanceId: () => AssetResult<ExecutionInstanceId>;
   readonly create: (seed: WorkflowStateSeed, executionInstanceId?: ExecutionInstanceId) => Promise<AssetResult<WorkflowStateDto>>;
   readonly get: (
     workflowId: WorkflowId,
@@ -427,6 +427,11 @@ export const createWorkflowStateStore = async (
     return { ok: true, value: parsed.value };
   });
 
-  const issueExecutionInstanceId = (): ExecutionInstanceId => composeExecutionInstanceId(newInstanceSuffix());
+  const issueExecutionInstanceId = (): AssetResult<ExecutionInstanceId> => {
+    const executionInstanceId = composeExecutionInstanceId(newInstanceSuffix());
+    return filePathFor(workflowsDirectory, executionInstanceId) === undefined
+      ? { ok: false, failure: stateFailure("invalid_request", "The generated execution instance id is not a valid state file name.", ["workflowState", "executionInstanceId"], "invalid_execution_instance_id") }
+      : { ok: true, value: executionInstanceId };
+  };
   return { ok: true, value: { issueExecutionInstanceId, create, get, compareAndSwap } };
 };

@@ -164,7 +164,11 @@ export type {
 
 export { startWorkflowExecution } from "./execution/application.ts";
 export type { WorkflowStartApplicationOptions } from "./execution/application.ts";
-export type { WorkflowStartCommitPort } from "./execution/ports.ts";
+export type {
+  BoundedSkillCompletionReference,
+  BoundedSkillCompletionVerifier,
+  WorkflowStartCommitPort,
+} from "./execution/ports.ts";
 
 export { createProjectService } from "./projects/service.ts";
 export type {

@@ -7,24 +7,20 @@ import type {
 
 export type WorkflowStartOrigin =
   | { readonly kind: "advisory_none" }
-  | { readonly kind: "bounded_skill_completed"; readonly skillId: SkillId };
+  | { readonly kind: "verified_bounded_skill_completion"; readonly skillId: SkillId };
 
 const allow = (operation: ExecutionOperationKind): ExecutionAuthorizationResult => ({ decision: "allowed", operation });
-const deny = (
-  operation: ExecutionOperationKind,
-  reason: Extract<ExecutionAuthorizationResult, { decision: "denied" }>["reason"],
-): ExecutionAuthorizationResult => {
-  switch (reason) {
-    case "workflow_selection_required": return { decision: "denied", operation, reason, guidance: { kind: "select_workflow", nextOperation: "workflow_start" } };
-    case "skill_selection_required": return { decision: "denied", operation, reason, guidance: { kind: "select_bounded_skill", nextOperation: "bounded_skill" } };
-    case "operation_not_allowed_in_mode": return { decision: "denied", operation, reason, guidance: { kind: "use_advisory_mode", requiredMode: "advisory_preparation" } };
-    case "workflow_start_requires_advisory_context": return { decision: "denied", operation, reason, guidance: { kind: "use_advisory_mode", requiredMode: "advisory_preparation" } };
-    case "workflow_start_requires_completed_skill": return { decision: "denied", operation, reason, guidance: { kind: "complete_bounded_skill", nextOperation: "workflow_start" } };
-    case "workflow_already_selected": return { decision: "denied", operation, reason, guidance: { kind: "continue_selected_workflow", nextOperation: "implementation" } };
-  }
-};
+type DevelopmentOperation = "implementation" | "repository_change" | "pull_request";
+const denyWorkflowSelection = (operation: DevelopmentOperation): ExecutionAuthorizationResult => ({ decision: "denied", operation, reason: "workflow_selection_required", guidance: { kind: "select_workflow", nextOperation: "workflow_start" } });
+const denySkillSelection = (): ExecutionAuthorizationResult => ({ decision: "denied", operation: "bounded_skill", reason: "skill_selection_required", guidance: { kind: "select_bounded_skill", nextOperation: "bounded_skill" } });
+const denyBoundedSkillMode = (): ExecutionAuthorizationResult => ({ decision: "denied", operation: "bounded_skill", reason: "operation_not_allowed_in_mode", guidance: { kind: "use_advisory_mode", requiredMode: "advisory_preparation" } });
+const denyDevelopmentMode = (operation: DevelopmentOperation): ExecutionAuthorizationResult => ({ decision: "denied", operation, reason: "development_mode_required", guidance: { kind: "use_development_mode", requiredMode: "development_execution" } });
+const denyWorkflowStartMode = (): ExecutionAuthorizationResult => ({ decision: "denied", operation: "workflow_start", reason: "workflow_start_requires_advisory_context", guidance: { kind: "use_advisory_mode", requiredMode: "advisory_preparation" } });
+const denyWorkflowStartCompletion = (): ExecutionAuthorizationResult => ({ decision: "denied", operation: "workflow_start", reason: "workflow_start_requires_completed_skill", guidance: { kind: "complete_bounded_skill", nextOperation: "workflow_start" } });
+const denySelectedWorkflowStart = (): ExecutionAuthorizationResult => ({ decision: "denied", operation: "workflow_start", reason: "workflow_already_selected", guidance: { kind: "continue_selected_workflow", nextOperation: "implementation" } });
 
 const developmentOperations = new Set<ExecutionOperationKind>(["implementation", "repository_change", "pull_request"]);
+const isDevelopmentOperation = (operation: ExecutionOperationKind): operation is DevelopmentOperation => developmentOperations.has(operation);
 
 /** Authorize only from the explicit current context; no resolver or text is consulted. */
 export const authorizeExecutionOperation = (
@@ -33,26 +29,25 @@ export const authorizeExecutionOperation = (
   startFrom?: WorkflowStartOrigin,
 ): ExecutionAuthorizationResult => {
   if (operation === "workflow_start") {
-    if (context.workflow.kind === "selected") return deny(operation, "workflow_already_selected");
-    if (context.executionMode !== "advisory_preparation") return deny(operation, "workflow_start_requires_advisory_context");
+    if (context.workflow.kind === "selected") return denySelectedWorkflowStart();
+    if (context.executionMode !== "advisory_preparation") return denyWorkflowStartMode();
     if (context.workflow.kind === "none") return startFrom?.kind === "advisory_none"
       ? allow(operation)
-      : deny(operation, "workflow_start_requires_completed_skill");
-    if (startFrom?.kind !== "bounded_skill_completed" || startFrom.skillId !== context.workflow.skillId) {
-      return deny(operation, "workflow_start_requires_completed_skill");
+      : denyWorkflowStartCompletion();
+    if (startFrom?.kind !== "verified_bounded_skill_completion" || startFrom.skillId !== context.workflow.skillId) {
+      return denyWorkflowStartCompletion();
     }
     return allow(operation);
   }
-  if (developmentOperations.has(operation)) {
-    return context.workflow.kind === "selected"
-      ? allow(operation)
-      : deny(operation, "workflow_selection_required");
+  if (isDevelopmentOperation(operation)) {
+    if (context.workflow.kind !== "selected") return denyWorkflowSelection(operation);
+    return context.executionMode === "development_execution" ? allow(operation) : denyDevelopmentMode(operation);
   }
   if (operation === "bounded_skill") {
-    if (context.executionMode !== "advisory_preparation") return deny(operation, "operation_not_allowed_in_mode");
+    if (context.executionMode !== "advisory_preparation") return denyBoundedSkillMode();
     return context.workflow.kind === "standalone"
       ? allow(operation)
-      : deny(operation, "skill_selection_required");
+      : denySkillSelection();
   }
   return allow(operation);
 };
