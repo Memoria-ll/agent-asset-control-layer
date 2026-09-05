@@ -97,6 +97,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   producer が permission を `allowed` / `denied` に畳み、1件として渡す。
 - on-disk scope axis と resolution context axis は名前が異なる。`CanonicalAsset.scope` から
   resolution candidate への projection は明示的な対応表で行う。
+- scope matching は context に載っていない軸の selector を中立として読み飛ばす。候補が宣言した
+  適用条件は、その軸が context にあるときだけ絞り込みに効く。宣言を必須条件として扱わせたい
+  candidate projector は、この経路だけでは表現できない (#121)。
 - `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
   除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
   `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は
@@ -107,6 +110,10 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   `AssetProjectionSource.owningProjectId` を渡す。省略すると project A のファイルが project B の
   候補になり、型検査もゲートも黙って通る。宣言 `scope.project` は所属 project との積を取り、
   空になる候補は診断として除く。
+- Skill を指名する値は `SkillId`、Asset 層が索く値は `AssetId`。公開 API の引数と
+  `CanonicalSkill.skillId` は前者で受け、Asset store を呼ぶ直前に `skillAssetId` /
+  `asSkillId` で変換する。両 brand とも値制約は非空文字列だけなので、変換を各所で直接
+  cast すると片方向の取り違えが型検査を素通りする。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、

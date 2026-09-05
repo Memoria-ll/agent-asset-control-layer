@@ -124,6 +124,17 @@ export type {
   StoredAssetSource,
 } from "./assets/filesystem-store.ts";
 
+export {
+  loadSkill,
+  projectStoredSkillCandidate,
+  saveSkill,
+  updateSkill,
+} from "./assets/filesystem-skill-store.ts";
+export type {
+  SaveSkillInput,
+  SkillLoadResult,
+  StoredSkill,
+} from "./assets/filesystem-skill-store.ts";
 export { toResolutionSnapshot } from "./assets/resolution-input.ts";
 export type { ResolutionInputProjection } from "./assets/resolution-input.ts";
 
@@ -135,6 +146,9 @@ export type {
 
 export { loadWorkflowDefinition } from "./workflow/filesystem-definition-loader.ts";
 export type { WorkflowDefinitionLoadResult } from "./workflow/filesystem-definition-loader.ts";
+
+export { loadWorkflowEntryReference } from "./workflow/filesystem-entry-loader.ts";
+export type { WorkflowEntryLoadResult } from "./workflow/filesystem-entry-loader.ts";
 
 export { createWorkflowStateStore } from "./workflow/filesystem-state-store.ts";
 export type {

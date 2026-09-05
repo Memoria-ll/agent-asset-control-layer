@@ -341,6 +341,13 @@ const duplicateDiagnostics = (assets: readonly StoredAsset[]): AssetDiagnostic[]
   return duplicates;
 };
 
+/**
+ * Whether `save` will accept this path as a write target. `list` reads names the filesystem
+ * already holds, so a caller that means to write back to a listed path asks here first — the
+ * asymmetry is the point, and a listed path is not by itself a savable one.
+ */
+export const isSavableAssetPath = (relativePath: string): boolean => validRelativePath(relativePath);
+
 const validateTargetPath = (relativePath: string): AssetResult<undefined> => {
   if (!validRelativePath(relativePath)) {
     return {

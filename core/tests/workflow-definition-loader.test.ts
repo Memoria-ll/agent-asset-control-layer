@@ -16,6 +16,7 @@ import {
 import type { WorkflowId } from "@aacl/shared";
 import {
   createFilesystemAssetStore,
+  loadWorkflowEntryReference,
   loadWorkflowDefinition,
   type AssetStore,
   type ManagedAssetRoot,
@@ -117,8 +118,55 @@ describe("filesystem workflow definition loader", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.definition.workflowId).toBe("review-flow");
+      expect(result.revision).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(result.source.relativePath).toBe("workflows/review-flow.md");
       expect(result.assetDiagnostics).toHaveLength(0);
+    }
+  });
+
+  it("derives a Runtime-neutral entry reference from the loaded Workflow revision", async () => {
+    const fixtureValue = await fixture([{ path: "workflows/review-flow.md", document: workflowDocument("review-flow", validBody()) }]);
+
+    const result = await loadWorkflowEntryReference(fixtureValue.store, fixtureValue.workflowId, catalog());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.entry).toEqual({
+        kind: "workflow-reference",
+        workflowId: "review-flow",
+        workflowRevision: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      });
+      expect(Object.keys(result.entry).sort()).toEqual(["kind", "workflowId", "workflowRevision"]);
+      expect(result.source.relativePath).toBe("workflows/review-flow.md");
+    }
+  });
+
+  it("keeps neighboring Asset diagnostics when deriving a Workflow entry reference", async () => {
+    const fixtureValue = await fixture([
+      { path: "workflows/review-flow.md", document: workflowDocument("review-flow", validBody()) },
+      { path: "broken.md", document: "---\nid: broken\ntype: workflow\ntier: wrong\n---\n", raw: true },
+    ]);
+
+    const result = await loadWorkflowEntryReference(fixtureValue.store, fixtureValue.workflowId, catalog());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.assetDiagnostics).toHaveLength(1);
+      expect(result.assetDiagnostics[0]?.failure.details?.[0]?.path).toEqual([
+        "root", "global", "file", "broken.md", "frontmatter", "tier",
+      ]);
+    }
+  });
+
+  it("passes a Workflow load failure through the entry boundary", async () => {
+    const fixtureValue = await fixture();
+
+    const result = await loadWorkflowEntryReference(fixtureValue.store, fixtureValue.workflowId, catalog());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("not_found");
+      expect(result.matches).toEqual([]);
     }
   });
 

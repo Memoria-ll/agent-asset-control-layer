@@ -70,6 +70,20 @@ describe("capability catalog and dependency semantics", () => {
     if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("duplicate_capability_id");
   });
 
+  it("C2-b rejects ids and features the Canonical Asset frontmatter cannot carry", () => {
+    const dotted = buildCapabilityCatalog([definition("browser.dom")]);
+    expect(dotted.ok).toBe(false);
+    if (!dotted.ok) expect(dotted.failure.details?.map((item) => item.code)).toContain("invalid_capability_id");
+
+    const overlong = buildCapabilityCatalog([definition("a".repeat(65))]);
+    expect(overlong.ok).toBe(false);
+    if (!overlong.ok) expect(overlong.failure.details?.map((item) => item.code)).toContain("invalid_capability_id");
+
+    const dottedFeature = buildCapabilityCatalog([definition("browser", ["dom.tree"])]);
+    expect(dottedFeature.ok).toBe(false);
+    if (!dottedFeature.ok) expect(dottedFeature.failure.details?.map((item) => item.code)).toContain("invalid_feature_id");
+  });
+
   it("C3 rejects duplicate features", () => {
     const result = buildCapabilityCatalog([definition("filesystem", ["read", "read"])]);
 
@@ -211,35 +225,48 @@ describe("capability catalog and dependency semantics", () => {
     expect(result).toMatchObject({ ok: false, failedCapabilities: [capabilityId("filesystem")] });
   });
 
-  it("C15 collapses degradations that differ only in their features", () => {
+  // The Canonical Asset frontmatter carries one entry per capability id
+  // (`capability.features.<id>`, `capability.fallback.<id>`), so capability identity here is
+  // the id alone. A set of references separated only by their features has no on-disk form.
+  it.each([
+    { name: "under the same strength", strength: "optional" as const },
+    { name: "under a different strength", strength: "required" as const },
+  ])("C15 rejects a second reference to a declared capability $name", ({ strength }) => {
     const catalog = context([definition("filesystem", ["read", "write"])], []);
-    const result = expectValue(evaluateCapabilityDependencies([
+    const result = evaluateCapabilityDependencies([
       { strength: "optional", capability: reference("filesystem", ["read"]) },
-      { strength: "optional", capability: reference("filesystem", ["write"]) },
-    ], catalog));
+      { strength, capability: reference("filesystem", ["write"]) },
+    ], catalog);
 
-    if (result.ok !== true) throw new Error("Expected a degraded outcome.");
-    expect(result.degradedCapabilities).toEqual([
-      { capabilityId: capabilityId("filesystem"), strength: "optional" },
-    ]);
-    expect(result.degradation?.reasons).toEqual([
-      'Capability "filesystem" with optional strength is unavailable.',
-    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("duplicate_capability_dependency");
   });
 
-  it("C16 collapses required failure reasons that differ only in their features", () => {
-    const catalog = context([definition("filesystem", ["read", "write"])], []);
-    const result = expectValue(evaluateCapabilityDependencies([
+  it("C16 rejects a fallback whose primary reference names other features", () => {
+    const catalog = context([definition("filesystem", ["read", "write"]), definition("workspace")], []);
+    const result = evaluateCapabilityDependencies([
       { strength: "required", capability: reference("filesystem", ["read"]) },
-      { strength: "required", capability: reference("filesystem", ["write"]) },
-    ], catalog));
+      { strength: "fallback", capability: reference("workspace"), fallbackFor: reference("filesystem", ["write"]) },
+    ], catalog);
 
-    expect(result).toEqual({
-      ok: false,
-      kind: "unavailable",
-      failedCapabilities: [capabilityId("filesystem")],
-      reasons: ['Capability "filesystem" with required strength is unavailable.'],
-    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("invalid_capability_fallback");
+  });
+
+  it("C16-b rejects a second fallback for a declared primary capability", () => {
+    const catalog = context([
+      definition("filesystem", ["read", "write"]),
+      definition("workspace-a"),
+      definition("workspace-b"),
+    ], []);
+    const result = evaluateCapabilityDependencies([
+      { strength: "required", capability: reference("filesystem", ["read"]) },
+      { strength: "fallback", capability: reference("workspace-a"), fallbackFor: reference("filesystem", ["read"]) },
+      { strength: "fallback", capability: reference("workspace-b"), fallbackFor: reference("filesystem", ["write"]) },
+    ], catalog);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.details?.map((item) => item.code)).toContain("duplicate_fallback");
   });
 
   it.each([

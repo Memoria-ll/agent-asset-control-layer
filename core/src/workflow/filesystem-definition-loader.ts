@@ -6,6 +6,7 @@ import {
   type ResolvedWorkflowDefinition,
 } from "@aacl/core-domain";
 import type { AssetId, WorkflowId } from "@aacl/shared";
+import type { AssetRevision } from "@aacl/shared";
 import {
   type AssetDiagnostic,
   type AssetStore,
@@ -18,6 +19,7 @@ export type WorkflowDefinitionLoadResult =
   | {
       readonly ok: true;
       readonly definition: ResolvedWorkflowDefinition;
+      readonly revision: AssetRevision;
       readonly source: StoredAssetSource;
       readonly assetDiagnostics: readonly AssetDiagnostic[];
     }
@@ -67,6 +69,7 @@ export const loadWorkflowDefinition = async (
     return {
       ok: true,
       definition: parsed.value,
+      revision: selected.revision,
       source: selected.source,
       assetDiagnostics: lookup.failures,
     };
