@@ -6,6 +6,7 @@ import {
   parseResolvedContextDto,
   parseTransitionCandidateDto,
   parseWorkflowDefinitionDto,
+  parseWorkflowStartCommitRequest,
   parseWorkflowStateDto,
 } from "../src/index.ts";
 // Schema values and the graph bounds are internal to the package; asserted on directly here.
@@ -40,6 +41,38 @@ const resolvedContext = (overrides: {
     excludedAssetCount: 0,
   },
   resolvedAt: "2026-08-30T01:02:03+09:00",
+});
+
+const workflowStartBundle = (stateVersion: number): unknown => ({
+  operation: "workflow_start",
+  idempotencyKey: "start-1",
+  precondition: {
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    target: { workflowId: "workflow-1", workflowRevision: "revision-1" },
+  },
+  nextContext: {
+    executionMode: "development_execution",
+    workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" },
+  },
+  agentExecution: {
+    agentExecutionId: "execution-1",
+    executionMode: "development_execution",
+    workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "revision-1", executionInstanceId: "instance-1" },
+    stageId: "stage-1",
+    startedAt: "2026-08-30T01:02:03+09:00",
+  },
+  workflowState: {
+    workflowId: "workflow-1",
+    workflowRevision: "revision-1",
+    executionInstanceId: "instance-1",
+    stateVersion,
+    currentStageId: "stage-1",
+    entryRoleId: "role-1",
+    currentRoleId: "role-1",
+    linkedAgentExecutionIds: ["execution-1"],
+    linkedSnapshotIds: [],
+    updatedAt: "2026-08-30T01:02:03+09:00",
+  },
 });
 
 describe("boundary states that cannot exist", () => {
@@ -341,6 +374,11 @@ describe("boundary states that cannot exist", () => {
     ).toThrow();
   });
 
+  it("rejects a workflow start whose state has already advanced", () => {
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0))).not.toThrow();
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(1))).toThrow();
+  });
+
   it("rejects an invalid transition kind", () => {
     expect(() =>
       parseTransitionCandidateDto({
@@ -501,6 +539,14 @@ describe("published JSON Schema carries the same constraints", () => {
     expect(standalone.required).toEqual(["kind"]);
     expect(standalone.properties.workflowId).toBeUndefined();
     expect(standalone.properties.executionInstanceId).toBeUndefined();
+  });
+
+  it("fixes the workflow-start state version at the initial snapshot", () => {
+    for (const name of ["WorkflowStartCommitRequest", "WorkflowStartResult"]) {
+      const bundle = schemas()[name] as any;
+
+      expect(bundle.properties.workflowState.properties.stateVersion.const, name).toBe(0);
+    }
   });
 
   it("states uniqueness on every requirement reference list", () => {

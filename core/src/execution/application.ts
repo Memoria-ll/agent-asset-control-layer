@@ -109,6 +109,12 @@ export const startWorkflowExecution = async (
     stageId: loaded.definition.entryStageId,
     ...(request.context.taskTypeId === undefined ? {} : { taskTypeId: request.context.taskTypeId }),
     ...(request.context.roleId === undefined ? {} : { roleId: request.context.roleId }),
+    // The routing tuple travels with the execution, not only with the next context:
+    // dropping it here is silent, because reference validation skips an absent axis
+    // and the committed DTO keeps parsing without one.
+    ...(request.context.providerId === undefined ? {} : { providerId: request.context.providerId }),
+    ...(request.context.runtimeId === undefined ? {} : { runtimeId: request.context.runtimeId }),
+    ...(request.context.modelId === undefined ? {} : { modelId: request.context.modelId }),
   };
   const references = validateAgentExecutionReferences(options.catalog, record);
   if (!references.ok) return references;

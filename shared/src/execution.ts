@@ -79,13 +79,22 @@ export const WorkflowStartRequest = z.strictObject({
 export type WorkflowStartRequest = z.infer<typeof WorkflowStartRequest>;
 export type WorkflowStartRequestInput = z.input<typeof WorkflowStartRequest>;
 
+/**
+ * A workflow start mints the instance, so its state is the first snapshot and no
+ * update has been applied to it yet. The version is pinned on the field rather
+ * than inside the bundle refinement below because a cross-field check emits
+ * nothing into the published JSON Schema, leaving a schema-driven consumer to
+ * accept a start whose state has already advanced.
+ */
+const InitialWorkflowState = z.extend(WorkflowStateDto, { stateVersion: z.literal(0) });
+
 export const WorkflowStartCommitRequest = z.strictObject({
   operation: z.literal("workflow_start"),
   idempotencyKey: NonEmptyString,
   precondition: z.strictObject({ context: ResolutionContextInput, target: workflowTarget }),
   nextContext: ResolutionContextInput,
   agentExecution: AgentExecutionDto,
-  workflowState: WorkflowStateDto,
+  workflowState: InitialWorkflowState,
   sessionUpdate: z.optional(z.strictObject({ sessionId: SessionId, addAgentExecutionId: AgentExecutionId })),
 }).check(z.refine((value) => {
   const selected = value.nextContext.workflow;

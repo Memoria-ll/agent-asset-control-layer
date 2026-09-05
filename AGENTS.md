@@ -91,6 +91,10 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - source を直接実行するため、TypeScript の相対 import 指定子は `.ts` で書く。
 - `resolveScope` を実行経路へ配線する caller は `capabilityContext` を明示的に渡す。省略は
   capability offer が 0 件であることを意味する。
+- resolution context から `AgentExecutionRecord` を組み立てる producer は routing 軸
+  (`providerId` / `runtimeId` / `modelId`) も明示的に詰め替える。3欄とも optional なので、落としても
+  型検査とゲートは通り、`validateAgentExecutionReferences` は不在の軸を検査しないため、commit された
+  `AgentExecutionDto` から routing 情報が黙って消える。
 - `ResolutionResult.context.directory` は caller の入力表現、`scope.directory` は matching 用の
   正規化表現。再現には前者、同一性判定には後者を使う。
 - `overridden` の reason / status DTO の `mergeGroup` は optional。same-ID overlay は merge group に
