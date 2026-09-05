@@ -4,7 +4,7 @@
 
 ## Local invariants
 
-- asset frontmatter は versioned strict schema。未知の top-level key と未知 schema version を拒否する。新しい top-level 欄・namespace・directive の追加は on-disk 公開契約の変更として `save-schema-check` を通し、asset schema version の更新として設計したうえで、project stage に応じて migration の要否を決める。
+- asset frontmatter は versioned strict schema。未知の top-level key と未知 schema version を拒否する。Asset Type、top-level 欄、namespace、directive の追加は on-disk 公開契約の変更として `save-schema-check` を通し、asset schema version の更新として設計したうえで、project stage に応じて migration の要否を決める。
 - `CanonicalAsset` の省略された directive はキー自体を作らない。resolver は `explicitPriority` 未指定を最低順位、明示 `0` を値 `0` として扱うため、parser 側で既定値を埋めると順位だけが静かに変わる。
 - merge mode の既定値は `AssetTypeContract.mergePolicy.defaultMode` が所有する。asset parser と candidate projection の両方に既定値を置かない。
 - capability id と feature id は frontmatter キーへ逐語で埋め込む（`capability.features.<capabilityId>`）。識別子を受理する述語は `tokens.ts` の `isLowerKebabToken` 一本に揃える。在庫・offer 側だけ緩めると、保存できない依存を組み立てられてしまう。

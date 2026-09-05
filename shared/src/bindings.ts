@@ -172,7 +172,6 @@ export type BindingFallbackRelationDtoInput = z.input<typeof BindingFallbackRela
 
 const bindingCandidateBase = {
   revision: AssetRevision,
-  source: BindingSourceDto,
   loadingTier: LoadingTier,
   applicability: ResolutionReason,
 };
@@ -182,6 +181,7 @@ export const BindingCandidateDto = z.discriminatedUnion("operation", [
     definition: BindingDefinitionDto,
     targetAvailability: BindingTargetAvailabilityDto,
     fallbackRelation: BindingFallbackRelationDto,
+    source: BindingSourceDto,
     ...bindingCandidateBase,
   }),
   z.strictObject({
@@ -189,12 +189,14 @@ export const BindingCandidateDto = z.discriminatedUnion("operation", [
     definition: BindingDefinitionDto,
     targetAvailability: BindingTargetAvailabilityDto,
     fallbackRelation: BindingFallbackRelationDto,
+    source: bindingSourceArms[2],
     ...bindingCandidateBase,
   }),
   z.strictObject({
     operation: z.literal("disable"),
     bindingId: BindingId,
     scope: z.optional(BindingScopeDto),
+    source: bindingSourceArms[2],
     ...bindingCandidateBase,
   }),
 ]);

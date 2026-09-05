@@ -15,7 +15,7 @@ const unwrap = <Value>(result: AssetResult<Value>): Value => {
 };
 
 const bindingDocument = (id: string, metadata: string, body = "description"): string => `---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: core
@@ -27,6 +27,20 @@ const parseCanonical = (source: string): CanonicalAsset =>
   unwrap(validateAsset(unwrap(parseAssetDocument(source))));
 
 describe("binding asset contract", () => {
+  it("requires asset schema version 4 for the Binding on-disk shape", () => {
+    const legacy = validateAsset(unwrap(parseAssetDocument(bindingDocument(
+      "legacy-binding",
+      "metadata.target-kind: model\nmetadata.model-id: gpt-5\n",
+    ).replace("schema-version: 4", "schema-version: 3"))));
+
+    expect(legacy).toMatchObject({
+      ok: false,
+      failure: { code: "incompatible_contract", details: expect.arrayContaining([
+        expect.objectContaining({ code: "unsupported_schema_version" }),
+      ]) },
+    });
+  });
+
   it.each([
     ["provider", "metadata.target-kind: provider\nmetadata.provider-id: openai\n"],
     ["runtime", "metadata.target-kind: runtime\nmetadata.runtime-id: codex\n"],
@@ -68,7 +82,7 @@ describe("binding asset contract", () => {
 
   it("allows a disabled binding to retain body but rejects target metadata", () => {
     const disabled = parseCanonical(`---
-schema-version: 3
+schema-version: 4
 id: disabled-binding
 type: binding
 tier: core
@@ -80,7 +94,7 @@ disabled explanation`);
     expect(parsed.target).toBeUndefined();
 
     const invalid = parseBindingAsset(parseCanonical(`---
-schema-version: 3
+schema-version: 4
 id: disabled-binding
 type: binding
 tier: core

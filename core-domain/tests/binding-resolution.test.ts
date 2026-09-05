@@ -21,7 +21,7 @@ const unwrap = <Value>(result: AssetResult<Value>): Value => {
 };
 const binding = (id: string, metadata: string, operation: "add" | "disable" = "add"): CanonicalBinding =>
   unwrap(parseBindingDocument(`---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: core
@@ -84,6 +84,20 @@ describe("binding resolution", () => {
     });
   });
 
+  it("reports every missing component of a runtime-model target", () => {
+    const missing = binding("missing-pair", "metadata.target-kind: runtime-model\nmetadata.runtime-id: absent-runtime\nmetadata.model-id: absent-model\n");
+    const result = unwrap(resolveBindings({ entries: entriesFor([missing]), catalog }));
+    expect(result.candidates[0]).toMatchObject({
+      targetAvailability: {
+        status: "unavailable",
+        issues: [
+          { kind: "target_missing", targetId: "absent-runtime" },
+          { kind: "target_missing", targetId: "absent-model" },
+        ],
+      },
+    });
+  });
+
   it("preserves capability evidence from the generic resolver", () => {
     const candidate = binding("reviewer-capability", "capability.required: [filesystem-read]\nmetadata.target-kind: model\nmetadata.model-id: gpt-5\n");
     const capabilityCatalog = unwrap(buildCapabilityCatalog([
@@ -109,6 +123,45 @@ describe("binding resolution", () => {
     expect(byId("fallback")).toMatchObject({ fallbackRelation: { kind: "linked", primaryBindingId: "primary" } });
     expect(byId("fallback")).not.toHaveProperty("status", "fallback");
     expect(byId("missing-link")).toMatchObject({ fallbackRelation: { kind: "missing", primaryBindingId: "absent" } });
+  });
+
+  it("resolves a long fallback chain without recursive traversal", () => {
+    const template = binding("chain-0", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n");
+    const templateEntry = entriesFor([template])[0]!;
+    const length = 12_000;
+    const entries = Array.from({ length }, (_, index) => {
+      const bindingId = `chain-${index}` as never;
+      const fallbackFor = index === length - 1 ? undefined : `chain-${index + 1}` as never;
+      const item: CanonicalBinding = {
+        ...template,
+        bindingId,
+        ...(fallbackFor === undefined ? {} : { fallbackFor }),
+        asset: {
+          ...template.asset,
+          id: bindingId,
+          metadata: fallbackFor === undefined
+            ? template.asset.metadata
+            : { ...template.asset.metadata, "fallback-for": fallbackFor },
+        },
+      };
+      return {
+        binding: item,
+        evaluation: {
+          ...templateEntry.evaluation,
+          candidate: {
+            ...templateEntry.evaluation.candidate,
+            assetId: bindingId,
+            revision: `revision-${index}` as never,
+            source: { layer: "global" as const, sourceId: `source-${index}` },
+          },
+        },
+        source: { layer: "global" as const },
+      };
+    });
+
+    const result = unwrap(resolveBindings({ entries, catalog }));
+    expect(result.candidates).toHaveLength(length);
+    expect(result.candidates[0]).toMatchObject({ fallbackRelation: expect.objectContaining({ kind: "linked" }) });
   });
 
   it("keeps disable directives and disabled assets as generic evidence", () => {

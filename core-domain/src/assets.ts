@@ -31,7 +31,7 @@ export type ParsedAssetDocument = {
 };
 
 export type CanonicalAsset = {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 3 | 4;
   readonly id: AssetId;
   readonly type: AssetType;
   readonly tier: LoadingTier;
@@ -281,7 +281,7 @@ export const validateAsset = (
 
   const fields = parsed.fields;
   const details: Detail[] = [];
-  let schemaVersion = 3 as 3;
+  let schemaVersion: 3 | 4 = 3;
   let id: AssetId | undefined;
   let type: AssetType | undefined;
   let tier: LoadingTier | undefined;
@@ -306,7 +306,9 @@ export const validateAsset = (
       if (scalar === undefined) continue;
       if (!/^[1-9][0-9]*$/.test(scalar)) {
         details.push(detail(["document", "frontmatter", key], "invalid_value", `Schema version "${scalar}" is malformed.`));
-      } else if (scalar !== "3") {
+      } else if (scalar === "3" || scalar === "4") {
+        schemaVersion = Number(scalar) as 3 | 4;
+      } else {
         unsupportedSchemaVersion = true;
         details.push(detail(["document", "frontmatter", key], "unsupported_schema_version", `Schema version "${scalar}" is not supported.`));
       }
@@ -498,6 +500,14 @@ export const validateAsset = (
     unsupportedSchemaVersion = true;
     details.push(detail(["document", "frontmatter", "schema-version"], "unsupported_schema_version", "The asset schema version is required."));
   }
+  if (schemaVersion === 3 && type === "binding") {
+    unsupportedSchemaVersion = true;
+    details.push(detail(
+      ["document", "frontmatter", "schema-version"],
+      "unsupported_schema_version",
+      "Binding assets require schema version 4.",
+    ));
+  }
   if (mergeMode === "exclusive" && !Object.prototype.hasOwnProperty.call(fields, "merge-group")) {
     details.push(detail(["document", "frontmatter", "merge-group"], "invalid_merge_group", "Exclusive merge mode requires a merge group."));
   }
@@ -585,7 +595,7 @@ export const validateAsset = (
   }
 
   const model: {
-    schemaVersion: 3;
+    schemaVersion: 3 | 4;
     id: AssetId;
     type: AssetType;
     tier: LoadingTier;
@@ -650,10 +660,11 @@ export const serializeCanonicalAsset = (
   asset: CanonicalAsset,
 ): AssetResult<string> => {
   if (asset === null || typeof asset !== "object") return serializationFailure("The canonical asset is invalid.");
-  if (asset.schemaVersion !== 3) return serializationFailure("Only asset schema version 3 can be serialized.");
+  if (asset.schemaVersion !== 3 && asset.schemaVersion !== 4) return serializationFailure("Only asset schema versions 3 and 4 can be serialized.");
   const idResult = asAssetId(asset.id);
   if (!idResult.ok) return serializationFailure("The canonical asset id is invalid.", "invalid_asset_id");
   if (!isAssetType(asset.type) || !isLoadingTier(asset.tier)) return serializationFailure("The canonical asset type or tier is invalid.");
+  if (asset.type === "binding" && asset.schemaVersion !== 4) return serializationFailure("Binding assets require schema version 4.");
   if (asset.operation !== "add" && asset.operation !== "override" && asset.operation !== "disable") return serializationFailure("The canonical asset operation is invalid.");
   if (typeof asset.body !== "string" || asset.body.includes("\r")) return serializationFailure("The canonical asset body is invalid.");
   if (asset.lifecycle !== undefined && (typeof asset.lifecycle !== "string" || !isLowerKebabToken(asset.lifecycle))) return serializationFailure("The canonical asset lifecycle is invalid.");
@@ -681,7 +692,7 @@ export const serializeCanonicalAsset = (
     return { ok: true, value: undefined };
   };
   lines.push("---");
-  if (!append("schema-version", "3").ok) return serializationFailure("The schema version cannot be serialized.");
+  if (!append("schema-version", String(asset.schemaVersion)).ok) return serializationFailure("The schema version cannot be serialized.");
   if (!append("id", asset.id).ok) return serializationFailure("The canonical asset id cannot be serialized.", "invalid_asset_id");
   if (!append("type", asset.type).ok || !append("tier", asset.tier).ok) return serializationFailure("The canonical asset type or tier cannot be serialized.");
   if (!append("operation", asset.operation).ok) return serializationFailure("The canonical asset operation cannot be serialized.");

@@ -26,7 +26,7 @@ const unwrap = <Value>(result: AssetResult<Value>): Value => {
 };
 
 const binding = (id: string, body = "model binding"): CanonicalBinding => unwrap(parseBindingDocument(`---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: core
@@ -38,7 +38,7 @@ ${body}
 `));
 
 const disable = (id: string): CanonicalBinding => unwrap(parseBindingDocument(`---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: core
@@ -48,7 +48,7 @@ disable
 `));
 
 const exclusive = (id: string): CanonicalBinding => unwrap(parseBindingDocument(`---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: core
@@ -72,7 +72,7 @@ rule
 `;
 
 const malformedBinding = (id: string): string => `---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: core

@@ -204,8 +204,11 @@ const targetIssues = (binding: CanonicalBinding, catalog: MetadataCatalog): Bind
     case "runtime-model": {
       const runtime = catalog.runtimes.get(target.runtimeId);
       const model = catalog.models.get(target.modelId);
-      if (runtime === undefined) return [{ kind: "target_missing", targetId: target.runtimeId }];
-      if (model === undefined) return [{ kind: "target_missing", targetId: target.modelId }];
+      const missing: BindingTargetIssueDto[] = [];
+      if (runtime === undefined) missing.push({ kind: "target_missing", targetId: target.runtimeId });
+      if (model === undefined) missing.push({ kind: "target_missing", targetId: target.modelId });
+      if (missing.length > 0) return missing;
+      if (runtime === undefined || model === undefined) return missing;
       return runtime.providerId === model.providerId ? [] : [{ kind: "target_provider_mismatch", targetId: target.modelId, providerId: runtime.providerId }];
     }
   }
@@ -216,34 +219,58 @@ const targetAvailability = (binding: CanonicalBinding, catalog: MetadataCatalog)
   return issues.length === 0 ? { status: "available" } : { status: "unavailable", issues };
 };
 
-const cycleFrom = (
-  binding: CanonicalBinding,
+const fallbackCycleIndex = (
   fallbackIds: ReadonlyMap<BindingId, readonly BindingId[]>,
-): readonly BindingId[] | undefined => {
-  const primary = binding.fallbackFor;
-  if (primary === undefined) return undefined;
-  const visit = (current: BindingId, path: readonly BindingId[]): readonly BindingId[] | undefined => {
-    const repeatedAt = path.indexOf(current);
-    if (repeatedAt >= 0) return [...path.slice(repeatedAt), current];
-    for (const next of fallbackIds.get(current) ?? []) {
-      const cycle = visit(next, [...path, current]);
-      if (cycle !== undefined) return cycle;
+): ReadonlyMap<BindingId, readonly BindingId[] | null> => {
+  const cycles = new Map<BindingId, readonly BindingId[] | null>();
+  for (const start of fallbackIds.keys()) {
+    if (cycles.has(start)) continue;
+    const path: BindingId[] = [start];
+    const pathIndexes = new Map<BindingId, number>([[start, 0]]);
+    const stack: { readonly id: BindingId; nextIndex: number }[] = [{ id: start, nextIndex: 0 }];
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]!;
+      const next = (fallbackIds.get(frame.id) ?? [])[frame.nextIndex];
+      if (next === undefined) {
+        if (!cycles.has(frame.id)) cycles.set(frame.id, null);
+        stack.pop();
+        pathIndexes.delete(path.pop()!);
+        continue;
+      }
+      frame.nextIndex += 1;
+      const repeatedAt = pathIndexes.get(next);
+      if (repeatedAt !== undefined) {
+        const cycle = [...path.slice(repeatedAt), next];
+        for (const id of path) cycles.set(id, cycle);
+        stack.length = 0;
+        continue;
+      }
+      const known = cycles.get(next);
+      if (known !== undefined) {
+        if (known !== null) {
+          for (const id of path) cycles.set(id, known);
+          stack.length = 0;
+        }
+        continue;
+      }
+      pathIndexes.set(next, path.length);
+      path.push(next);
+      stack.push({ id: next, nextIndex: 0 });
     }
-    return undefined;
-  };
-  return visit(primary, [binding.bindingId]);
+  }
+  return cycles;
 };
 
 const fallbackRelation = (
   binding: CanonicalBinding,
   bindingIds: ReadonlySet<BindingId>,
-  fallbackIds: ReadonlyMap<BindingId, readonly BindingId[]>,
+  fallbackCycles: ReadonlyMap<BindingId, readonly BindingId[] | null>,
 ): BindingFallbackRelationDto => {
   const primaryBindingId = binding.fallbackFor;
   if (primaryBindingId === undefined) return { kind: "none" };
   if (!bindingIds.has(primaryBindingId)) return { kind: "missing", primaryBindingId };
-  const cycle = cycleFrom(binding, fallbackIds);
-  return cycle === undefined
+  const cycle = fallbackCycles.get(binding.bindingId);
+  return cycle === undefined || cycle === null
     ? { kind: "linked", primaryBindingId }
     : { kind: "cycle", primaryBindingId, cycle: [...cycle] };
 };
@@ -258,6 +285,15 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
       "The Binding source layer must match its resolution candidate source layer.",
     )]);
   }
+  const invalidOverlaySource = input.entries.find(({ binding, source }) =>
+    binding.asset.operation !== "add" && source.layer !== "project");
+  if (invalidOverlaySource !== undefined) {
+    return invalidBinding([detail(
+      ["entries", String(invalidOverlaySource.binding.bindingId), "source", "layer"],
+      "operation_requires_project_source",
+      "Binding override and disable operations require a project source.",
+    )]);
+  }
   const entries = [...input.entries].sort((left, right) => codeUnitCompare(entryKey(left), entryKey(right)));
   const bindingIds = new Set(entries
     .filter(({ binding }) => binding.asset.operation !== "disable")
@@ -269,32 +305,47 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     if (!targets.includes(binding.fallbackFor)) targets.push(binding.fallbackFor);
     fallbackIds.set(binding.bindingId, targets);
   }
+  const fallbackCycles = fallbackCycleIndex(fallbackIds);
   const diagnostics: Detail[] = [];
   const candidates: BindingCandidateDto[] = [];
   for (const item of entries) {
     const { binding } = item;
     const candidateBase = {
       revision: item.evaluation.candidate.revision,
-      source: item.source,
       loadingTier: item.evaluation.candidate.loadingTier,
       applicability: toResolutionReasonDto(item.evaluation.reason),
     };
     if (binding.asset.operation === "disable") {
+      if (item.source.layer !== "project") return invalidBinding([detail(
+        ["entries", String(binding.bindingId), "source", "layer"],
+        "operation_requires_project_source",
+        "Binding override and disable operations require a project source.",
+      )]);
       candidates.push({
         operation: "disable",
         bindingId: binding.bindingId,
         ...(bindingScope(binding.asset) === undefined ? {} : { scope: bindingScope(binding.asset) }),
+        source: item.source,
         ...candidateBase,
       });
       continue;
     }
-    candidates.push({
-      operation: binding.asset.operation,
+    const resolvedCandidate = {
       definition: definitionDto(binding)!,
       targetAvailability: targetAvailability(binding, input.catalog),
-      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackIds),
+      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackCycles),
       ...candidateBase,
-    });
+    };
+    if (binding.asset.operation === "override") {
+      if (item.source.layer !== "project") return invalidBinding([detail(
+        ["entries", String(binding.bindingId), "source", "layer"],
+        "operation_requires_project_source",
+        "Binding override and disable operations require a project source.",
+      )]);
+      candidates.push({ operation: "override", source: item.source, ...resolvedCandidate });
+    } else {
+      candidates.push({ operation: "add", source: item.source, ...resolvedCandidate });
+    }
   }
   candidates.sort((left, right) => codeUnitCompare(candidateSortKey(left), candidateSortKey(right)));
   return { ok: true, value: { candidates, diagnostics } };

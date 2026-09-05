@@ -99,7 +99,7 @@ const binding = (
     readonly fallbackFor?: string;
   } = {},
 ): string => `---
-schema-version: 3
+schema-version: 4
 id: ${id}
 type: binding
 tier: ${options.tier ?? "core"}
@@ -204,7 +204,7 @@ describe("Core Binding resolution", () => {
     const fixture = await makeFixture();
     await write(fixture.globalRoot.directory, "valid.md", binding("valid"));
     await write(fixture.globalRoot.directory, "malformed.md", `---
-schema-version: 3
+schema-version: 4
 id: malformed
 type: binding
 tier: core

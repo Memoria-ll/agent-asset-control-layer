@@ -65,6 +65,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   serialization schema を持たせ、TypeScript 型は schema から導出する。
 - 境界 DTO は成立し得ない状態を parse させない。JSON Schema で表せる制約は parser と
   draft 2020-12 schema の両方へ反映する。
+- operation と source の組み合わせを持つ境界 DTO は、各 union arm に許可された source を
+  直接置く。共通 base の広い source 型で project-only operation を表現しない。
 - `zod` は `shared` の実装詳細。consumer へは TypeScript 型と素の JavaScript の関数・データだけを
   export し、consumer が必要とする runtime validator や値集合をその都度明示的に追加する。
 - 契約全体のバージョンは `shared` の `CONTRACT_VERSION` だけで管理する。enum 値、union arm、
@@ -119,6 +121,10 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   `CanonicalSkill.skillId` は前者で受け、Asset store を呼ぶ直前に `skillAssetId` /
   `asSkillId` で変換する。両 brand とも値制約は非空文字列だけなので、変換を各所で直接
   cast すると片方向の取り違えが型検査を素通りする。
+- user-authored な参照 graph は入力件数で call stack を消費しない反復走査とし、確定した
+  到達結果を再利用して直線 chain の各 node から同じ suffix を走査し直さない。
+- 複合 target の catalog 検証は独立して欠けた component を一度の結果へすべて列挙し、
+  component 間の整合性比較は必要な全 component が存在するときだけ行う。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、

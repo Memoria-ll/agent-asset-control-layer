@@ -20,6 +20,19 @@ const strictObjectNodes = (
     ? (rendered.oneOf as Record<string, unknown>[])
     : [rendered];
 
+const expectEveryNestedObjectStrict = (value: unknown, path: string): void => {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => expectEveryNestedObjectStrict(item, `${path}[${index}]`));
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const node = value as Record<string, unknown>;
+  if (node.type === "object") expect(node.additionalProperties, path).toBe(false);
+  for (const [key, child] of Object.entries(node)) {
+    expectEveryNestedObjectStrict(child, `${path}.${key}`);
+  }
+};
+
 describe("contract JSON Schemas", () => {
   it("renders every registered schema without unsupported types", () => {
     const renderedSchemas = contractJsonSchemas();
@@ -121,6 +134,8 @@ describe("contract JSON Schemas", () => {
     for (const arm of schemas.BindingTargetAvailabilityDto.oneOf) expect(arm.additionalProperties).toBe(false);
     for (const arm of schemas.BindingFallbackRelationDto.oneOf) expect(arm.additionalProperties).toBe(false);
     for (const arm of schemas.BindingCandidateDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    expectEveryNestedObjectStrict(schemas.BindingRecordDto, "BindingRecordDto");
+    expectEveryNestedObjectStrict(schemas.BindingCandidateDto, "BindingCandidateDto");
     const disabled = schemas.BindingRecordDto.oneOf.find((arm: any) => arm.properties.operation.const === "disable");
     expect(disabled.required).toEqual(expect.arrayContaining(["operation", "bindingId", "revision", "source", "loadingTier"]));
     expect(disabled.properties.definition).toBeUndefined();

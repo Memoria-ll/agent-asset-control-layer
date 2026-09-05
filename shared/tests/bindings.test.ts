@@ -113,6 +113,16 @@ describe("Binding shared contract", () => {
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
+    expect(() => parseBindingCandidateDto({
+      operation: "override",
+      definition,
+      applicability: { kind: "included", explanation: "Matched.", matchedAxes: [] },
+      targetAvailability: { status: "available" },
+      fallbackRelation: { kind: "none" },
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
   });
 
   it("accepts only marker-shaped project ids", () => {

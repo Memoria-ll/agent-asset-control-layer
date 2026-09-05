@@ -17,7 +17,7 @@
 
 ```markdown
 ---
-schema-version: 3
+schema-version: 4
 id: reviewer-luna
 type: binding
 tier: core
