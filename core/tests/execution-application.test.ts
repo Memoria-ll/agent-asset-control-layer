@@ -174,6 +174,35 @@ describe("workflow start application boundary", () => {
     expect(commits).toBe(1);
   });
 
+  // The started role is the workflow's, and a definition cannot leave the entry stage's
+  // role open: `resolveWorkflowDefinition` rejects an entry stage without `requiredRoleId`
+  // or with one that differs from `entryRoleId` (core-domain/src/workflow.ts).
+  it("agrees on the started role across the state, the next context and the execution", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-execution-role-")); directories.push(root);
+    const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });
+    const stored = asset(workflow); await writeFile(assetPath, unwrap(serializeCanonicalAsset(stored)), "utf8");
+    const assets = unwrap(createFilesystemAssetStore([{ rootId: "global", kind: "global", directory: join(root, "assets") }]));
+    const stateStore = unwrap(await createWorkflowStateStore({ stateDirectory: join(root, "state"), newInstanceSuffix: () => "one" }));
+    let commits = 0;
+    const port: WorkflowStartCommitPort = { commit: async (value) => { commits += 1; return { ok: true, value }; } };
+    const lookup = await assets.get("review-flow" as never);
+    const revision = lookup.matches[0]?.revision;
+    if (revision === undefined) throw new Error("fixture revision missing");
+    const result = await startWorkflowExecution(request(revision), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never });
+    if (!result.ok) throw new Error(`${result.failure.code}: ${result.failure.message}`);
+    expect(result.value.workflowState.currentRoleId).toBe("reviewer");
+    expect(result.value.nextContext.roleId).toBe("reviewer");
+    expect(result.value.agentExecution.roleId).toBe("reviewer");
+
+    const otherRole = await startWorkflowExecution(request(revision, {
+      executionMode: "advisory_preparation",
+      workflow: { kind: "none" },
+      roleId: "advisor",
+    }), { assetStore: assets, catalog: catalog(), stateStore, commitPort: port, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-2" as never });
+    expect(otherRole).toMatchObject({ ok: false, failure: { details: [{ code: "entry_requirements_unmet" }] } });
+    expect(commits).toBe(1);
+  });
+
   it("rejects a stale target revision before invoking the commit port", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-execution-stale-")); directories.push(root);
     const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });

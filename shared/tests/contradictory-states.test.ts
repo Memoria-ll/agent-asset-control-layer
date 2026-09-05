@@ -43,7 +43,10 @@ const resolvedContext = (overrides: {
   resolvedAt: "2026-08-30T01:02:03+09:00",
 });
 
-const workflowStartBundle = (stateVersion: number): unknown => ({
+const workflowStartBundle = (
+  stateVersion: number,
+  axes: { nextContext?: Record<string, unknown>; agentExecution?: Record<string, unknown> } = {},
+): unknown => ({
   operation: "workflow_start",
   idempotencyKey: "start-1",
   precondition: {
@@ -52,14 +55,18 @@ const workflowStartBundle = (stateVersion: number): unknown => ({
   },
   nextContext: {
     executionMode: "development_execution",
+    roleId: "role-1",
     workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" },
+    ...axes.nextContext,
   },
   agentExecution: {
     agentExecutionId: "execution-1",
     executionMode: "development_execution",
     workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "revision-1", executionInstanceId: "instance-1" },
     stageId: "stage-1",
+    roleId: "role-1",
     startedAt: "2026-08-30T01:02:03+09:00",
+    ...axes.agentExecution,
   },
   workflowState: {
     workflowId: "workflow-1",
@@ -377,6 +384,28 @@ describe("boundary states that cannot exist", () => {
   it("rejects a workflow start whose state has already advanced", () => {
     expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0))).not.toThrow();
     expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(1))).toThrow();
+  });
+
+  // Every axis, not only the routing tuple that surfaced it: the scope axes are carried by
+  // the same two objects and disagree the same way.
+  it.each(["projectId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId"])(
+    "rejects a workflow start whose execution and next context disagree on %s",
+    (axis) => {
+      expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, {
+        nextContext: { [axis]: "value-a", ...(axis === "roleId" ? {} : { roleId: "role-1" }) },
+        agentExecution: { [axis]: "value-b", ...(axis === "roleId" ? {} : { roleId: "role-1" }) },
+      }))).toThrow();
+      expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, {
+        nextContext: { [axis]: "value-a" },
+      }))).toThrow();
+    },
+  );
+
+  it("rejects a workflow start whose execution role is not the state's current role", () => {
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, {
+      nextContext: { roleId: "role-2" },
+      agentExecution: { roleId: "role-2" },
+    }))).toThrow();
   });
 
   it("rejects an invalid transition kind", () => {

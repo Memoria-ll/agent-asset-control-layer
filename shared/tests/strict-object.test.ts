@@ -74,12 +74,13 @@ describe("strict boundary objects", () => {
         context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
         target: { workflowId: "workflow-1", workflowRevision: "revision-1" },
       },
-      nextContext: { executionMode: "development_execution", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
+      nextContext: { executionMode: "development_execution", roleId: "role-1", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
       agentExecution: {
         agentExecutionId: "agent-1",
         executionMode: "development_execution",
         workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "revision-1", executionInstanceId: "instance-1" },
         stageId: "stage-1",
+        roleId: "role-1",
         startedAt: "2026-09-05T10:00:00Z",
       },
       workflowState: {
@@ -104,6 +105,14 @@ describe("strict boundary objects", () => {
     expect(() => parseWorkflowStartCommitRequest({
       ...bundle,
       workflowState: { ...bundle.workflowState, linkedAgentExecutionIds: [] },
+    })).toThrow();
+    expect(() => parseWorkflowStartCommitRequest({
+      ...bundle,
+      agentExecution: { ...bundle.agentExecution, providerId: "anthropic" },
+    })).toThrow();
+    expect(() => parseWorkflowStartCommitRequest({
+      ...bundle,
+      workflowState: { ...bundle.workflowState, currentRoleId: "role-2" },
     })).toThrow();
   });
 });

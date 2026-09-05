@@ -88,6 +88,14 @@ export type WorkflowStartRequestInput = z.input<typeof WorkflowStartRequest>;
  */
 const InitialWorkflowState = z.extend(WorkflowStateDto, { stateVersion: z.literal(0) });
 
+/**
+ * The resolution axes an execution record carries as well as the context. A start whose
+ * record disagrees with its own next context on any of them cannot reproduce the context
+ * it was resolved against, so the pair is checked as a whole rather than per axis: the
+ * routing tuple and the scope axes fail the same way and are missed the same way.
+ */
+const MIRRORED_CONTEXT_AXES = ["projectId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId"] as const;
+
 export const WorkflowStartCommitRequest = z.strictObject({
   operation: z.literal("workflow_start"),
   idempotencyKey: NonEmptyString,
@@ -108,6 +116,10 @@ export const WorkflowStartCommitRequest = z.strictObject({
   if (state.workflowId !== target.workflowId || state.workflowRevision !== target.workflowRevision) return false;
   if (binding.executionInstanceId !== state.executionInstanceId) return false;
   if (value.agentExecution.stageId !== state.currentStageId || selected.stageId !== state.currentStageId) return false;
+  if (MIRRORED_CONTEXT_AXES.some((axis) => value.nextContext[axis] !== value.agentExecution[axis])) return false;
+  // The state names the role the instance runs in. It is checked here rather than left to
+  // the producer, because a commit adapter is not bound by the domain's start path.
+  if (value.agentExecution.roleId !== state.currentRoleId) return false;
   if (!state.linkedAgentExecutionIds.includes(value.agentExecution.agentExecutionId)) return false;
   if (value.agentExecution.sessionId === undefined) return value.sessionUpdate === undefined;
   return value.sessionUpdate?.sessionId === value.agentExecution.sessionId

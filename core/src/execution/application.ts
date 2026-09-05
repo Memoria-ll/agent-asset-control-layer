@@ -87,9 +87,13 @@ export const startWorkflowExecution = async (
     stateVersion: 0 as const,
     updatedAt: options.now(),
   };
+  // The role the instance runs in is the state's, read from the state rather than echoed
+  // from the request: the equality of the two holds only through the entry-stage role check
+  // inside `initializeWorkflowState`, which is not visible here.
   const nextContext: ResolutionContextDtoInput = {
     ...request.context,
     executionMode: "development_execution",
+    roleId: state.currentRoleId,
     workflow: {
       kind: "selected",
       workflowId: loaded.definition.workflowId,
@@ -108,7 +112,7 @@ export const startWorkflowExecution = async (
     ...(request.context.projectId === undefined ? {} : { projectId: request.context.projectId }),
     stageId: loaded.definition.entryStageId,
     ...(request.context.taskTypeId === undefined ? {} : { taskTypeId: request.context.taskTypeId }),
-    ...(request.context.roleId === undefined ? {} : { roleId: request.context.roleId }),
+    roleId: state.currentRoleId,
     // The routing tuple travels with the execution, not only with the next context:
     // dropping it here is silent, because reference validation skips an absent axis
     // and the committed DTO keeps parsing without one.
