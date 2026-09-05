@@ -337,8 +337,11 @@ const normalizeDependencies = (
   };
 
   const normalized: CapabilityDependency[] = [];
-  const primaryReferences = new Set<string>();
-  const fallbackReferences = new Set<string>();
+  // Keyed by capability id alone, which is the identity the Canonical Asset frontmatter
+  // carries: `capability.features.<id>` and `capability.fallback.<id>` hold one entry per
+  // capability, so a set of references distinguished by their features has no on-disk form.
+  const primaryFeatures = new Map<string, readonly CapabilityFeatureId[]>();
+  const fallbackPrimaries = new Set<string>();
   for (const [index, dependencyValue] of dependencies.entries()) {
     const path = ["dependencies", String(index)];
     if (!isRecord(dependencyValue)) {
@@ -357,7 +360,7 @@ const normalizeDependencies = (
       const fallbackFor = normalizeReference(dependencyValue.fallbackFor, [...path, "fallbackFor"], details);
       checkDeclaredFeatures(fallbackFor, [...path, "fallbackFor", "features"]);
       if (capability === undefined || fallbackFor === undefined) continue;
-      const fallbackKey = referenceKey(fallbackFor);
+      const fallbackKey = fallbackFor.capabilityId;
       if (capability.capabilityId === fallbackFor.capabilityId
         && featureSetContains(capability.features ?? [], fallbackFor.features ?? [])) {
         // Availability is one predicate over an offer of that capability, so a fallback
@@ -370,10 +373,10 @@ const normalizeDependencies = (
           "A fallback on the same capability must not require every feature its primary requires.",
         ));
       }
-      if (fallbackReferences.has(fallbackKey)) {
+      if (fallbackPrimaries.has(fallbackKey)) {
         details.push(detail([...path, "fallbackFor"], "duplicate_fallback", "A primary capability may have only one fallback."));
       } else {
-        fallbackReferences.add(fallbackKey);
+        fallbackPrimaries.add(fallbackKey);
       }
       normalized.push({ strength, capability, fallbackFor });
     } else {
@@ -381,11 +384,10 @@ const normalizeDependencies = (
         details.push(detail([...path, "fallbackFor"], "unexpected_fallback_for", "Only fallback dependencies may declare fallbackFor."));
       }
       if (capability === undefined) continue;
-      const primaryKey = referenceKey(capability);
-      if (primaryReferences.has(primaryKey)) {
-        details.push(detail([...path, "capability"], "duplicate_capability_dependency", "A capability reference may be declared only once."));
+      if (primaryFeatures.has(capability.capabilityId)) {
+        details.push(detail([...path, "capability"], "duplicate_capability_dependency", "A capability may be declared only once."));
       } else {
-        primaryReferences.add(primaryKey);
+        primaryFeatures.set(capability.capabilityId, capability.features ?? []);
       }
       normalized.push({ strength, capability });
     }
@@ -393,11 +395,24 @@ const normalizeDependencies = (
 
   for (const dependency of normalized) {
     if (dependency.strength !== "fallback") continue;
-    if (!primaryReferences.has(referenceKey(dependency.fallbackFor))) {
+    const declaredFeatures = primaryFeatures.get(dependency.fallbackFor.capabilityId);
+    if (declaredFeatures === undefined) {
       details.push(detail(
         ["dependencies"],
         "unknown_fallback_primary",
         `Fallback capability "${dependency.capability.capabilityId}" does not identify a declared primary dependency.`,
+      ));
+      continue;
+    }
+    // The frontmatter writes the primary's feature set once, under the primary's own key, so
+    // a `fallbackFor` naming a different set has nothing to serialize into.
+    const namedFeatures = dependency.fallbackFor.features ?? [];
+    if (declaredFeatures.length !== namedFeatures.length
+      || declaredFeatures.some((feature, index) => feature !== namedFeatures[index])) {
+      details.push(detail(
+        ["dependencies"],
+        "invalid_capability_fallback",
+        `Fallback capability "${dependency.capability.capabilityId}" does not reproduce the features its primary declares.`,
       ));
     }
   }
@@ -504,7 +519,7 @@ const evaluateNormalizedDependencies = (
   const primaryDependencies = dependencies.filter((dependency): dependency is Extract<CapabilityDependency, { strength: PrimaryCapabilityStrength }> => dependency.strength !== "fallback");
   const fallbackByPrimary = new Map<string, Extract<CapabilityDependency, { strength: "fallback" }>>();
   for (const dependency of dependencies) {
-    if (dependency.strength === "fallback") fallbackByPrimary.set(referenceKey(dependency.fallbackFor), dependency);
+    if (dependency.strength === "fallback") fallbackByPrimary.set(dependency.fallbackFor.capabilityId, dependency);
   }
 
   const failedCapabilities: CapabilityId[] = [];
@@ -516,7 +531,7 @@ const evaluateNormalizedDependencies = (
     const primaryUsability = capabilityAvailable(dependency.capability, context);
     if (primaryUsability === "usable") continue;
 
-    const fallback = fallbackByPrimary.get(referenceKey(dependency.capability));
+    const fallback = fallbackByPrimary.get(dependency.capability.capabilityId);
     const fallbackUsability = fallback === undefined
       ? undefined
       : capabilityAvailable(fallback.capability, context);
