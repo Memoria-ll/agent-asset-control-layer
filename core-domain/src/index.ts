@@ -53,6 +53,9 @@ export type {
   AssetTypeMergePolicy,
 } from "./resolution/asset-type-contracts.ts";
 
+export { toAssetCandidate } from "./resolution/asset-candidate-projection.ts";
+export type { AssetProjectionSource } from "./resolution/asset-candidate-projection.ts";
+
 export {
   buildCapabilityCatalog,
   evaluateCapabilityDependencies,

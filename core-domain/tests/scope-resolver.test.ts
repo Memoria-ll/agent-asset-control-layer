@@ -12,6 +12,7 @@ import {
   toResolutionConflictDetails,
   toResolutionConflictDto,
   toResolutionReasonDto,
+  toAssetCandidate,
   validateAsset,
 } from "../src/index.ts";
 import type {
@@ -95,35 +96,23 @@ const candidateFromCanonicalAsset = (
   directives: ResolutionDirectives,
   fixture: FixtureMetadata = {},
 ): AssetCandidate => {
-  const selectors: Partial<Record<ResolutionAxis, readonly string[]>> = {};
-  if (asset.scope.project !== undefined) selectors.projectId = asset.scope.project;
-  if (asset.scope.workflow !== undefined) selectors.workflowId = asset.scope.workflow;
-  if (asset.scope.stage !== undefined) selectors.stageId = asset.scope.stage;
-  if (asset.scope["task-type"] !== undefined) selectors.taskTypeId = asset.scope["task-type"];
-  if (asset.scope.role !== undefined) selectors.roleId = asset.scope.role;
-  if (asset.scope.provider !== undefined) selectors.providerId = asset.scope.provider;
-  if (asset.scope.runtime !== undefined) selectors.runtimeId = asset.scope.runtime;
-  if (asset.scope.model !== undefined) selectors.modelId = asset.scope.model;
-  if (asset.scope.directory !== undefined) selectors.directory = asset.scope.directory;
-
   const merge = directives.mergeMode === "exclusive"
     ? { mergeMode: "exclusive" as const, mergeGroup: directives.mergeGroup as string }
     : directives.mergeGroup === undefined
       ? { mergeMode: "additive" as const }
       : { mergeMode: "additive" as const, mergeGroup: directives.mergeGroup };
 
-  return {
-    assetId: asset.id,
+  const projected = expectOk(toAssetCandidate(asset, {
     revision: (fixture.revision ?? `revision-${asset.id}`) as AssetRevision,
-    assetType: asset.type,
-    loadingTier: asset.tier,
     source: fixture.source ?? { layer: "global", sourceId: `source-${asset.id}` },
+  }));
+  return {
+    ...projected,
     rule: {
-      selectors,
+      ...projected.rule,
       mandatory: directives.mandatory,
       operation: directives.operation,
       ...(directives.explicitPriority === undefined ? {} : { explicitPriority: directives.explicitPriority }),
-      requires: asset.requires,
       ...(directives.capabilityDependencies === undefined ? {} : { capabilityDependencies: directives.capabilityDependencies }),
       ...merge,
     },

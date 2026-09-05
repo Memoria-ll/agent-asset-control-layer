@@ -124,6 +124,9 @@ export type {
   StoredAssetSource,
 } from "./assets/filesystem-store.ts";
 
+export { toResolutionSnapshot } from "./assets/resolution-input.ts";
+export type { ResolutionInputProjection } from "./assets/resolution-input.ts";
+
 export { loadMetadataCatalog } from "./catalog/filesystem-catalog.ts";
 export type {
   MetadataCatalogLoadResult,

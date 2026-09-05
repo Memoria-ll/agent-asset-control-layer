@@ -97,6 +97,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   producer が permission を `allowed` / `denied` に畳み、1件として渡す。
 - on-disk scope axis と resolution context axis は名前が異なる。`CanonicalAsset.scope` から
   resolution candidate への projection は明示的な対応表で行う。
+- `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
+  除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
+  `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、
