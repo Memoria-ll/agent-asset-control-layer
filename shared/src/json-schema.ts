@@ -1,5 +1,16 @@
 import * as z from "zod/mini";
 import { VersionInfo } from "./contract-version.ts";
+import {
+  BindingCandidateDto,
+  BindingDefinitionDto,
+  BindingReasonDto,
+  BindingRecordDto,
+  BindingResolutionRequest,
+  BindingResolutionResponse,
+  BindingScopeDto,
+  BindingSourceDto,
+  BindingTargetDto,
+} from "./bindings.ts";
 import { CoreErrorDto } from "./errors.ts";
 import { ModelDto, ProviderDto, RuntimeDto } from "./execution-targets.ts";
 import { ResolveRequest, ResolveResponse } from "./resolution.ts";
@@ -48,6 +59,15 @@ export const contractSchemas: Readonly<Record<string, z.core.$ZodType>> = {
   ProjectInfoDto,
   ProjectDiscoveryRequest,
   ProjectDiscoveryDto,
+  BindingTargetDto,
+  BindingScopeDto,
+  BindingDefinitionDto,
+  BindingSourceDto,
+  BindingRecordDto,
+  BindingReasonDto,
+  BindingCandidateDto,
+  BindingResolutionRequest,
+  BindingResolutionResponse,
 };
 
 /**

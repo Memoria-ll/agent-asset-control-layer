@@ -107,6 +107,23 @@ describe("contract JSON Schemas", () => {
     expect(unblocked.properties.blockedReasons).toBeUndefined();
   });
 
+  it("publishes strict Binding target, scope, record, reason, and candidate arms", () => {
+    const schemas = contractJsonSchemas() as any;
+    for (const arm of schemas.BindingTargetDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    expect(schemas.BindingScopeDto.additionalProperties).toBe(false);
+    expect(schemas.BindingScopeDto.properties.roleId.minItems).toBe(1);
+    expect(schemas.BindingScopeDto.properties.roleId.uniqueItems).toBe(true);
+    for (const arm of schemas.BindingRecordDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingSourceDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    const projectSource = schemas.BindingSourceDto.oneOf.find((arm: any) => arm.properties.layer.const === "project");
+    expect(projectSource.required).toEqual(["layer", "projectId"]);
+    for (const arm of schemas.BindingReasonDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingCandidateDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    const disabled = schemas.BindingRecordDto.oneOf.find((arm: any) => arm.properties.operation.const === "disable");
+    expect(disabled.required).toEqual(expect.arrayContaining(["operation", "bindingId", "revision", "source"]));
+    expect(disabled.properties.definition).toBeUndefined();
+  });
+
   it("publishes the Project boundary and nested failure strictness", () => {
     const schemas = contractJsonSchemas() as any;
     expect(schemas.ProjectMarkerDto.required).toEqual(["schemaVersion", "projectId"]);

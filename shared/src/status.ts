@@ -59,7 +59,7 @@ const SOFT_CAPABILITY_DEGRADATION_STRENGTHS = ["optional", "preferred"] as const
  * A soft degradation carries the fallback only when one was selected: an
  * optional or preferred dependency degrades on its own when none exists.
  */
-const CapabilityDegradationDto = z.discriminatedUnion("strength", [
+export const CapabilityDegradationDto = z.discriminatedUnion("strength", [
   z.strictObject({
     capabilityId: NonEmptyString,
     strength: z.literal("required"),

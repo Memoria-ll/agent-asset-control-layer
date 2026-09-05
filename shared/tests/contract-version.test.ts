@@ -6,7 +6,7 @@ import {
 
 describe("contract compatibility", () => {
   it("uses the current contract version", () => {
-    expect(CONTRACT_VERSION).toBe("0.6.0");
+    expect(CONTRACT_VERSION).toBe("0.7.0");
   });
 
   it("does not call two different versions a match", () => {

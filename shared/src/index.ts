@@ -56,7 +56,33 @@ export type {
   ExecutionInstanceId,
   StageId,
   SnapshotId,
+  BindingId,
 } from "./identifiers.ts";
+
+export type {
+  BindingTargetKind,
+  BindingTargetDto,
+  BindingTargetDtoInput,
+  BindingScopeAxis,
+  BindingScopeDto,
+  BindingScopeDtoInput,
+  BindingDefinitionDto,
+  BindingDefinitionDtoInput,
+  BindingSourceDto,
+  BindingSourceDtoInput,
+  BindingRecordDto,
+  BindingRecordDtoInput,
+  BindingReasonKind,
+  BindingReasonDto,
+  BindingReasonDtoInput,
+  BindingCandidateStatus,
+  BindingCandidateDto,
+  BindingCandidateDtoInput,
+  BindingResolutionRequest,
+  BindingResolutionRequestInput,
+  BindingResolutionResponse,
+  BindingResolutionResponseInput,
+} from "./bindings.ts";
 
 export type {
   ResolutionReasonKind,
@@ -174,6 +200,13 @@ export type {
 // ---------------------------------------------------------------------------
 
 export { ASSET_TYPES, LOADING_TIERS, EXECUTION_MODES } from "./resolved-context.ts";
+export {
+  BINDING_TARGET_KINDS,
+  BINDING_SCOPE_AXES,
+  BINDING_CANDIDATE_STATUSES,
+  BINDING_REASON_KINDS,
+  BINDING_SOURCE_LAYERS,
+} from "./bindings.ts";
 export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
 export { CONFLICT_KINDS } from "./status.ts";
 export { CORE_ERROR_CODES } from "./errors.ts";
@@ -182,6 +215,27 @@ export { TRANSITION_KINDS } from "./workflow.ts";
 export {
   PROJECT_DISCOVERY_STATUSES,
 } from "./projects.ts";
+
+export {
+  parseBindingTargetDto,
+  tryParseBindingTargetDto,
+  parseBindingScopeDto,
+  tryParseBindingScopeDto,
+  parseBindingDefinitionDto,
+  tryParseBindingDefinitionDto,
+  parseBindingSourceDto,
+  tryParseBindingSourceDto,
+  parseBindingRecordDto,
+  tryParseBindingRecordDto,
+  parseBindingReasonDto,
+  tryParseBindingReasonDto,
+  parseBindingCandidateDto,
+  tryParseBindingCandidateDto,
+  parseBindingResolutionRequest,
+  tryParseBindingResolutionRequest,
+  parseBindingResolutionResponse,
+  tryParseBindingResolutionResponse,
+} from "./bindings.ts";
 
 // ---------------------------------------------------------------------------
 // Boundary validation. One named entry point per DTO: `parse*` throws,
