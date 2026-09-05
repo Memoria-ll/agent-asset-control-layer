@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  BINDING_REASON_KINDS,
   parseBindingCandidateDto,
   parseBindingDefinitionDto,
+  parseBindingReasonDto,
   parseBindingRecordDto,
   parseBindingScopeDto,
   parseBindingTargetDto,
@@ -127,6 +129,29 @@ describe("Binding shared contract", () => {
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
+  });
+
+  it("parses a fallback candidate's own reason through the standalone reason schema", () => {
+    const definition = parseBindingDefinitionDto({ bindingId: "binding-1", target, description: "" });
+    const reason = {
+      kind: "fallback_primary_unavailable" as const,
+      primaryBindingId: "primary-1",
+      degradedCapabilities: [{ capabilityId: "browser-dom", strength: "optional" as const }],
+    };
+    expect(parseBindingCandidateDto({
+      status: "fallback",
+      definition: { ...definition, fallbackFor: "primary-1" },
+      reasons: [reason],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    }).reasons[0]).toEqual(reason);
+    expect(parseBindingReasonDto(reason)).toEqual(reason);
+  });
+
+  it("publishes no reason kind outside the exported closed set", () => {
+    expect(BINDING_REASON_KINDS).not.toContain("context_missing");
+    expect(() => parseBindingReasonDto({ kind: "context_missing", axis: "roleId" })).toThrow();
   });
 
   it("reports malformed definitions through the response error shape", () => {

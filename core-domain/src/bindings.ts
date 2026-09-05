@@ -257,6 +257,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
       "The Binding source layer must match its resolution candidate source layer.",
     )]);
   }
+  const diagnostics: Detail[] = [];
   const base = [...input.entries]
     .sort((left, right) => codeUnitCompare(entryKey(left), entryKey(right)))
     .map((entry): BindingState => {
@@ -272,13 +273,19 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
         eligible: reasons.length === 1 && reasons[0]?.kind === "eligible",
       };
     });
+  // `resolveScope` names the offending selector in these diagnostics, and the
+  // candidate reason can only carry `invalid_binding`. Dropping them leaves the
+  // caller with an unavailable Binding and nothing to correct it by.
+  for (const { evaluation } of base) {
+    const reason = evaluation.reason;
+    if (reason.kind === "excluded" && reason.cause === "invalid_directory") diagnostics.push(...reason.diagnostics);
+  }
   const statesByBindingId = new Map<BindingId, BindingState[]>();
   for (const state of base) {
     const states = statesByBindingId.get(state.binding.bindingId) ?? [];
     states.push(state);
     statesByBindingId.set(state.binding.bindingId, states);
   }
-  const diagnostics: Detail[] = [];
 
   const fallbackIds = new Map<BindingId, BindingId>();
   for (const item of base) {
@@ -303,23 +310,31 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   };
   for (const id of fallbackIds.keys()) visit(id, []);
 
-  const effectiveAvailability = new Map<BindingId, boolean>();
-  const isEffectivelyAvailable = (id: BindingId, path: ReadonlySet<string> = new Set()): boolean => {
-    const cached = effectiveAvailability.get(id);
+  /**
+   * Whether the preference chain rooted at this Binding already has an eligible
+   * member. A fallback activates on the whole chain being unserved, not on its
+   * immediate primary standing down: alternating the answer at every edge makes
+   * `B -> A` unavailable whenever `A` is eligible, which then activates `C -> B`
+   * beside the very `A` that already satisfies the chain.
+   */
+  const chainCoverage = new Map<BindingId, boolean>();
+  const isChainCovered = (id: BindingId, path: ReadonlySet<string> = new Set()): boolean => {
+    const cached = chainCoverage.get(id);
     if (cached !== undefined) return cached;
     if (path.has(String(id))) return false;
     const states = statesByBindingId.get(id);
     if (states === undefined) {
-      effectiveAvailability.set(id, false);
+      chainCoverage.set(id, false);
       return false;
     }
-    const available = states.some((state) => {
-      if (!state.eligible) return false;
+    const nested = new Set([...path, String(id)]);
+    const covered = states.some((state) => {
+      if (state.eligible) return true;
       const primary = state.binding.fallbackFor;
-      return primary === undefined || !isEffectivelyAvailable(primary, new Set([...path, String(id)]));
+      return primary !== undefined && isChainCovered(primary, nested);
     });
-    effectiveAvailability.set(id, available);
-    return available;
+    chainCoverage.set(id, covered);
+    return covered;
   };
 
   const candidates: BindingCandidateDto[] = [];
@@ -357,7 +372,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
       candidates.push({ status: "eligible", definition: eligibleDefinition, reasons: item.reasons as Extract<BindingCandidateDto, { status: "eligible" }>['reasons'], ...candidateBase });
       continue;
     }
-    if (isEffectivelyAvailable(primaryId)) {
+    if (isChainCovered(primaryId)) {
       candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "fallback_not_needed", primaryBindingId: primaryId }], ...candidateBase });
     } else {
       const degradedCapabilities = item.reasons[0]?.kind === "eligible"

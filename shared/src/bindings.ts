@@ -160,9 +160,19 @@ const eligibleBindingReason = z.strictObject({
   kind: z.literal("eligible"),
   degradedCapabilities: z.optional(z.array(CapabilityDegradationDto).check(z.minLength(1))),
 });
+/**
+ * One definition for both schemas that publish this reason: a fallback candidate
+ * carries it with the degradation its own capabilities took, so a copy without
+ * `degradedCapabilities` makes `parseBindingReasonDto` reject a reason lifted
+ * out of a valid response.
+ */
+const fallbackPrimaryUnavailableReason = z.strictObject({
+  kind: z.literal("fallback_primary_unavailable"),
+  primaryBindingId: BindingId,
+  degradedCapabilities: z.optional(z.array(CapabilityDegradationDto).check(z.minLength(1))),
+});
 const unavailableBindingReasonArms = [
   z.strictObject({ kind: z.literal("scope_mismatch"), axis: BindingScopeAxis }),
-  z.strictObject({ kind: z.literal("context_missing"), axis: BindingScopeAxis }),
   z.strictObject({ kind: z.literal("binding_disabled"), actorBindingId: BindingId }),
   z.strictObject({ kind: z.literal("binding_overridden"), actorBindingId: BindingId }),
   z.strictObject({ kind: z.literal("target_missing"), targetId: NonEmptyString }),
@@ -174,7 +184,7 @@ const unavailableBindingReasonArms = [
   z.strictObject({ kind: z.literal("capability_unavailable"), capabilityId: NonEmptyString }),
   z.strictObject({ kind: z.literal("capability_not_allowed"), capabilityId: NonEmptyString }),
   z.strictObject({ kind: z.literal("fallback_not_needed"), primaryBindingId: BindingId }),
-  z.strictObject({ kind: z.literal("fallback_primary_unavailable"), primaryBindingId: BindingId }),
+  fallbackPrimaryUnavailableReason,
   z.strictObject({ kind: z.literal("invalid_binding"), bindingId: BindingId }),
 ] as const;
 const unavailableBindingReasons = z.discriminatedUnion("kind", unavailableBindingReasonArms);
@@ -182,13 +192,17 @@ export const BindingReasonDto = z.discriminatedUnion("kind", [eligibleBindingRea
 export type BindingReasonDto = z.infer<typeof BindingReasonDto>;
 export type BindingReasonDtoInput = z.input<typeof BindingReasonDto>;
 
-const fallbackBindingReasons = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("fallback_primary_unavailable"),
-    primaryBindingId: BindingId,
-    degradedCapabilities: z.optional(z.array(CapabilityDegradationDto).check(z.minLength(1))),
-  }),
-]);
+/**
+ * `BINDING_REASON_KINDS` is the closed set consumers enumerate; the union arms
+ * are internal and invisible to them. This pins the two together, so an arm
+ * carrying a kind the array omits fails to compile instead of publishing a value
+ * every consumer treats as impossible.
+ */
+type SameMembers<Left, Right> = [Left] extends [Right] ? ([Right] extends [Left] ? true : never) : never;
+const bindingReasonArmsMatchKinds: SameMembers<BindingReasonDto["kind"], BindingReasonKind> = true;
+void bindingReasonArmsMatchKinds;
+
+const fallbackBindingReasons = z.discriminatedUnion("kind", [fallbackPrimaryUnavailableReason]);
 const bindingCandidateBase = {
   revision: AssetRevision,
   source: BindingSourceDto,

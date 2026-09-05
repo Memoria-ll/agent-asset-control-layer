@@ -233,6 +233,61 @@ describe("binding resolution", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("leaves a longer fallback chain inactive while its head is eligible", () => {
+    const head = binding("chain-head", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
+    const first = binding("chain-first", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-head\n", "scope.role: [reviewer]\n");
+    const second = binding("chain-second", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-first\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([head, first, second]),
+      catalog,
+    }));
+
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-head"))
+      .toMatchObject({ status: "eligible" });
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-first"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "fallback_not_needed", primaryBindingId: "chain-head" }] });
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-second"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "fallback_not_needed", primaryBindingId: "chain-first" }] });
+    expect(result.candidates.filter((candidate) => candidate.status === "fallback")).toHaveLength(0);
+  });
+
+  it("activates the one fallback whose chain is unserved", () => {
+    const head = binding("chain-head", "metadata.target-kind: model\nmetadata.model-id: missing-model\n", "scope.role: [reviewer]\n");
+    const first = binding("chain-first", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-head\n", "scope.role: [reviewer]\n");
+    const second = binding("chain-second", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-first\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([head, first, second]),
+      catalog,
+    }));
+
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-head"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "target_missing", targetId: "missing-model" }] });
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-first"))
+      .toMatchObject({ status: "fallback", reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "chain-head" }] });
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-second"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "fallback_not_needed", primaryBindingId: "chain-first" }] });
+  });
+
+  it("keeps the offending directory selector diagnostics on an unavailable Binding", () => {
+    const invalid = binding(
+      "reviewer-directory",
+      "metadata.target-kind: model\nmetadata.model-id: gpt-5\n",
+      "scope.directory: [relative/path]\n",
+    );
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([invalid]),
+      catalog,
+    }));
+
+    expect(result.candidates[0]).toMatchObject({ status: "unavailable", reasons: [{ kind: "invalid_binding" }] });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "invalid_directory",
+        path: ["snapshot", "candidate", "reviewer-directory", "rule", "selectors", "directory"],
+      }),
+    ]));
+  });
+
   it("does not activate a fallback while its primary is eligible", () => {
     const primary = binding("reviewer-primary", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
     const fallback = binding("reviewer-fallback", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: reviewer-primary\n", "scope.role: [reviewer]\n");
