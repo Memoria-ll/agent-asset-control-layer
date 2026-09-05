@@ -340,7 +340,8 @@ describe("resolveCapabilityBindings", () => {
     const parsed = expectValue(parseAssetDocument(`---
 id: skill-binding
 type: skill
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 capability.required: [browser]
 capability.features.browser: [read]
@@ -396,7 +397,8 @@ capability.features.browser: [read]
     const fallbackParsed = expectValue(parseAssetDocument(`---
 id: skill-binding-fallback
 type: skill
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 capability.required: [browser]
 capability.fallback.browser: filesystem
@@ -421,7 +423,8 @@ capability.features.browser: [read]
     const parsed = expectValue(parseAssetDocument(`---
 id: skill-binding-${strength}
 type: skill
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 capability.${strength}: [browser]
 capability.features.browser: [read]
