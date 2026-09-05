@@ -66,17 +66,16 @@ const diagnosticDetails = (resolved: Awaited<ReturnType<typeof resolveAssets>>):
  * Definition owns and no Binding repeats. `undefined` means the context already
  * carries every axis this can supply, so nothing has to be resolved again.
  *
- * Read from a completed resolution rather than from the store, because which
+ * Read from a completed match rather than from the store, because which
  * Definition applies is itself a resolution question: a raw lookup sees a
  * same-ID Project override as two files and calls it ambiguous, and reads a
  * Definition the current scope excludes as if it applied.
  */
 const workflowStageContext = (
-  request: { readonly context: ResolutionContextDto },
+  context: ResolutionContextDto,
   resolved: ResolvedAssets,
   catalog: MetadataCatalog,
 ): AssetResult<ResolutionContextDto | undefined> => {
-  const context = request.context;
   const selection = context.workflow;
   if (selection.kind !== "selected") return { ok: true, value: undefined };
   if (context.roleId !== undefined && context.taskTypeId !== undefined) return { ok: true, value: undefined };
@@ -169,7 +168,9 @@ const workflowStageContext = (
 /** Resolve Binding Assets through the generic filesystem resolution pipeline. */
 export const resolveBindingAssets = async (
   requestInput: unknown,
-  options: ResolveAssetsOptions,
+  // `deriveContext` is not among them: this service owns the Workflow Stage
+  // projection, so a caller-supplied hook could only be one that is never run.
+  options: Omit<ResolveAssetsOptions, "deriveContext">,
   catalog: MetadataCatalog,
 ): Promise<AssetResult<BindingResolutionResponse>> => {
   const parsed = tryParseBindingResolutionRequest(requestInput);
@@ -181,19 +182,10 @@ export const resolveBindingAssets = async (
   }
 
   const { loadingTiers, ...unfilteredRequest } = parsed.value;
-  const firstPass = await resolveAssets(unfilteredRequest, options);
-  if (!firstPass.ok) return firstPass;
-
-  // Scope matching reads an axis the context omits as neutral, so an axis the
-  // Workflow owns has to be in place before the Bindings are matched — and the
-  // Workflow itself has to be resolved to know which Definition applies. Hence
-  // two passes, and only for a selected Stage that leaves an axis open: every
-  // other request keeps the first pass's result.
-  const derived = workflowStageContext(unfilteredRequest, firstPass.value, catalog);
-  if (!derived.ok) return derived;
-  const resolved = derived.value === undefined
-    ? firstPass
-    : await resolveAssets({ ...unfilteredRequest, context: derived.value }, options);
+  const resolved = await resolveAssets(unfilteredRequest, {
+    ...options,
+    deriveContext: (context, firstMatch) => workflowStageContext(context, firstMatch, catalog),
+  });
   if (!resolved.ok) return resolved;
 
   const bindingsByCandidate = new Map<string, StoredAsset>();

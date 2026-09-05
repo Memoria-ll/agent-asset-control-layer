@@ -185,6 +185,26 @@ describe("Binding shared contract", () => {
     })).toThrow();
   });
 
+  it("accepts an overlay record only from a Project source", () => {
+    const overlay = {
+      operation: "override" as const,
+      definition: { bindingId: "binding-1", target, description: "" },
+      revision: "revision-1",
+      loadingTier: "core" as const,
+    };
+    expect(parseBindingRecordDto({ ...overlay, source: { layer: "project", projectId: "project-1" } }).source)
+      .toEqual({ layer: "project", projectId: "project-1" });
+    expect(() => parseBindingRecordDto({ ...overlay, source: { layer: "global" } })).toThrow();
+    expect(() => parseBindingRecordDto({ ...overlay, source: { layer: "personal" } })).toThrow();
+    expect(() => parseBindingRecordDto({
+      operation: "disable",
+      bindingId: "binding-1",
+      revision: "revision-1",
+      loadingTier: "core",
+      source: { layer: "global" },
+    })).toThrow();
+  });
+
   it("accepts only Marker-shaped Project ids as a Binding source", () => {
     expect(parseBindingSourceDto({ layer: "project", projectId: "project-1" }))
       .toEqual({ layer: "project", projectId: "project-1" });

@@ -145,14 +145,20 @@ const bindingRecordBase = {
   source: BindingSourceDto,
   loadingTier: LoadingTier,
 };
+/**
+ * Only a Project layer may carry an operation other than `add`: candidate
+ * projection rejects every other combination outright, so an overlay record
+ * naming a Global or Personal source is one Core can never resolve.
+ */
+const bindingOverlayRecordBase = { ...bindingRecordBase, source: bindingSourceArms[2] };
 export const BindingRecordDto = z.discriminatedUnion("operation", [
   z.strictObject({ operation: z.literal("add"), definition: BindingDefinitionDto, ...bindingRecordBase }),
-  z.strictObject({ operation: z.literal("override"), definition: BindingDefinitionDto, ...bindingRecordBase }),
+  z.strictObject({ operation: z.literal("override"), definition: BindingDefinitionDto, ...bindingOverlayRecordBase }),
   z.strictObject({
     operation: z.literal("disable"),
     bindingId: BindingId,
     scope: z.optional(BindingScopeDto),
-    ...bindingRecordBase,
+    ...bindingOverlayRecordBase,
   }),
 ]);
 export type BindingRecordDto = z.infer<typeof BindingRecordDto>;
