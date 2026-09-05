@@ -1,6 +1,6 @@
 import { EXECUTION_MODES } from "@aacl/shared";
 import type { AssetId, AssetRevision, ExecutionMode, LoadingTier, SkillId } from "@aacl/shared";
-import type { CapabilityDependency } from "./capabilities/dependencies.ts";
+import type { CapabilityDependency, CapabilityReference } from "./capabilities/dependencies.ts";
 import {
   asAssetId,
   parseAssetDocument,
@@ -212,9 +212,12 @@ const optionalMetadata = (metadata: Record<string, string | readonly string[]>, 
 };
 
 /**
- * Scope axes reach the serializer already sorted, the shape `validateAsset` produces when the
- * equivalent document is read from disk. Duplicates stay the serializer's to reject, so a caller
- * supplying them is answered the same way whichever side it entered through.
+ * The serializer demands canonical order in exactly three places — `requires`, each scope axis,
+ * and every capability feature list — and `validateAsset` produces all three when it reads the
+ * equivalent document. These helpers put the constructed Asset in the same shape, so one value is
+ * accepted whichever side it entered through. Duplicates stay the serializer's to reject, which
+ * is the answer the loading path gives them too. Metadata lists are deliberately absent: neither
+ * path orders them, so a caller's order is the stored order.
  */
 const sortedScope = (
   scope: SkillInput["scope"],
@@ -225,6 +228,22 @@ const sortedScope = (
   }
   return sorted;
 };
+
+const sortedReference = (reference: CapabilityReference): CapabilityReference =>
+  reference.features === undefined
+    ? reference
+    : { capabilityId: reference.capabilityId, features: [...reference.features].sort(codeUnitCompare) };
+
+const sortedDependencies = (
+  dependencies: readonly CapabilityDependency[],
+): readonly CapabilityDependency[] =>
+  dependencies.map((dependency) => dependency.strength === "fallback"
+    ? {
+        strength: dependency.strength,
+        capability: sortedReference(dependency.capability),
+        fallbackFor: sortedReference(dependency.fallbackFor),
+      }
+    : { strength: dependency.strength, capability: sortedReference(dependency.capability) });
 
 export const parseSkillAsset = (asset: CanonicalAsset): AssetResult<CanonicalSkill> => {
   const details: Detail[] = [];
@@ -342,7 +361,7 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
     requires: [...(input.requires ?? [])].sort(codeUnitCompare),
     ...(input.capabilityDependencies === undefined || input.capabilityDependencies.length === 0
       ? {}
-      : { capabilityDependencies: input.capabilityDependencies }),
+      : { capabilityDependencies: sortedDependencies(input.capabilityDependencies) }),
     ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
     body: input.body,
   };

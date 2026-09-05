@@ -297,6 +297,35 @@ Inspect the browser DOM.
     expect(expectOk(serializeCanonicalAsset(parseAsset(serialized)))).toBe(serialized);
   });
 
+  it("normalizes supplied capability feature lists the way a loaded document is normalized", () => {
+    const created = expectOk(createSkillAsset({
+      id: skillId("unsorted-features"),
+      tier: "on-demand",
+      displayName: "Unsorted features",
+      description: "Supplies feature sets out of order.",
+      kind: "advisory",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      capabilityDependencies: [
+        {
+          strength: "required",
+          capability: { capabilityId: capabilityId("filesystem"), features: [featureId("write"), featureId("read")] },
+        },
+        {
+          strength: "fallback",
+          capability: { capabilityId: capabilityId("workspace"), features: [featureId("write"), featureId("read")] },
+          fallbackFor: { capabilityId: capabilityId("filesystem"), features: [featureId("write"), featureId("read")] },
+        },
+      ],
+      body: "Report advice.",
+    }));
+
+    const serialized = expectOk(serializeCanonicalAsset(created));
+    expect(serialized).toContain("capability.features.filesystem: [read, write]");
+    expect(serialized).toContain("capability.fallback-features.filesystem: [read, write]");
+  });
+
   it("normalizes supplied scope values the way a loaded document is normalized", () => {
     const created = expectOk(createSkillAsset({
       id: skillId("unsorted-scope"),

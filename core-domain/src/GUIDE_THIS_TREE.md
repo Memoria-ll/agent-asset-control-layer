@@ -7,7 +7,7 @@
 - asset frontmatter は versioned strict schema。未知の top-level key と未知 schema version を拒否する。新しい top-level 欄・namespace の追加は on-disk 公開契約の変更として `save-schema-check` を通し、project stage に応じて migration と asset schema version 更新の要否を決める。
 - capability id と feature id は frontmatter キーへ逐語で埋め込む（`capability.features.<capabilityId>`）。識別子を受理する述語は `tokens.ts` の `isLowerKebabToken` 一本に揃える。在庫・offer 側だけ緩めると、保存できない依存を組み立てられてしまう。
 - capability 依存の同一性キーは capabilityId 単独。frontmatter は capability ごとに1エントリしか持たないので、1つの capability への primary 参照は1件、その fallback も1件、fallback の `fallbackFor` は primary の feature 集合を逐語で再現する。feature 集合で参照を区別する設計は on-disk 表現を持たない。
-- type 固有の Canonical Asset 構築関数は、`validateAsset` が読込時に施すのと同じ正規化を通してから serializer へ渡す。scope 軸・`requires`・`conflicts`・capability 依存の順序がこれにあたり、片方だけ正規化すると同じ値が構築経由では拒否され読込経由では通る。
+- `serializeCanonicalAsset` が正準順序を要求するのは `requires`、各 scope 軸、capability の全 feature list（primary / fallback / `fallbackFor`）の3箇所だけで、`validateAsset` は読込時にその3つを整列する。type 固有の Canonical Asset 構築関数はこの3つを整列してから serializer へ渡す。片方だけ整列すると、同じ値が読込経由では通り構築経由では拒否される。metadata のリスト値はどちらの経路も並べ替えないので、caller の順序がそのまま保存順になる。
 - Skill の `metadata.*` は契約が名前を与えていないキーも受理し、`CanonicalSkill.additionalMetadata` として往復させる。type 固有 metadata の許可値集合は #87 が導入するまで存在しないので、type 固有 parser を足すときも契約外キーを落とさない。
 - `AgentExecutionRecord` を DTO へ投影するときは `tryParseAgentExecutionDto` で runtime validation する。
 - `AgentExecutionRecord.providerId` は、参照する Runtime と Model の `providerId` の両方に一致させる。各 ID の存在確認だけで組合せを受理しない。
