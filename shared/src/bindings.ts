@@ -141,6 +141,7 @@ export type BindingSourceDtoInput = z.input<typeof BindingSourceDto>;
 const bindingRecordBase = {
   revision: AssetRevision,
   source: BindingSourceDto,
+  loadingTier: LoadingTier,
 };
 export const BindingRecordDto = z.discriminatedUnion("operation", [
   z.strictObject({ operation: z.literal("add"), definition: BindingDefinitionDto, ...bindingRecordBase }),
@@ -191,6 +192,7 @@ const fallbackBindingReasons = z.discriminatedUnion("kind", [
 const bindingCandidateBase = {
   revision: AssetRevision,
   source: BindingSourceDto,
+  loadingTier: LoadingTier,
 };
 export const BindingCandidateDto = z.discriminatedUnion("status", [
   z.strictObject({
@@ -212,7 +214,17 @@ export const BindingCandidateDto = z.discriminatedUnion("status", [
     reasons: z.array(unavailableBindingReasons).check(z.minLength(1)),
     ...bindingCandidateBase,
   }),
-]);
+]).check(z.refine((candidate) => {
+  if (candidate.status === "eligible") return true;
+  if (candidate.status === "fallback") {
+    return candidate.reasons.every(({ primaryBindingId }) => primaryBindingId === candidate.definition.fallbackFor);
+  }
+  if (candidate.definition !== undefined && candidate.definition.bindingId !== candidate.bindingId) return false;
+  return candidate.reasons.every((reason) => {
+    if (reason.kind !== "fallback_not_needed" && reason.kind !== "fallback_primary_unavailable") return true;
+    return candidate.definition?.fallbackFor === reason.primaryBindingId;
+  });
+}, { error: "Binding candidate identifiers and fallback relations must be consistent." }));
 export type BindingCandidateDto = z.infer<typeof BindingCandidateDto>;
 export type BindingCandidateDtoInput = z.input<typeof BindingCandidateDto>;
 

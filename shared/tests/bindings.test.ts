@@ -32,12 +32,14 @@ describe("Binding shared contract", () => {
       definition: { bindingId: "binding-1", target: { kind: "model", modelId: "gpt-5" }, description: "" },
       source: { layer: "global" },
       revision: "revision-1",
+      loadingTier: "core",
     }).source).toEqual({ layer: "global" });
     expect(parseBindingRecordDto({
       operation: "add",
       definition: { bindingId: "binding-1", target: { kind: "model", modelId: "gpt-5" }, description: "" },
       source: { layer: "personal" },
       revision: "revision-1",
+      loadingTier: "core",
     }).source).toEqual({ layer: "personal" });
     expect(parseBindingRecordDto({
       operation: "disable",
@@ -45,6 +47,7 @@ describe("Binding shared contract", () => {
       scope: { roleId: ["reviewer"] },
       source: { layer: "project", projectId: "project-1" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toMatchObject({ operation: "disable", bindingId: "binding-1" });
     expect(() => parseBindingRecordDto({
       operation: "disable",
@@ -52,12 +55,14 @@ describe("Binding shared contract", () => {
       target,
       source: { layer: "project", projectId: "project-1" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toThrow();
     expect(() => parseBindingRecordDto({
       operation: "add",
       definition: { bindingId: "binding-1", target: { kind: "model", modelId: "gpt-5" }, description: "" },
       source: { layer: "project" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toThrow();
   });
 
@@ -70,6 +75,7 @@ describe("Binding shared contract", () => {
       reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "primary-1" }],
       source: { layer: "global" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toMatchObject({ status: "fallback", definition: { fallbackFor: "primary-1" } });
     expect(() => parseBindingCandidateDto({
       status: "fallback",
@@ -77,6 +83,7 @@ describe("Binding shared contract", () => {
       reasons: [{ kind: "eligible" }],
       source: { layer: "global" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toThrow();
     expect(() => parseBindingCandidateDto({
       status: "fallback",
@@ -85,6 +92,7 @@ describe("Binding shared contract", () => {
       reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "primary-1" }],
       source: { layer: "global" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toThrow();
     expect(() => parseBindingCandidateDto({
       status: "unavailable",
@@ -92,6 +100,7 @@ describe("Binding shared contract", () => {
       reasons: [{ kind: "eligible" }],
       source: { layer: "global" },
       revision: "revision-1",
+      loadingTier: "core",
     })).toThrow();
     expect(() => parseBindingCandidateDto({
       status: "eligible",
@@ -99,6 +108,24 @@ describe("Binding shared contract", () => {
       reasons: [{ kind: "eligible" }],
       source: { layer: "global" },
       revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
+    expect(() => parseBindingCandidateDto({
+      status: "fallback",
+      definition: { ...definition, fallbackFor: "primary-1" },
+      reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "primary-2" }],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
+    expect(() => parseBindingCandidateDto({
+      status: "unavailable",
+      bindingId: "binding-1",
+      definition: { ...definition, bindingId: "binding-2" },
+      reasons: [{ kind: "target_missing", targetId: "missing" }],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
     })).toThrow();
   });
 

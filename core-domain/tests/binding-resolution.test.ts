@@ -215,6 +215,24 @@ describe("binding resolution", () => {
     }
   });
 
+  it("does not apply an overridden fallback relation from an inactive same-ID candidate", () => {
+    const base = binding("same-id", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: missing-primary\n", "scope.role: [reviewer]\n");
+    const overlay = binding("same-id", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n", "override");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([base, overlay], [
+        { layer: "global", sourceId: "global-source" },
+        { layer: "project", sourceId: "project-source" },
+      ]),
+      catalog,
+    }));
+
+    expect(result.candidates.find((candidate) => candidate.status === "unavailable"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "binding_overridden" }] });
+    expect(result.candidates.find((candidate) => candidate.status === "eligible"))
+      .toMatchObject({ status: "eligible", definition: { bindingId: "same-id" } });
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("does not activate a fallback while its primary is eligible", () => {
     const primary = binding("reviewer-primary", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
     const fallback = binding("reviewer-fallback", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: reviewer-primary\n", "scope.role: [reviewer]\n");
