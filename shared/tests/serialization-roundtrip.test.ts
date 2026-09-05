@@ -147,6 +147,44 @@ const representativeInputs: Record<string, unknown> = {
     projectRoot: "/work/project",
     projectId: "project-1",
   },
+  BindingTargetDto: { kind: "runtime-model", runtimeId: "runtime-1", modelId: "model-1" },
+  BindingScopeDto: { roleId: ["role-1"], directory: ["/workspace"] },
+  BindingDefinitionDto: {
+    bindingId: "binding-1",
+    target: { kind: "runtime-model", runtimeId: "runtime-1", modelId: "model-1" },
+    scope: { roleId: ["role-1"] },
+    description: "Binding description",
+  },
+  BindingSourceDto: { layer: "project", projectId: "project-1" },
+  BindingRecordDto: {
+    operation: "add",
+    definition: {
+      bindingId: "binding-1",
+      target: { kind: "model", modelId: "model-1" },
+      description: "Binding description",
+    },
+    source: { layer: "project", projectId: "project-1" },
+    revision: "revision-1",
+  },
+  BindingReasonDto: { kind: "eligible" },
+  BindingCandidateDto: {
+    status: "eligible",
+    definition: {
+      bindingId: "binding-1",
+      target: { kind: "model", modelId: "model-1" },
+      description: "Binding description",
+    },
+    reasons: [{ kind: "eligible" }],
+    source: { layer: "project", projectId: "project-1" },
+    revision: "revision-1",
+  },
+  BindingResolutionRequest: {
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+  },
+  BindingResolutionResponse: {
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    candidates: [],
+  },
 };
 
 describe("contract serialization", () => {

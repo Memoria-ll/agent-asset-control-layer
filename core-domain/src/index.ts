@@ -2,6 +2,20 @@ export { coreFailure, toCoreErrorDto } from "./failures.ts";
 export type { AssetResult, CoreFailure } from "./failures.ts";
 
 export {
+  asBindingId,
+  bindingAssetId,
+  parseBindingAsset,
+  parseBindingDocument,
+  resolveBindings,
+} from "./bindings.ts";
+export type {
+  CanonicalBinding,
+  BindingResolutionInput,
+  BindingResolutionEntry,
+  BindingResolutionResult,
+} from "./bindings.ts";
+
+export {
   asAssetId,
   parseAssetDocument,
   serializeCanonicalAsset,

@@ -18,7 +18,8 @@ export type AssetTypeExecutionProfile =
   | "workflow-definition"
   | "catalog-definition"
   | "policy-input"
-  | "guardrail-input";
+  | "guardrail-input"
+  | "binding-definition";
 
 export type AssetTypeMergePolicy = {
   readonly defaultMode: "additive";
@@ -69,4 +70,5 @@ export const DEFAULT_ASSET_TYPE_CONTRACTS: AssetTypeContractRegistry = {
   "task-type": contract(false, "catalog-definition", false),
   policy: contract(false, "policy-input", false),
   guardrail: contract(false, "guardrail-input", false),
+  binding: contract(false, "binding-definition", true),
 };
