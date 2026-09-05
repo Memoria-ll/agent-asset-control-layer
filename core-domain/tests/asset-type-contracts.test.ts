@@ -309,6 +309,7 @@ describe("asset type contracts", () => {
       "catalog-definition": [],
       "policy-input": [],
       "guardrail-input": [],
+      "binding-definition": [],
     };
     for (const [assetType, contract] of Object.entries(DEFAULT_ASSET_TYPE_CONTRACTS)) {
       actual[contract.executionProfile].push(assetType as AssetType);
@@ -321,10 +322,11 @@ describe("asset type contracts", () => {
       "catalog-definition": ["role", "task-type"],
       "policy-input": ["policy"],
       "guardrail-input": ["guardrail"],
+      "binding-definition": ["binding"],
     });
   });
 
-  it("allows capability dependencies only for skills in the default registry", () => {
+  it("exposes capability dependency permissions in the default registry", () => {
     expect(Object.fromEntries(
       Object.entries(DEFAULT_ASSET_TYPE_CONTRACTS).map(([assetType, contract]) => [assetType, contract.allowsCapabilityDependencies]),
     )).toEqual({
@@ -336,6 +338,7 @@ describe("asset type contracts", () => {
       "task-type": false,
       policy: false,
       guardrail: false,
+      binding: true,
     });
   });
 

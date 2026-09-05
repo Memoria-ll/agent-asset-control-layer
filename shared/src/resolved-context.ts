@@ -32,6 +32,7 @@ export const ASSET_TYPES = [
   "policy",
   "guardrail",
   "knowledge",
+  "binding",
 ] as const;
 export const AssetType = z.enum(ASSET_TYPES);
 export type AssetType = z.infer<typeof AssetType>;

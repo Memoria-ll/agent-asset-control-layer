@@ -135,6 +135,15 @@ export type {
   SkillLoadResult,
   StoredSkill,
 } from "./assets/filesystem-skill-store.ts";
+export {
+  loadBinding,
+  saveBinding,
+} from "./assets/filesystem-binding-store.ts";
+export type {
+  BindingLoadResult,
+  SaveBindingInput,
+  StoredBinding,
+} from "./assets/filesystem-binding-store.ts";
 export { toResolutionSnapshot } from "./assets/resolution-input.ts";
 export type { ResolutionInputProjection } from "./assets/resolution-input.ts";
 export { resolveAssets } from "./assets/resolve-assets.ts";
@@ -143,6 +152,10 @@ export type {
   ResolvedAssets,
   SharedManagedAssetRoot,
 } from "./assets/resolve-assets.ts";
+export { resolveBindingAssets } from "./assets/binding-resolution.ts";
+export type { BindingResolutionServiceResult } from "./assets/binding-resolution.ts";
+export { resolveSelectedStageRequirements } from "./workflow/selected-stage-requirements.ts";
+export type { SelectedStageRequirementsServiceResult } from "./workflow/selected-stage-requirements.ts";
 
 export { loadMetadataCatalog } from "./catalog/filesystem-catalog.ts";
 export type {

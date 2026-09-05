@@ -123,6 +123,15 @@ execution has; a Model describes what performs that execution. This allows the s
 with different models, while still letting model-specific or Role × Model guidance be expressed when
 needed.
 
+Role, task type, workflow, and stage are also separate dimensions. A Role identifies a reusable
+responsibility, a task type identifies the purpose of the work, a workflow identifies the process, and
+a stage identifies the current position in that process. Task-specific behavior is selected by their
+combination rather than encoded by creating a different Role for every kind of work.
+
+Before resolving execution assets, orchestration turns the selected Workflow and Stage requirements
+into an explicit execution context containing the applicable Role and task type. The resolver consumes
+that context; it does not infer a missing context axis from the candidates it is evaluating.
+
 ## Resolve, don't dump
 
 The Core does not simply load every asset into every execution.
@@ -312,6 +321,7 @@ the same canonical assets and resolution semantics through compatible interfaces
 - **One source of truth.** Reusable assets should not have to drift across tool-specific copies.
 - **User-defined applicability.** Users define where assets apply; the resolver evaluates those scopes against each execution.
 - **Role and model are separate dimensions.** The same role can move across models, while model-specific and role × model guidance remains expressible.
+- **Execution dimensions compose.** Role states reusable responsibility, task type states work purpose, Workflow states process, and Stage states position; orchestration supplies their explicit combination before resolution.
 - **Shared management, distinct semantics.** Asset types can share lifecycle and resolution infrastructure without being forced into identical behavior.
 - **Resolve, don't dump.** Give each execution what it needs instead of loading everything by default.
 - **Resolution is a Core decision.** Applicability is decided centrally and should not be silently reinterpreted by adapters or clients.

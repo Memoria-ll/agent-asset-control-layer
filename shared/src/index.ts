@@ -56,7 +56,44 @@ export type {
   ExecutionInstanceId,
   StageId,
   SnapshotId,
+  BindingId,
 } from "./identifiers.ts";
+
+export type {
+  BindingTargetKind,
+  BindingTargetDto,
+  BindingTargetDtoInput,
+  BindingScopeAxis,
+  BindingScopeDto,
+  BindingScopeDtoInput,
+  BindingDefinitionDto,
+  BindingDefinitionDtoInput,
+  BindingSourceDto,
+  BindingSourceDtoInput,
+  BindingRecordDto,
+  BindingRecordDtoInput,
+  BindingTargetIssueKind,
+  BindingTargetIssueDto,
+  BindingTargetIssueDtoInput,
+  BindingTargetAvailabilityStatus,
+  BindingTargetAvailabilityDto,
+  BindingTargetAvailabilityDtoInput,
+  BindingFallbackRelationKind,
+  BindingFallbackRelationDto,
+  BindingFallbackRelationDtoInput,
+  BindingCandidateDto,
+  BindingCandidateDtoInput,
+  BindingResolutionRequest,
+  BindingResolutionRequestInput,
+  SelectedStageRequirementsDto,
+  SelectedStageRequirementsDtoInput,
+  SelectedStageRequirementsRequest,
+  SelectedStageRequirementsRequestInput,
+  SelectedStageRequirementsResponse,
+  SelectedStageRequirementsResponseInput,
+  BindingResolutionResponse,
+  BindingResolutionResponseInput,
+} from "./bindings.ts";
 
 export type {
   ResolutionReasonKind,
@@ -174,6 +211,14 @@ export type {
 // ---------------------------------------------------------------------------
 
 export { ASSET_TYPES, LOADING_TIERS, EXECUTION_MODES } from "./resolved-context.ts";
+export {
+  BINDING_TARGET_KINDS,
+  BINDING_SCOPE_AXES,
+  BINDING_TARGET_AVAILABILITY_STATUSES,
+  BINDING_TARGET_ISSUE_KINDS,
+  BINDING_FALLBACK_RELATION_KINDS,
+  BINDING_SOURCE_LAYERS,
+} from "./bindings.ts";
 export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
 export { CONFLICT_KINDS } from "./status.ts";
 export { CORE_ERROR_CODES } from "./errors.ts";
@@ -181,7 +226,39 @@ export { COMPATIBILITY_STATUSES } from "./contract-version.ts";
 export { TRANSITION_KINDS } from "./workflow.ts";
 export {
   PROJECT_DISCOVERY_STATUSES,
+  isProjectMarkerId,
 } from "./projects.ts";
+
+export {
+  parseBindingTargetDto,
+  tryParseBindingTargetDto,
+  parseBindingScopeDto,
+  tryParseBindingScopeDto,
+  parseBindingDefinitionDto,
+  tryParseBindingDefinitionDto,
+  parseBindingSourceDto,
+  tryParseBindingSourceDto,
+  parseBindingRecordDto,
+  tryParseBindingRecordDto,
+  parseBindingTargetIssueDto,
+  tryParseBindingTargetIssueDto,
+  parseBindingTargetAvailabilityDto,
+  tryParseBindingTargetAvailabilityDto,
+  parseBindingFallbackRelationDto,
+  tryParseBindingFallbackRelationDto,
+  parseBindingCandidateDto,
+  tryParseBindingCandidateDto,
+  parseBindingResolutionRequest,
+  tryParseBindingResolutionRequest,
+  parseSelectedStageRequirementsDto,
+  tryParseSelectedStageRequirementsDto,
+  parseSelectedStageRequirementsRequest,
+  tryParseSelectedStageRequirementsRequest,
+  parseSelectedStageRequirementsResponse,
+  tryParseSelectedStageRequirementsResponse,
+  parseBindingResolutionResponse,
+  tryParseBindingResolutionResponse,
+} from "./bindings.ts";
 
 // ---------------------------------------------------------------------------
 // Boundary validation. One named entry point per DTO: `parse*` throws,

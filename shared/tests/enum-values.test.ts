@@ -11,6 +11,12 @@ import {
   PROJECT_DISCOVERY_STATUSES,
   RESOLUTION_REASON_KINDS,
   TRANSITION_KINDS,
+  BINDING_TARGET_KINDS,
+  BINDING_SCOPE_AXES,
+  BINDING_TARGET_AVAILABILITY_STATUSES,
+  BINDING_TARGET_ISSUE_KINDS,
+  BINDING_FALLBACK_RELATION_KINDS,
+  BINDING_SOURCE_LAYERS,
 } from "../src/index.ts";
 // The schemas these arrays build are internal; the test reaches them through the
 // modules that own them, the way no consumer needs to.
@@ -22,7 +28,7 @@ import { TransitionKind } from "../src/workflow.ts";
 
 describe("frozen contract enum values", () => {
   it.each([
-    ["ASSET_TYPES", ASSET_TYPES, ["skill", "rule", "role", "workflow", "task-type", "policy", "guardrail", "knowledge"]],
+    ["ASSET_TYPES", ASSET_TYPES, ["skill", "rule", "role", "workflow", "task-type", "policy", "guardrail", "knowledge", "binding"]],
     ["RESOLUTION_REASON_KINDS", RESOLUTION_REASON_KINDS, ["included", "excluded", "overridden", "disabled", "unavailable"]],
     ["CONFLICT_KINDS", CONFLICT_KINDS, ["exclusive_tie", "mandatory_conflict", "operation_conflict", "duplicate_identity", "dependency_cycle", "dependency_failure", "asset_type_conflict", "capability_failure"]],
     ["AVAILABILITY_STATUSES", AVAILABILITY_STATUSES, ["available", "degraded", "unavailable"]],
@@ -32,6 +38,12 @@ describe("frozen contract enum values", () => {
     ["COMPATIBILITY_STATUSES", COMPATIBILITY_STATUSES, ["compatible", "incompatible"]],
     ["TRANSITION_KINDS", TRANSITION_KINDS, ["advance", "retry", "reject", "return"]],
     ["PROJECT_DISCOVERY_STATUSES", PROJECT_DISCOVERY_STATUSES, ["initialized", "uninitialized", "invalid", "mismatch"]],
+    ["BINDING_TARGET_KINDS", BINDING_TARGET_KINDS, ["provider", "runtime", "model", "runtime-model"]],
+    ["BINDING_SCOPE_AXES", BINDING_SCOPE_AXES, ["projectId", "workflowId", "stageId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId", "directory"]],
+    ["BINDING_TARGET_AVAILABILITY_STATUSES", BINDING_TARGET_AVAILABILITY_STATUSES, ["available", "unavailable"]],
+    ["BINDING_TARGET_ISSUE_KINDS", BINDING_TARGET_ISSUE_KINDS, ["target_missing", "target_provider_mismatch"]],
+    ["BINDING_FALLBACK_RELATION_KINDS", BINDING_FALLBACK_RELATION_KINDS, ["none", "linked", "missing", "cycle"]],
+    ["BINDING_SOURCE_LAYERS", BINDING_SOURCE_LAYERS, ["global", "personal", "project"]],
   ])("keeps %s stable", (_name, members, expected) => {
     expect(
       [...members],

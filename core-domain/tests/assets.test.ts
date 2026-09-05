@@ -243,7 +243,7 @@ tail
         const asset = parseAndValidate(`---
 id: all-members-${type.replace(/-/g, "")}-${tier.replace(/-/g, "")}
 type: ${type}
-schema-version: 3
+schema-version: ${type === "binding" ? 4 : 3}
 operation: add
 tier: ${tier}
 ---
@@ -340,7 +340,7 @@ overrides: [other-asset]
     expect(failurePath(unknownKey)).toEqual(["document", "frontmatter", "overrides"]);
 
     const unsupported = validateAsset(parseDocument(`---
-schema-version: 4
+schema-version: 5
 operation: add
 id: future-schema
 type: rule

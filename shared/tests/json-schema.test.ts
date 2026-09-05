@@ -20,6 +20,19 @@ const strictObjectNodes = (
     ? (rendered.oneOf as Record<string, unknown>[])
     : [rendered];
 
+const expectEveryNestedObjectStrict = (value: unknown, path: string): void => {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => expectEveryNestedObjectStrict(item, `${path}[${index}]`));
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const node = value as Record<string, unknown>;
+  if (node.type === "object") expect(node.additionalProperties, path).toBe(false);
+  for (const [key, child] of Object.entries(node)) {
+    expectEveryNestedObjectStrict(child, `${path}.${key}`);
+  }
+};
+
 describe("contract JSON Schemas", () => {
   it("renders every registered schema without unsupported types", () => {
     const renderedSchemas = contractJsonSchemas();
@@ -105,6 +118,27 @@ describe("contract JSON Schemas", () => {
     expect(blocked.required).toContain("blockedReasons");
     expect(blocked.properties.blockedReasons.minItems).toBe(1);
     expect(unblocked.properties.blockedReasons).toBeUndefined();
+  });
+
+  it("publishes strict Binding target, scope, record, availability, relation, and candidate arms", () => {
+    const schemas = contractJsonSchemas() as any;
+    for (const arm of schemas.BindingTargetDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    expect(schemas.BindingScopeDto.additionalProperties).toBe(false);
+    expect(schemas.BindingScopeDto.properties.roleId.minItems).toBe(1);
+    expect(schemas.BindingScopeDto.properties.roleId.uniqueItems).toBe(true);
+    for (const arm of schemas.BindingRecordDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingSourceDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    const projectSource = schemas.BindingSourceDto.oneOf.find((arm: any) => arm.properties.layer.const === "project");
+    expect(projectSource.required).toEqual(["layer", "projectId"]);
+    for (const arm of schemas.BindingTargetIssueDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingTargetAvailabilityDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingFallbackRelationDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    for (const arm of schemas.BindingCandidateDto.oneOf) expect(arm.additionalProperties).toBe(false);
+    expectEveryNestedObjectStrict(schemas.BindingRecordDto, "BindingRecordDto");
+    expectEveryNestedObjectStrict(schemas.BindingCandidateDto, "BindingCandidateDto");
+    const disabled = schemas.BindingRecordDto.oneOf.find((arm: any) => arm.properties.operation.const === "disable");
+    expect(disabled.required).toEqual(expect.arrayContaining(["operation", "bindingId", "revision", "source", "loadingTier"]));
+    expect(disabled.properties.definition).toBeUndefined();
   });
 
   it("publishes the Project boundary and nested failure strictness", () => {

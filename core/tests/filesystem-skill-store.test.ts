@@ -194,6 +194,7 @@ Report advice.
       skill: skillInput(),
     }));
     const conflictingStore: AssetStore = {
+      roots: store.roots,
       list: store.list,
       get: store.get,
       save: async () => ({

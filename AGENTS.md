@@ -64,7 +64,10 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - `shared/src/` の公開型が公開契約。network / IPC / filesystem 境界を越える値には明示的な
   serialization schema を持たせ、TypeScript 型は schema から導出する。
 - 境界 DTO は成立し得ない状態を parse させない。JSON Schema で表せる制約は parser と
-  draft 2020-12 schema の両方へ反映する。
+  draft 2020-12 schema の両方へ反映する。同じ事実から導出される複数欄は相互一致を検証し、
+  成功値も失敗理由もない response arm を作らない。
+- operation と source の組み合わせを持つ境界 DTO は、各 union arm に許可された source を
+  直接置く。共通 base の広い source 型で project-only operation を表現しない。
 - `zod` は `shared` の実装詳細。consumer へは TypeScript 型と素の JavaScript の関数・データだけを
   export し、consumer が必要とする runtime validator や値集合をその都度明示的に追加する。
 - 契約全体のバージョンは `shared` の `CONTRACT_VERSION` だけで管理する。enum 値、union arm、
@@ -103,7 +106,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   適用条件は、その軸が context にあるときだけ絞り込みに効く。宣言を必須条件として扱わせたい
   candidate projector は、この経路だけでは表現できない (#121)。
 - `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
-  除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
+  除いて診断として返す。type 固有 parser が検証する body semantics や catalog reference も
+  overlay 解決前に同じ catalog で検証し、採用候補を決めた後まで遅延させない。definition body を
+  持たない disable directive はtype固有definition parserへ渡さず、operation候補として保持する。`resolveScope` は候補1件の構造違反で snapshot 全体を
   `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は
   `AssetTypeContract` のうち、その producer が出力しうる値を持つ全欄。merge policy だけを
   見て `allowedOperationKinds` を見落とすと、`resolveScope` 側の同名判定が snapshot 全体を
@@ -119,6 +124,12 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   `CanonicalSkill.skillId` は前者で受け、Asset store を呼ぶ直前に `skillAssetId` /
   `asSkillId` で変換する。両 brand とも値制約は非空文字列だけなので、変換を各所で直接
   cast すると片方向の取り違えが型検査を素通りする。
+- user-authored な参照 graph は入力件数で call stack を消費しない反復走査とし、確定した
+  到達結果を再利用して直線 chain の各 node から同じ suffix を走査し直さない。
+- same-ID overlay が異なる参照 edge を持つとき、graph は included になった定義の edge を正とする。
+  各候補の関係表示は、その候補自身の edge を有効 graph に接続して評価する。
+- 複合 target の catalog 検証は独立して欠けた component を一度の結果へすべて列挙し、
+  component 間の整合性比較は必要な全 component が存在するときだけ行う。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、

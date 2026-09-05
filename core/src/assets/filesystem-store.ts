@@ -65,6 +65,7 @@ export type SaveAssetInput = {
 };
 
 export type AssetStore = {
+  readonly roots: readonly ManagedAssetRoot[];
   readonly list: () => Promise<AssetListResult>;
   readonly get: (assetId: AssetId) => Promise<AssetLookupResult>;
   readonly save: (input: SaveAssetInput) => Promise<AssetResult<StoredAsset>>;
@@ -577,5 +578,5 @@ export const createFilesystemAssetStore = (
     }
   };
 
-  return { ok: true, value: { list, get, save } };
+  return { ok: true, value: { roots: states.map((state) => state.descriptor), list, get, save } };
 };
