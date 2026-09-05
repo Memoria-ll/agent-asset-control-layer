@@ -100,6 +100,19 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - scope matching は context に載っていない軸の selector を中立として読み飛ばす。候補が宣言した
   適用条件は、その軸が context にあるときだけ絞り込みに効く。宣言を必須条件として扱わせたい
   candidate projector は、この経路だけでは表現できない (#121)。
+- `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
+  除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
+  `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は
+  `AssetTypeContract` のうち、その producer が出力しうる値を持つ全欄。merge policy だけを
+  見て `allowedOperationKinds` を見落とすと、`resolveScope` 側の同名判定が snapshot 全体を
+  落とす経路が残る。
+- Asset の on-disk 位置は適用条件そのもの。project root から読んだ Asset を投影する producer は
+  `AssetProjectionSource.owningProjectId` を渡す。省略すると project A のファイルが project B の
+  候補になり、型検査もゲートも黙って通る。宣言 `scope.project` は所属 project との積を取り、
+  空になる候補は診断として除く。
+- 解決指定を type 固有の欄へ載せる Asset Type は、汎用投影へ渡す前にその値を asset 欄へ解決する。
+  `toAssetCandidate` は `CanonicalAsset` の欄しか読まないので、type 固有表現は無言で 0 件扱いになる。
+  現に Skill の優先度は `metadata.priority` にあり、asset の `priority` directive とは別欄。
 - Skill を指名する値は `SkillId`、Asset 層が索く値は `AssetId`。公開 API の引数と
   `CanonicalSkill.skillId` は前者で受け、Asset store を呼ぶ直前に `skillAssetId` /
   `asSkillId` で変換する。両 brand とも値制約は非空文字列だけなので、変換を各所で直接

@@ -23,6 +23,7 @@ afterEach(async () => {
   await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+
 const temporaryDirectory = async (): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), "aacl-filesystem-catalog-"));
   temporaryDirectories.push(directory);
@@ -55,11 +56,12 @@ const writeRaw = async (directory: string, relativePath: string, value: string |
 };
 
 const minimalDocument = (id: string, type = "rule", body = "body"): string =>
-  "---\nid: " + id + "\ntype: " + type + "\ntier: core\n---\n" + body;
+  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 2\ntier: core\n---\n" + body;
 
 const namedDocument = (id: string, type: string, displayName: string, body: string): string =>
   [
     "---",
+    "schema-version: 2",
     "id: " + id,
     "type: " + type,
     "tier: core",
@@ -207,6 +209,7 @@ describe("filesystem metadata catalog", () => {
       "roles/reviewer.md",
       [
         "---",
+        "schema-version: 2",
         "id: reviewer",
         "type: role",
         "tier: core",
@@ -430,4 +433,3 @@ describe("filesystem metadata catalog", () => {
     expect(reformatted.catalog.revision).toBe(changedSkill.catalog.revision);
   });
 });
-

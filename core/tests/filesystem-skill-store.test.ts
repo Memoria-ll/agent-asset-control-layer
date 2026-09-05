@@ -110,6 +110,7 @@ describe("filesystem Skill store", () => {
     ]));
     await mkdir(join(directory, "skills"), { recursive: true });
     await writeFile(join(directory, "skills", "CON.md"), `---
+schema-version: 2
 id: reserved-name-skill
 type: skill
 tier: on-demand
@@ -157,7 +158,7 @@ Report advice.
       rootId: "project",
       relativePath: "rules/review-change.md",
       asset: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: "review-change" as AssetId,
         type: "rule",
         tier: "core",

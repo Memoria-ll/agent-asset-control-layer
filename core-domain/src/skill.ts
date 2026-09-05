@@ -66,6 +66,19 @@ export type CanonicalSkill = {
   readonly additionalMetadata: Readonly<Record<string, AssetFieldValue>>;
 };
 
+/**
+ * The asset-level resolution directives a Skill file may carry.  They are the
+ * asset schema's, not the Skill contract's — a Skill's own priority is
+ * `metadata.priority` — so a rebuild has to carry them across verbatim instead
+ * of deriving them from `SkillInput`.
+ */
+export type SkillResolutionDirectives = {
+  readonly mandatory?: boolean;
+  readonly priority?: number;
+  readonly mergeMode?: "additive" | "exclusive";
+  readonly mergeGroup?: string;
+};
+
 export type SkillInput = {
   readonly id: SkillId;
   readonly tier: LoadingTier;
@@ -85,6 +98,7 @@ export type SkillInput = {
   readonly completionCriteria?: readonly string[];
   readonly capabilityDependencies?: readonly CapabilityDependency[];
   readonly additionalMetadata?: Readonly<Record<string, AssetFieldValue>>;
+  readonly resolutionDirectives?: SkillResolutionDirectives;
   readonly body: string;
 };
 
@@ -357,7 +371,7 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
   }
 
   const asset: CanonicalAsset = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: skillAssetId(input.id),
     type: "skill",
     tier: input.tier,
@@ -368,6 +382,18 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
       ? {}
       : { capabilityDependencies: sortedDependencies(input.capabilityDependencies) }),
     ...(input.lifecycle === undefined ? {} : { lifecycle: input.lifecycle }),
+    ...(input.resolutionDirectives?.mandatory === undefined
+      ? {}
+      : { mandatory: input.resolutionDirectives.mandatory }),
+    ...(input.resolutionDirectives?.priority === undefined
+      ? {}
+      : { priority: input.resolutionDirectives.priority }),
+    ...(input.resolutionDirectives?.mergeMode === undefined
+      ? {}
+      : { mergeMode: input.resolutionDirectives.mergeMode }),
+    ...(input.resolutionDirectives?.mergeGroup === undefined
+      ? {}
+      : { mergeGroup: input.resolutionDirectives.mergeGroup }),
     body: input.body,
   };
   const serialized = serializeCanonicalAsset(asset);
@@ -411,6 +437,12 @@ export const updateSkillAsset = (asset: CanonicalAsset, patch: SkillPatch): Asse
     completionCriteria: patch.completionCriteria ?? skill.completionCriteria,
     capabilityDependencies: patch.capabilityDependencies ?? skill.capabilityDependencies,
     additionalMetadata: patch.additionalMetadata ?? skill.additionalMetadata,
+    resolutionDirectives: {
+      ...(asset.mandatory === undefined ? {} : { mandatory: asset.mandatory }),
+      ...(asset.priority === undefined ? {} : { priority: asset.priority }),
+      ...(asset.mergeMode === undefined ? {} : { mergeMode: asset.mergeMode }),
+      ...(asset.mergeGroup === undefined ? {} : { mergeGroup: asset.mergeGroup }),
+    },
     body: patch.body ?? asset.body,
   });
 };

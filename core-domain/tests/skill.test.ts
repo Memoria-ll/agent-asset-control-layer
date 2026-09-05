@@ -32,7 +32,7 @@ const capabilityId = (value: string): CapabilityId => value as CapabilityId;
 const featureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
 
 const workflowSkillDocument = `---
-schema-version: 1
+schema-version: 2
 id: issue-development
 type: skill
 tier: discoverable
@@ -94,6 +94,7 @@ describe("Canonical Skill", () => {
     ["system-operation", "standalone"],
   ] as const)("accepts %s with %s relation", (kind, relation) => {
     const asset = parseAsset(`---
+schema-version: 2
 id: sample-skill
 type: skill
 tier: on-demand
@@ -111,6 +112,7 @@ Perform the bounded instructions.
 
   it("requires named Workflow scope for a workflow-scoped Skill", () => {
     const asset = parseAsset(`---
+schema-version: 2
 id: workflow-review
 type: skill
 tier: on-demand
@@ -134,6 +136,7 @@ Review the selected Workflow stage.
 
   it("rejects Workflow scope on a standalone Skill", () => {
     const asset = parseAsset(`---
+schema-version: 2
 id: scoped-standalone
 type: skill
 tier: on-demand
@@ -158,6 +161,7 @@ Review the selected input.
 
   it("requires explicit permission for a development execution Skill", () => {
     const asset = parseAsset(`---
+schema-version: 2
 id: unsafe-development
 type: skill
 tier: on-demand
@@ -181,6 +185,7 @@ Modify the selected repository.
 
   it("carries metadata outside the Skill contract through parse and update", () => {
     const asset = parseAsset(`---
+schema-version: 2
 id: annotated-skill
 type: skill
 tier: on-demand
@@ -229,6 +234,7 @@ Report advice.
 
   it("rejects orphan capability fallback and feature declarations", () => {
     const fallback = validateAsset(expectOk(parseAssetDocument(`---
+schema-version: 2
 id: orphan-fallback
 type: skill
 tier: on-demand
@@ -241,6 +247,7 @@ Body
     expect(fallback.failure.details?.map(({ code }) => code)).toContain("unknown_fallback_primary");
 
     const features = validateAsset(expectOk(parseAssetDocument(`---
+schema-version: 2
 id: orphan-features
 type: skill
 tier: on-demand
@@ -253,6 +260,7 @@ Body
     expect(features.failure.details?.map(({ code }) => code)).toContain("unknown_capability_reference");
 
     const redundant = validateAsset(expectOk(parseAssetDocument(`---
+schema-version: 2
 id: redundant-fallback
 type: skill
 tier: on-demand
@@ -268,6 +276,7 @@ Body
 
   it("represents a weaker same-capability fallback without losing either feature set", () => {
     const asset = parseAsset(`---
+schema-version: 2
 id: weaker-browser-fallback
 type: skill
 tier: on-demand
@@ -299,6 +308,7 @@ Inspect the browser DOM.
 
   it("keeps an authored metadata list in its authored order across an unrelated edit", () => {
     const asset = parseAsset(`---
+schema-version: 2
 id: ordered-conflicts
 type: skill
 tier: on-demand
@@ -453,6 +463,7 @@ Report advice.
 
   it("returns failures for malformed runtime capability values instead of throwing or dropping them", () => {
     const base = parseAsset(`---
+schema-version: 2
 id: malformed-capability
 type: skill
 tier: on-demand
@@ -483,5 +494,33 @@ Inspect input.
       ok: false,
       failure: { details: [{ code: "invalid_capability_reference" }] },
     });
+  });
+
+  it("keeps the asset resolution directives across an unrelated Skill update", () => {
+    const asset = parseAsset(`---
+schema-version: 2
+id: directive-skill
+type: skill
+tier: on-demand
+mandatory: true
+priority: 3
+merge-mode: exclusive
+merge-group: review
+metadata.description: Carries asset directives.
+metadata.display-name: Directive Skill
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Body.
+`);
+    expect(asset).toMatchObject({ mandatory: true, priority: 3, mergeMode: "exclusive", mergeGroup: "review" });
+
+    const updated = expectOk(updateSkillAsset(asset, { displayName: "Renamed Skill" }));
+
+    expect(updated).toMatchObject({ mandatory: true, priority: 3, mergeMode: "exclusive", mergeGroup: "review" });
+    expect(expectOk(parseSkillAsset(updated)).displayName).toBe("Renamed Skill");
+    expect(expectOk(serializeCanonicalAsset(updated))).toContain("merge-group: review");
   });
 });

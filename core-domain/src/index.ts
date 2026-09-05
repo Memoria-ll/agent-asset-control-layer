@@ -32,6 +32,7 @@ export type {
   SkillInput,
   SkillKind,
   SkillPatch,
+  SkillResolutionDirectives,
   SkillWorkflowRelation,
   SkillWorkflowRelationKind,
 } from "./skill.ts";
@@ -77,6 +78,9 @@ export type {
   AssetTypeExecutionProfile,
   AssetTypeMergePolicy,
 } from "./resolution/asset-type-contracts.ts";
+
+export { toAssetCandidate } from "./resolution/asset-candidate-projection.ts";
+export type { AssetProjectionSource } from "./resolution/asset-candidate-projection.ts";
 
 export {
   buildCapabilityCatalog,
