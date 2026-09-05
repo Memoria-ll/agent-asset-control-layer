@@ -102,10 +102,17 @@ const diagnosticDetails = (resolved: Awaited<ReturnType<typeof resolveAssets>>):
   return details;
 };
 
+/**
+ * Options for Binding resolution. `deriveContext` is not among them: this
+ * service owns the Workflow Stage projection, so a caller-supplied hook could
+ * only be one that is never run.
+ */
+export type ResolveBindingAssetsOptions = Omit<ResolveAssetsOptions, "deriveContext">;
+
 /** Resolve Binding Assets through the generic filesystem resolution pipeline. */
 export const resolveBindingAssets = async (
   requestInput: unknown,
-  options: ResolveAssetsOptions,
+  options: ResolveBindingAssetsOptions,
   catalog: MetadataCatalog,
 ): Promise<AssetResult<BindingResolutionResponse>> => {
   const parsed = tryParseBindingResolutionRequest(requestInput);

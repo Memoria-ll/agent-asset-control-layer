@@ -1,6 +1,6 @@
 import * as z from "zod/mini";
 import { describe, expect, it } from "vitest";
-import { contractJsonSchemas } from "../src/index.ts";
+import { BINDING_REASON_KINDS, contractJsonSchemas } from "../src/index.ts";
 // The registry is internal to the package; only its JSON form is published.
 import { contractSchemas } from "../src/json-schema.ts";
 
@@ -117,6 +117,12 @@ describe("contract JSON Schemas", () => {
     for (const arm of schemas.BindingSourceDto.oneOf) expect(arm.additionalProperties).toBe(false);
     const projectSource = schemas.BindingSourceDto.oneOf.find((arm: any) => arm.properties.layer.const === "project");
     expect(projectSource.required).toEqual(["layer", "projectId"]);
+    expect(projectSource.properties.projectId.pattern).toBe("^project-[a-z0-9-]+$");
+    expect(projectSource.properties.projectId.maxLength).toBe(128);
+    // The published schema is the third representation of the reason set, beside
+    // the member array and the parser; a drift here reaches consumers directly.
+    const reasonKinds = schemas.BindingReasonDto.oneOf.map((arm: any) => arm.properties.kind.const).sort();
+    expect(reasonKinds).toEqual([...BINDING_REASON_KINDS].sort());
     for (const arm of schemas.BindingReasonDto.oneOf) expect(arm.additionalProperties).toBe(false);
     for (const arm of schemas.BindingCandidateDto.oneOf) expect(arm.additionalProperties).toBe(false);
     const disabled = schemas.BindingRecordDto.oneOf.find((arm: any) => arm.properties.operation.const === "disable");

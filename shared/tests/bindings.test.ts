@@ -6,6 +6,7 @@ import {
   parseBindingReasonDto,
   parseBindingRecordDto,
   parseBindingScopeDto,
+  parseBindingSourceDto,
   parseBindingTargetDto,
   tryParseBindingDefinitionDto,
 } from "../src/index.ts";
@@ -163,6 +164,27 @@ describe("Binding shared contract", () => {
       loadingTier: "core",
     }).reasons[0]).toEqual(reason);
     expect(parseBindingReasonDto(reason)).toEqual(reason);
+  });
+
+  it("keeps the fallback activation reason out of unavailable candidates", () => {
+    const activation = { kind: "fallback_primary_unavailable" as const, primaryBindingId: "primary-1" };
+    expect(parseBindingReasonDto(activation)).toEqual(activation);
+    expect(() => parseBindingCandidateDto({
+      status: "unavailable",
+      bindingId: "binding-1",
+      definition: { bindingId: "binding-1", target, fallbackFor: "primary-1", description: "" },
+      reasons: [activation],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
+  });
+
+  it("accepts only Marker-shaped Project ids as a Binding source", () => {
+    expect(parseBindingSourceDto({ layer: "project", projectId: "project-1" }))
+      .toEqual({ layer: "project", projectId: "project-1" });
+    expect(() => parseBindingSourceDto({ layer: "project", projectId: "x" })).toThrow();
+    expect(() => parseBindingSourceDto({ layer: "project", projectId: `project-${"a".repeat(200)}` })).toThrow();
   });
 
   it("publishes no reason kind outside the exported closed set", () => {

@@ -12,6 +12,7 @@ import {
   WorkflowId,
 } from "./identifiers.ts";
 import { CoreErrorDetail, tryParseWith, type ParseOutcome } from "./errors.ts";
+import { ProjectMarkerId } from "./projects.ts";
 import { IdeContextInput } from "./resolution.ts";
 import { LoadingTier, ResolutionContextInput } from "./resolved-context.ts";
 import { DirectoryPath, NonEmptyString } from "./primitives.ts";
@@ -131,7 +132,7 @@ export const BINDING_SOURCE_LAYERS = ["global", "personal", "project"] as const;
 const bindingSourceArms = [
   z.strictObject({ layer: z.literal("global") }),
   z.strictObject({ layer: z.literal("personal") }),
-  z.strictObject({ layer: z.literal("project"), projectId: ProjectId }),
+  z.strictObject({ layer: z.literal("project"), projectId: ProjectMarkerId }),
 ] as const;
 const BindingSourceDto = z.discriminatedUnion("layer", bindingSourceArms);
 export { BindingSourceDto };
@@ -184,23 +185,19 @@ const unavailableBindingReasonArms = [
   z.strictObject({ kind: z.literal("capability_unavailable"), capabilityId: NonEmptyString }),
   z.strictObject({ kind: z.literal("capability_not_allowed"), capabilityId: NonEmptyString }),
   z.strictObject({ kind: z.literal("fallback_not_needed"), primaryBindingId: BindingId }),
-  fallbackPrimaryUnavailableReason,
   z.strictObject({ kind: z.literal("invalid_binding"), bindingId: BindingId }),
 ] as const;
+// `fallback_primary_unavailable` is why a Binding *is* the standing fallback, so
+// it belongs to a `fallback` candidate alone. Admitting it here would let a
+// candidate be unavailable and activated at once.
 const unavailableBindingReasons = z.discriminatedUnion("kind", unavailableBindingReasonArms);
-export const BindingReasonDto = z.discriminatedUnion("kind", [eligibleBindingReason, ...unavailableBindingReasonArms]);
+export const BindingReasonDto = z.discriminatedUnion("kind", [
+  eligibleBindingReason,
+  fallbackPrimaryUnavailableReason,
+  ...unavailableBindingReasonArms,
+]);
 export type BindingReasonDto = z.infer<typeof BindingReasonDto>;
 export type BindingReasonDtoInput = z.input<typeof BindingReasonDto>;
-
-/**
- * `BINDING_REASON_KINDS` is the closed set consumers enumerate; the union arms
- * are internal and invisible to them. This pins the two together, so an arm
- * carrying a kind the array omits fails to compile instead of publishing a value
- * every consumer treats as impossible.
- */
-type SameMembers<Left, Right> = [Left] extends [Right] ? ([Right] extends [Left] ? true : never) : never;
-const bindingReasonArmsMatchKinds: SameMembers<BindingReasonDto["kind"], BindingReasonKind> = true;
-void bindingReasonArmsMatchKinds;
 
 const fallbackBindingReasons = z.discriminatedUnion("kind", [fallbackPrimaryUnavailableReason]);
 const bindingCandidateBase = {
@@ -239,12 +236,28 @@ export const BindingCandidateDto = z.discriminatedUnion("status", [
     // one: `binding_disabled` and `binding_overridden` name the actor, which a
     // same-ID overlay makes equal to this candidate and a cross-ID one does not.
     if (reason.kind === "invalid_binding") return reason.bindingId === candidate.bindingId;
-    if (reason.kind !== "fallback_not_needed" && reason.kind !== "fallback_primary_unavailable") return true;
+    if (reason.kind !== "fallback_not_needed") return true;
     return candidate.definition?.fallbackFor === reason.primaryBindingId;
   });
 }, { error: "Binding candidate identifiers and fallback relations must be consistent." }));
 export type BindingCandidateDto = z.infer<typeof BindingCandidateDto>;
 export type BindingCandidateDtoInput = z.input<typeof BindingCandidateDto>;
+
+/**
+ * Each `BINDING_*` array is the closed set consumers enumerate; the union arms
+ * publishing those values are internal and invisible to them. These pin every
+ * pair together, so an arm carrying a value its array omits — or an array member
+ * no arm publishes — fails to compile instead of shipping a set whose two public
+ * representations disagree.
+ */
+type SameMembers<Left, Right> = [Left] extends [Right] ? ([Right] extends [Left] ? true : never) : never;
+const bindingClosedSetsMatchArms: readonly true[] = [
+  true satisfies SameMembers<BindingReasonDto["kind"], BindingReasonKind>,
+  true satisfies SameMembers<BindingTargetDto["kind"], BindingTargetKind>,
+  true satisfies SameMembers<BindingCandidateDto["status"], BindingCandidateStatus>,
+  true satisfies SameMembers<BindingSourceDto["layer"], typeof BINDING_SOURCE_LAYERS[number]>,
+];
+void bindingClosedSetsMatchArms;
 
 export const BindingResolutionRequest = z.strictObject({
   context: ResolutionContextInput,

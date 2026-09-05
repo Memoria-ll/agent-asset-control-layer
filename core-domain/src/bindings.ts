@@ -26,6 +26,7 @@ import type {
   ResolutionEvaluation,
 } from "./resolution/resolution-types.ts";
 import { codeUnitCompare } from "./ordering.ts";
+import { toResolutionConflictDetails } from "./resolution/result-assembly.ts";
 
 export const asBindingId = (assetId: AssetId): BindingId => assetId as string as BindingId;
 export const bindingAssetId = (bindingId: BindingId): AssetId => bindingId as string as AssetId;
@@ -248,6 +249,13 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   type BindingState = BindingResolutionEntry & {
     readonly reasons: readonly BindingReasonDto[];
     readonly eligible: boolean;
+    /**
+     * The resolver kept this candidate, so its declared fallback relation is in
+     * force. Whether the target resolves is a separate question: a Binding with
+     * a missing model still forms an edge of the fallback graph, and reading
+     * `eligible` here hides exactly those edges from cycle detection.
+     */
+    readonly included: boolean;
   };
   const sourceMismatch = input.entries.find(({ evaluation, source }) => evaluation.candidate.source.layer !== source.layer);
   if (sourceMismatch !== undefined) {
@@ -271,14 +279,18 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
         ...entry,
         reasons: [...reasons].sort(sortReasons),
         eligible: reasons.length === 1 && reasons[0]?.kind === "eligible",
+        included: entry.evaluation.reason.kind === "included",
       };
     });
-  // `resolveScope` names the offending selector in these diagnostics, and the
-  // candidate reason can only carry `invalid_binding`. Dropping them leaves the
-  // caller with an unavailable Binding and nothing to correct it by.
+  // Every `excluded` cause the candidate reason cannot carry. `scope_mismatch`
+  // survives as one reason per axis; the other two collapse to `invalid_binding`,
+  // so without this the caller sees an unavailable Binding and nothing to correct
+  // it by — neither the offending selector nor which assets conflicted.
   for (const { evaluation } of base) {
     const reason = evaluation.reason;
-    if (reason.kind === "excluded" && reason.cause === "invalid_directory") diagnostics.push(...reason.diagnostics);
+    if (reason.kind !== "excluded") continue;
+    if (reason.cause === "invalid_directory") diagnostics.push(...reason.diagnostics);
+    if (reason.cause === "resolution_conflict") diagnostics.push(...toResolutionConflictDetails(reason.conflict));
   }
   const statesByBindingId = new Map<BindingId, BindingState[]>();
   for (const state of base) {
@@ -289,7 +301,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
 
   const fallbackIds = new Map<BindingId, BindingId>();
   for (const item of base) {
-    if (!item.eligible) continue;
+    if (!item.included) continue;
     if (item.binding.fallbackFor !== undefined) fallbackIds.set(item.binding.bindingId, item.binding.fallbackFor);
   }
   const visiting = new Set<string>();
@@ -354,6 +366,11 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   const candidates: BindingCandidateDto[] = [];
   for (const item of base) {
     const { binding } = item;
+    // A `disable` record is a directive, not something to bind to: it carries no
+    // target by construction, and the Binding it acts on already reports
+    // `binding_disabled` naming it. Emitting it would add a candidate that reads
+    // as malformed only because it was never a candidate.
+    if (binding.asset.operation === "disable") continue;
     const candidateBase = {
       revision: item.evaluation.candidate.revision,
       source: item.source,

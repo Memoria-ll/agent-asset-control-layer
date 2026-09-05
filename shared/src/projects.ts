@@ -6,7 +6,12 @@ import { DirectoryPath, NonEmptyString } from "./primitives.ts";
 export const PROJECT_MARKER_SCHEMA_VERSION = 1;
 export const PROJECT_MARKER_ID_MAX_LENGTH = 128;
 
-const ProjectMarkerId = ProjectId
+/**
+ * A Project identity as the Marker defines it. Every Project id Core can ever
+ * observe comes from a Marker, so any DTO field Core *produces* a Project id
+ * into carries this rather than the bare branded id.
+ */
+export const ProjectMarkerId = ProjectId
   .check(z.regex(/^project-[a-z0-9-]+$/))
   .check(z.maxLength(PROJECT_MARKER_ID_MAX_LENGTH));
 

@@ -201,9 +201,9 @@ describe("binding resolution", () => {
       ],
     );
     const result = unwrap(resolveBindings({ entries, catalog }));
-    expect(result.candidates).toHaveLength(2);
     const statuses = result.candidates.map((candidate) => [candidate.status, candidate.reasons[0]?.kind]);
     if (operation === "override") {
+      expect(result.candidates).toHaveLength(2);
       expect(statuses).toContainEqual(["unavailable", "binding_overridden"]);
       expect(statuses).toContainEqual(["eligible", "eligible"]);
       expect(result.candidates).toEqual(expect.arrayContaining([
@@ -211,8 +211,32 @@ describe("binding resolution", () => {
         expect.objectContaining({ source: { layer: "project", projectId: "project-aacl" } }),
       ]));
     } else {
+      // The directive itself is not a candidate, so the disabled base stands alone.
+      expect(result.candidates).toHaveLength(1);
       expect(statuses).toContainEqual(["unavailable", "binding_disabled"]);
     }
+  });
+
+  it("does not offer an applied disable directive as a Binding candidate", () => {
+    const base = binding("same-id", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
+    const directive = binding("same-id", "", "scope.role: [reviewer]\n", "disable");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([base, directive], [
+        { layer: "global", sourceId: "global-source" },
+        { layer: "project", sourceId: "project-source" },
+      ]),
+      catalog,
+    }));
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      status: "unavailable",
+      bindingId: "same-id",
+      reasons: [{ kind: "binding_disabled", actorBindingId: "same-id" }],
+      source: { layer: "global" },
+    });
+    expect(result.candidates.some((candidate) => candidate.reasons.some((reason) => reason.kind === "invalid_binding")))
+      .toBe(false);
   });
 
   it("does not apply an overridden fallback relation from an inactive same-ID candidate", () => {
@@ -300,6 +324,41 @@ describe("binding resolution", () => {
     }
     expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "cycle-below"))
       .toMatchObject({ status: "fallback", reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "cycle-right" }] });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "fallback_cycle" }),
+    ]));
+  });
+
+  it("keeps the resolver conflict diagnostics on an unavailable Binding", () => {
+    const orphan = binding(
+      "orphan-override",
+      "metadata.target-kind: model\nmetadata.model-id: gpt-5\n",
+      "scope.role: [reviewer]\n",
+      "override",
+    );
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([orphan], [{ layer: "project", sourceId: "project-source" }]),
+      catalog,
+    }));
+
+    expect(result.candidates[0]).toMatchObject({ status: "unavailable", reasons: [{ kind: "invalid_binding" }] });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "operation_conflict" }),
+    ]));
+  });
+
+  it("detects a fallback cycle whose edge runs through a Binding with a missing target", () => {
+    const left = binding("cycle-left", "metadata.target-kind: model\nmetadata.model-id: missing-model\nmetadata.fallback-for: cycle-right\n", "scope.role: [reviewer]\n");
+    const right = binding("cycle-right", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: cycle-left\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([left, right]),
+      catalog,
+    }));
+
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "cycle-left"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "target_missing", targetId: "missing-model" }] });
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "cycle-right"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "invalid_binding", bindingId: "cycle-right" }] });
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "fallback_cycle" }),
     ]));
