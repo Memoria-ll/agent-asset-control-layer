@@ -312,4 +312,46 @@ foreign
       { strength: "required", capability: { capabilityId: "filesystem-read" } },
     ]);
   });
+
+  it("excludes a Skill that the generic schema accepts but the Skill contract rejects", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aacl-resolution-broken-skill-"));
+    temporaryDirectories.push(directory);
+    const store = unwrap(createFilesystemAssetStore([
+      { rootId: "global-root", kind: "global", directory },
+    ]));
+
+    await saveAsset(store, "global-root", "skills/broken.md", `---
+id: broken-skill
+type: skill
+schema-version: 2
+tier: on-demand
+metadata.kind: advisory
+---
+broken
+`);
+    await saveAsset(store, "global-root", "sound.md", `---
+id: sound-rule
+type: rule
+schema-version: 2
+tier: core
+---
+sound
+`);
+
+    const listed = await store.list();
+    expect(listed.failures).toHaveLength(0);
+    const projection = toResolutionSnapshot(listed.assets);
+
+    expect(projection.snapshot.candidates.map((item) => String(item.assetId))).toEqual(["sound-rule"]);
+    expect(projection.excluded).toHaveLength(1);
+    expect(projection.excluded[0]?.source).toEqual({
+      kind: "global",
+      rootId: "global-root",
+      relativePath: "skills/broken.md",
+    });
+    expect(projection.excluded[0]?.failure.code).toBe("invalid_request");
+    expect(projection.excluded[0]?.failure.details?.map((item) => item.path.join("."))).toContain(
+      "document.frontmatter.metadata.display-name",
+    );
+  });
 });

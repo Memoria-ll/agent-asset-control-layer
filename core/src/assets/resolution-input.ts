@@ -2,6 +2,7 @@ import {
   parseSkillAsset,
   toAssetCandidate,
   type AssetCandidate,
+  type AssetResult,
   type AssetTypeContractRegistry,
   type CanonicalAsset,
   type ResolutionSnapshot,
@@ -28,12 +29,18 @@ const sourceIdFor = (source: StoredAsset["source"]): string => {
  * own `priority` directive does not mirror.  Both are readable on one file, so
  * the type-specific value is resolved here and wins — otherwise a saved Skill
  * ranks as if it declared no priority at all.
+ *
+ * A type-specific parse failure excludes the asset rather than falling back to
+ * the generic reading: the generic schema accepts a Skill that names none of
+ * its contract metadata, so a candidate no runtime could use would otherwise be
+ * reported as included.
  */
-const withTypeSpecificDirectives = (asset: CanonicalAsset): CanonicalAsset => {
-  if (asset.type !== "skill") return asset;
+const withTypeSpecificDirectives = (asset: CanonicalAsset): AssetResult<CanonicalAsset> => {
+  if (asset.type !== "skill") return { ok: true, value: asset };
   const skill = parseSkillAsset(asset);
-  if (!skill.ok || skill.value.priority === undefined) return asset;
-  return { ...asset, priority: skill.value.priority };
+  if (!skill.ok) return skill;
+  const priority = skill.value.priority;
+  return { ok: true, value: priority === undefined ? asset : { ...asset, priority } };
 };
 
 export const toResolutionSnapshot = (
@@ -45,8 +52,13 @@ export const toResolutionSnapshot = (
 
   for (const stored of storedAssets) {
     const source: AssetLocation = stored.source;
+    const resolved = withTypeSpecificDirectives(stored.asset);
+    if (!resolved.ok) {
+      excluded.push({ source, failure: resolved.failure });
+      continue;
+    }
     const projected = toAssetCandidate(
-      withTypeSpecificDirectives(stored.asset),
+      resolved.value,
       {
         revision: stored.revision,
         source: { layer: stored.source.kind, sourceId: sourceIdFor(stored.source) },
