@@ -101,6 +101,28 @@ export type {
   CapabilityResolutionContext,
 } from "./capabilities/dependencies.ts";
 
+export { resolveCapabilityBindings } from "./capabilities/tool-binding.ts";
+export type {
+  CapabilityAvailabilityReason,
+  CapabilityAvailabilityResult,
+  CapabilityBindingEvaluation,
+  CapabilityBindingObservation,
+  CapabilityBindingPermission,
+  CapabilityBindingReason,
+  CapabilityBindingResolution,
+  CapabilityBindingScopeState,
+  ProjectToolBinding,
+  ProjectToolBindingScope,
+  ResolveCapabilityBindingsInput,
+  ToolBindingId,
+  ToolExecutionCandidate,
+  ToolId,
+  ToolObservation,
+  ToolPermissionDecision,
+  ToolProviderId,
+  ToolTarget,
+} from "./capabilities/tool-binding.ts";
+
 export {
   resolveScope,
 } from "./resolution/pipeline.ts";
