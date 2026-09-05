@@ -39,13 +39,15 @@ export const SessionDto = z.strictObject({
 export type SessionDto = z.infer<typeof SessionDto>;
 export type SessionDtoInput = z.input<typeof SessionDto>;
 
+/** The bound arm on its own, for contracts that admit only a workflow-bound execution. */
+export const WorkflowBoundBinding = z.strictObject({
+  kind: z.literal("workflow"),
+  workflowId: WorkflowId,
+  workflowRevision: AssetRevision,
+  executionInstanceId: ExecutionInstanceId,
+});
 const workflowBindingArms = [
-  z.strictObject({
-    kind: z.literal("workflow"),
-    workflowId: WorkflowId,
-    workflowRevision: AssetRevision,
-    executionInstanceId: ExecutionInstanceId,
-  }),
+  WorkflowBoundBinding,
   z.strictObject({ kind: z.literal("standalone") }),
 ] as const;
 export const WorkflowBinding = z.discriminatedUnion("kind", workflowBindingArms);

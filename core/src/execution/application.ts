@@ -17,6 +17,7 @@ import {
   type WorkflowStartCommitRequest,
   type WorkflowStartRequest,
   type WorkflowStartRequestInput,
+  type WorkflowStartPreconditionContext,
 } from "@aacl/shared";
 import { coreFailure } from "@aacl/core-domain";
 import type { WorkflowStateStore } from "../workflow/filesystem-state-store.ts";
@@ -35,6 +36,19 @@ export type WorkflowStartApplicationOptions = {
 };
 
 const failure = (message: string, code = "invalid_request"): AssetResult<never> => ({ ok: false, failure: coreFailure(code as "invalid_request" | "conflict", message) });
+
+const PRECONDITION_AXES = ["projectId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId", "directory"] as const;
+
+/** Compared field by field rather than by serialization, which would also compare key order. */
+const samePreconditionContext = (
+  left: WorkflowStartPreconditionContext,
+  right: WorkflowStartPreconditionContext,
+): boolean => {
+  if (left.workflow.kind !== right.workflow.kind) return false;
+  if (left.workflow.kind === "standalone" && right.workflow.kind === "standalone"
+    && left.workflow.skillId !== right.workflow.skillId) return false;
+  return PRECONDITION_AXES.every((axis) => left[axis] === right[axis]);
+};
 
 /** Build and submit one workflow-start bundle. Persistence is performed only by commitPort. */
 export const startWorkflowExecution = async (
@@ -151,9 +165,26 @@ export const startWorkflowExecution = async (
   }
   const committed = await options.commitPort.commit(bundle);
   if (!committed.ok) return committed;
+  let receipt: WorkflowStartCommitRequest;
   try {
-    return { ok: true, value: parseWorkflowStartResult(committed.value) };
+    receipt = parseWorkflowStartResult(committed.value);
   } catch {
     return { ok: false, failure: coreFailure("internal", "The workflow start commit receipt is invalid.") };
   }
+  // A receipt is internally consistent without being this request's: an adapter that answers
+  // from the wrong idempotency entry returns another start that parses. The identifiers the
+  // adapter may legitimately replay — execution, instance — are excluded; what identifies the
+  // request is not.
+  const answersThisRequest = receipt.idempotencyKey === bundle.idempotencyKey
+    && receipt.precondition.target.workflowId === bundle.precondition.target.workflowId
+    && receipt.precondition.target.workflowRevision === bundle.precondition.target.workflowRevision
+    && samePreconditionContext(receipt.precondition.context, bundle.precondition.context);
+  if (!answersThisRequest) {
+    return { ok: false, failure: coreFailure("internal", "The workflow start commit receipt answers a different request.", [{
+      path: ["receipt", "idempotencyKey"],
+      code: "commit_receipt_mismatch",
+      message: "The workflow start commit receipt answers a different request.",
+    }]) };
+  }
+  return { ok: true, value: receipt };
 };

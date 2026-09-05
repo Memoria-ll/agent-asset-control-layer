@@ -117,6 +117,8 @@ export type {
   ResolutionContextInput,
   ResolutionContextDto,
   ResolutionContextDtoInput,
+  WorkflowStartPreconditionContext,
+  SelectedWorkflowContext,
   ResolvedAssetDto,
   ContextCostDto,
   ResolvedContextDto,

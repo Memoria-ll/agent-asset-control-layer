@@ -234,6 +234,35 @@ describe("workflow start application boundary", () => {
     expect(commits).toBe(1);
   });
 
+  it("rejects a commit receipt that answers a different request", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aacl-execution-receipt-")); directories.push(root);
+    const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });
+    const stored = asset(workflow); await writeFile(assetPath, unwrap(serializeCanonicalAsset(stored)), "utf8");
+    const assets = unwrap(createFilesystemAssetStore([{ rootId: "global", kind: "global", directory: join(root, "assets") }]));
+    let instanceNumber = 0;
+    const stateStore = unwrap(await createWorkflowStateStore({ stateDirectory: join(root, "state"), newInstanceSuffix: () => `run-${instanceNumber += 1}` }));
+    const lookup = await assets.get("review-flow" as never);
+    const revision = lookup.matches[0]?.revision;
+    if (revision === undefined) throw new Error("fixture revision missing");
+    const base = { assetStore: assets, catalog: catalog(), stateStore, boundedSkillCompletionVerifier: completedSkillVerifier, now: () => "2026-09-01T10:00:00Z", newAgentExecutionId: () => "agent-1" as never };
+
+    // A receipt built for another key is internally consistent, so only the correlation
+    // against the submitted request can tell it apart from this start's own receipt.
+    const otherKey: WorkflowStartCommitPort = { commit: async (value) => ({ ok: true, value: { ...value, idempotencyKey: "start-other" } }) };
+    const wrongKey = await startWorkflowExecution(request(revision), { ...base, commitPort: otherKey });
+    expect(wrongKey).toMatchObject({ ok: false, failure: { code: "internal", details: [{ code: "commit_receipt_mismatch" }] } });
+
+    // The scope axes are already tied to `nextContext` by the bundle contract, so a receipt
+    // that differs there does not parse at all. What still parses is a different origin.
+    const otherPrecondition: WorkflowStartCommitPort = { commit: async (value) => ({ ok: true, value: { ...value, precondition: { ...value.precondition, context: { ...value.precondition.context, workflow: { kind: "standalone" as const, skillId: "skill-x" as never } } } } }) };
+    const wrongContext = await startWorkflowExecution(request(revision), { ...base, commitPort: otherPrecondition });
+    expect(wrongContext).toMatchObject({ ok: false, failure: { details: [{ code: "commit_receipt_mismatch" }] } });
+
+    const echo: WorkflowStartCommitPort = { commit: async (value) => ({ ok: true, value }) };
+    const matching = await startWorkflowExecution(request(revision), { ...base, commitPort: echo });
+    expect(matching.ok).toBe(true);
+  });
+
   it("rejects a stale target revision before invoking the commit port", async () => {
     const root = await mkdtemp(join(tmpdir(), "aacl-execution-stale-")); directories.push(root);
     const assetPath = join(root, "assets", "review-flow.md"); await mkdir(dirname(assetPath), { recursive: true });

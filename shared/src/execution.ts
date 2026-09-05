@@ -1,8 +1,8 @@
 import * as z from "zod/mini";
 import { AgentExecutionId, AssetRevision, SessionId, SkillId, WorkflowId } from "./identifiers.ts";
 import { NonEmptyString } from "./primitives.ts";
-import { ResolutionContextInput, WorkflowStartPreconditionContext } from "./resolved-context.ts";
-import { AgentExecutionDto } from "./sessions.ts";
+import { ResolutionContextInput, SelectedWorkflowContext, WorkflowStartPreconditionContext } from "./resolved-context.ts";
+import { AgentExecutionDto, WorkflowBoundBinding } from "./sessions.ts";
 import { WorkflowStateDto } from "./workflow.ts";
 import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
@@ -106,26 +106,39 @@ const MIRRORED_CONTEXT_AXES = ["projectId", "taskTypeId", "roleId", "providerId"
 const PRESERVED_CONTEXT_AXES = ["projectId", "taskTypeId", "providerId", "runtimeId", "modelId", "directory"] as const;
 
 /**
- * What this refinement is, and is not: it checks the four documents in the bundle against
- * each other, and nothing else. The workflow definition is not part of the bundle, so facts
- * derived from it — stage requirements, catalog membership, whether a role exists — cannot be
- * checked here and belong to the application that loads the definition. Everything that IS
- * decidable from the bundle alone is listed below, so a later reader can see the set is closed
- * rather than guess which case was forgotten.
+ * The execution a start produces: bound to the workflow, in development mode, and neither
+ * ended nor snapshotted. `endedAt` and `snapshotId` are removed rather than forbidden by a
+ * check, so a schema-driven consumer sees the same contract the parser enforces.
+ */
+const StartedWorkflowExecution = z.omit(
+  z.extend(AgentExecutionDto, {
+    executionMode: z.literal("development_execution"),
+    workflowBinding: WorkflowBoundBinding,
+  }),
+  { endedAt: true, snapshotId: true },
+);
+
+/**
+ * What this contract is, and is not: it constrains the four documents in the bundle and checks
+ * them against each other, and nothing else. The workflow definition is not part of the bundle,
+ * so facts derived from it — stage requirements, catalog membership, whether a role exists —
+ * cannot be decided here and belong to the application that loads the definition.
+ *
+ * Everything decidable from the bundle alone is stated below, and stated as a field type
+ * wherever it fits in one, because a cross-field check emits nothing into the published JSON
+ * Schema. What remains in the refinement is the part that relates two documents.
  */
 export const WorkflowStartCommitRequest = z.strictObject({
   operation: z.literal("workflow_start"),
   idempotencyKey: NonEmptyString,
   precondition: z.strictObject({ context: WorkflowStartPreconditionContext, target: workflowTarget }),
-  nextContext: ResolutionContextInput,
-  agentExecution: AgentExecutionDto,
+  nextContext: SelectedWorkflowContext,
+  agentExecution: StartedWorkflowExecution,
   workflowState: InitialWorkflowState,
   sessionUpdate: z.optional(z.strictObject({ sessionId: SessionId, addAgentExecutionId: AgentExecutionId })),
 }).check(z.refine((value) => {
   const selected = value.nextContext.workflow;
   const binding = value.agentExecution.workflowBinding;
-  if (value.nextContext.executionMode !== "development_execution" || selected.kind !== "selected") return false;
-  if (value.agentExecution.executionMode !== "development_execution" || binding.kind !== "workflow") return false;
   const target = value.precondition.target;
   const state = value.workflowState;
   if (selected.workflowId !== target.workflowId || selected.workflowRevision !== target.workflowRevision) return false;
@@ -146,7 +159,6 @@ export const WorkflowStartCommitRequest = z.strictObject({
   if (state.linkedAgentExecutionIds.length !== 1) return false;
   if (state.linkedAgentExecutionIds[0] !== value.agentExecution.agentExecutionId) return false;
   if (state.linkedSnapshotIds.length !== 0) return false;
-  if (value.agentExecution.snapshotId !== undefined || value.agentExecution.endedAt !== undefined) return false;
   if (value.agentExecution.sessionId === undefined) return value.sessionUpdate === undefined;
   return value.sessionUpdate?.sessionId === value.agentExecution.sessionId
     && value.sessionUpdate.addAgentExecutionId === value.agentExecution.agentExecutionId;

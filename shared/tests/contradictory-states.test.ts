@@ -604,6 +604,22 @@ describe("published JSON Schema carries the same constraints", () => {
     }
   });
 
+  // Every constraint a schema can carry belongs on the field, so a schema-driven consumer
+  // rejects what the parser rejects. These are the bundle's four documents.
+  it("publishes the workflow-start bundle as a start-shaped bundle", () => {
+    const bundle = schemas().WorkflowStartCommitRequest as any;
+    const next = bundle.properties.nextContext;
+    const execution = bundle.properties.agentExecution;
+
+    expect(next.properties.executionMode.const).toBe("development_execution");
+    expect(next.properties.workflow.properties.kind.const).toBe("selected");
+    expect(execution.properties.executionMode.const).toBe("development_execution");
+    expect(execution.properties.workflowBinding.properties.kind.const).toBe("workflow");
+    expect(execution.properties.endedAt).toBeUndefined();
+    expect(execution.properties.snapshotId).toBeUndefined();
+    expect(bundle.properties.workflowState.properties.stateVersion.const).toBe(0);
+  });
+
   it("publishes the workflow-start precondition as an advisory, unselected context", () => {
     const precondition = (schemas().WorkflowStartCommitRequest as any).properties.precondition.properties.context;
     const kinds = precondition.properties.workflow.oneOf.map((arm: any) => arm.properties.kind.const).sort();
