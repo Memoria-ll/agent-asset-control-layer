@@ -1,11 +1,13 @@
 import {
   parseBindingAsset,
   parseSkillAsset,
+  parseWorkflowDefinitionAsset,
   toAssetCandidate,
   type AssetCandidate,
   type AssetResult,
   type AssetTypeContractRegistry,
   type CanonicalAsset,
+  type MetadataCatalog,
   type ResolutionSnapshot,
 } from "@aacl/core-domain";
 import type { AssetDiagnostic, AssetLocation, StoredAsset } from "./filesystem-store.ts";
@@ -36,10 +38,17 @@ export const sourceIdFor = (source: StoredAsset["source"]): string => {
  * its contract metadata, so a candidate no runtime could use would otherwise be
  * reported as included.
  */
-const withTypeSpecificDirectives = (asset: CanonicalAsset): AssetResult<CanonicalAsset> => {
+const withTypeSpecificDirectives = (
+  asset: CanonicalAsset,
+  metadataCatalog?: MetadataCatalog,
+): AssetResult<CanonicalAsset> => {
   if (asset.type === "binding") {
     const binding = parseBindingAsset(asset);
     return binding.ok ? { ok: true, value: asset } : binding;
+  }
+  if (asset.type === "workflow" && metadataCatalog !== undefined) {
+    const workflow = parseWorkflowDefinitionAsset(asset, metadataCatalog);
+    return workflow.ok ? { ok: true, value: asset } : workflow;
   }
   if (asset.type !== "skill") return { ok: true, value: asset };
   const skill = parseSkillAsset(asset);
@@ -51,13 +60,14 @@ const withTypeSpecificDirectives = (asset: CanonicalAsset): AssetResult<Canonica
 export const toResolutionSnapshot = (
   storedAssets: readonly StoredAsset[],
   contracts?: AssetTypeContractRegistry,
+  metadataCatalog?: MetadataCatalog,
 ): ResolutionInputProjection => {
   const candidates: AssetCandidate[] = [];
   const excluded: AssetDiagnostic[] = [];
 
   for (const stored of storedAssets) {
     const source: AssetLocation = stored.source;
-    const resolved = withTypeSpecificDirectives(stored.asset);
+    const resolved = withTypeSpecificDirectives(stored.asset, metadataCatalog);
     if (!resolved.ok) {
       excluded.push({ source, failure: resolved.failure });
       continue;

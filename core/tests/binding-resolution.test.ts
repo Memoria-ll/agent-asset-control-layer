@@ -271,4 +271,33 @@ malformed
     expect(bindings.context).not.toHaveProperty("roleId");
     expect(bindings.candidates[0]).toMatchObject({ applicability: { kind: "included" } });
   });
+
+  it("excludes an invalid Workflow override before selecting the effective definition", async () => {
+    const fixture = await makeFixture();
+    const projectRoot = join(fixture.root, "project");
+    await mkdir(projectRoot);
+    await fixture.service.initialize(projectRoot);
+    await write(fixture.globalRoot.directory, "review-flow.md", workflow());
+    const invalidOverride = workflow()
+      .replace("operation: add", "operation: override")
+      .replace('"entryRoleId":"reviewer"', '"entryRoleId":"missing-role"');
+    await write(join(projectRoot, ".aacl"), "review-flow.md", invalidOverride);
+
+    const response = unwrap(await resolveSelectedStageRequirements({
+      context: {
+        executionMode: "advisory_preparation",
+        workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+      },
+      ide: { workspaceFolder: projectRoot },
+    }, {
+      roots: [fixture.globalRoot, fixture.personalRoot],
+      projectService: fixture.service,
+      capabilityContext: capabilities(),
+    }, catalog));
+
+    expect(response.requirements).toMatchObject({ requiredRoleId: "reviewer" });
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: expect.arrayContaining(["review-flow.md"]), code: expect.any(String) }),
+    ]));
+  });
 });

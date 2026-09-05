@@ -19,7 +19,7 @@ const unwrap = <Value>(result: AssetResult<Value>): Value => {
   if (!result.ok) throw new Error(result.failure.message);
   return result.value;
 };
-const binding = (id: string, metadata: string, operation: "add" | "disable" = "add"): CanonicalBinding =>
+const binding = (id: string, metadata: string, operation: "add" | "override" | "disable" = "add"): CanonicalBinding =>
   unwrap(parseBindingDocument(`---
 schema-version: 4
 id: ${id}
@@ -51,7 +51,7 @@ const entriesFor = (bindings: readonly CanonicalBinding[], capabilityContext?: C
   } }).context;
   const candidates = bindings.map((item, index) => unwrap(toAssetCandidate(item.asset, {
     revision: `revision-${index}` as AssetRevision,
-    source: { layer: item.asset.operation === "disable" ? "project" : "global", sourceId: `source-${index}` },
+    source: { layer: item.asset.operation === "add" ? "global" : "project", sourceId: `source-${index}` },
   })));
   const evaluations = unwrap(resolveScope({
     context, snapshot: { candidates }, ...(capabilityContext === undefined ? {} : { capabilityContext }),
@@ -59,7 +59,7 @@ const entriesFor = (bindings: readonly CanonicalBinding[], capabilityContext?: C
   return bindings.map((item, index) => ({
     binding: item,
     evaluation: evaluations.find(({ candidate }) => candidate === candidates[index])!,
-    source: item.asset.operation === "disable"
+    source: item.asset.operation !== "add"
       ? { layer: "project" as const, projectId: "project-aacl" as never }
       : { layer: "global" as const },
   }));
@@ -123,6 +123,25 @@ describe("binding resolution", () => {
     expect(byId("fallback")).toMatchObject({ fallbackRelation: { kind: "linked", primaryBindingId: "primary" } });
     expect(byId("fallback")).not.toHaveProperty("status", "fallback");
     expect(byId("missing-link")).toMatchObject({ fallbackRelation: { kind: "missing", primaryBindingId: "absent" } });
+  });
+
+  it("keeps an override candidate's fallback edge separate from the overridden definition", () => {
+    const globalA = binding("binding-a", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: binding-b\n");
+    const overrideA = binding("binding-a", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: binding-c\n", "override");
+    const bindingB = binding("binding-b", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: binding-a\n");
+    const bindingC = binding("binding-c", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n");
+    const result = unwrap(resolveBindings({ entries: entriesFor([globalA, overrideA, bindingB, bindingC]), catalog }));
+    const candidatesA = result.candidates.filter((value) =>
+      value.operation !== "disable" && value.definition.bindingId === "binding-a");
+
+    expect(candidatesA.find(({ operation }) => operation === "override")).toMatchObject({
+      applicability: { kind: "included" },
+      fallbackRelation: { kind: "linked", primaryBindingId: "binding-c" },
+    });
+    expect(candidatesA.find(({ operation }) => operation === "add")).toMatchObject({
+      applicability: { kind: "overridden" },
+      fallbackRelation: { kind: "cycle", primaryBindingId: "binding-b" },
+    });
   });
 
   it("resolves a long fallback chain without recursive traversal", () => {

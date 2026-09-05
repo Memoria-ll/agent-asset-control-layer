@@ -6,6 +6,7 @@ import {
   type AssetResult,
   type AssetTypeContractRegistry,
   type CapabilityResolutionContext,
+  type MetadataCatalog,
   type ResolutionResult,
 } from "@aacl/core-domain";
 import { PROJECT_DIRECTORY_NAME, type ProjectService } from "../projects/service.ts";
@@ -27,6 +28,7 @@ export type ResolveAssetsOptions = {
   readonly projectService: ProjectService;
   readonly capabilityContext: CapabilityResolutionContext;
   readonly contracts?: AssetTypeContractRegistry;
+  readonly metadataCatalog?: MetadataCatalog;
 };
 
 export type ResolvedAssets = {
@@ -133,7 +135,7 @@ export const resolveAssets = async (
   const rootFailure = listed.failures.find(({ source }) => source.relativePath === undefined);
   if (rootFailure !== undefined) return { ok: false, failure: rootFailure.failure };
 
-  const projection = toResolutionSnapshot(listed.assets, options.contracts);
+  const projection = toResolutionSnapshot(listed.assets, options.contracts, options.metadataCatalog);
   const resolved = resolveScope({
     context,
     snapshot: projection.snapshot,

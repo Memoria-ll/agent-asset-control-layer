@@ -105,7 +105,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   適用条件は、その軸が context にあるときだけ絞り込みに効く。宣言を必須条件として扱わせたい
   candidate projector は、この経路だけでは表現できない (#121)。
 - `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
-  除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
+  除いて診断として返す。type 固有 parser が検証する body semantics や catalog reference も
+  overlay 解決前に検証し、採用候補を決めた後まで遅延させない。`resolveScope` は候補1件の構造違反で snapshot 全体を
   `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は
   `AssetTypeContract` のうち、その producer が出力しうる値を持つ全欄。merge policy だけを
   見て `allowedOperationKinds` を見落とすと、`resolveScope` 側の同名判定が snapshot 全体を
@@ -123,6 +124,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   cast すると片方向の取り違えが型検査を素通りする。
 - user-authored な参照 graph は入力件数で call stack を消費しない反復走査とし、確定した
   到達結果を再利用して直線 chain の各 node から同じ suffix を走査し直さない。
+- same-ID overlay が異なる参照 edge を持つとき、graph は included になった定義の edge を正とする。
+  各候補の関係表示は、その候補自身の edge を有効 graph に接続して評価する。
 - 複合 target の catalog 検証は独立して欠けた component を一度の結果へすべて列挙し、
   component 間の整合性比較は必要な全 component が存在するときだけ行う。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ

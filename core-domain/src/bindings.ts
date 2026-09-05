@@ -220,57 +220,73 @@ const targetAvailability = (binding: CanonicalBinding, catalog: MetadataCatalog)
 };
 
 const fallbackCycleIndex = (
-  fallbackIds: ReadonlyMap<BindingId, readonly BindingId[]>,
+  fallbackIds: ReadonlyMap<BindingId, BindingId>,
 ): ReadonlyMap<BindingId, readonly BindingId[] | null> => {
   const cycles = new Map<BindingId, readonly BindingId[] | null>();
   for (const start of fallbackIds.keys()) {
     if (cycles.has(start)) continue;
-    const path: BindingId[] = [start];
-    const pathIndexes = new Map<BindingId, number>([[start, 0]]);
-    const stack: { readonly id: BindingId; nextIndex: number }[] = [{ id: start, nextIndex: 0 }];
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1]!;
-      const next = (fallbackIds.get(frame.id) ?? [])[frame.nextIndex];
-      if (next === undefined) {
-        if (!cycles.has(frame.id)) cycles.set(frame.id, null);
-        stack.pop();
-        pathIndexes.delete(path.pop()!);
-        continue;
-      }
-      frame.nextIndex += 1;
-      const repeatedAt = pathIndexes.get(next);
-      if (repeatedAt !== undefined) {
-        const cycle = [...path.slice(repeatedAt), next];
-        for (const id of path) cycles.set(id, cycle);
-        stack.length = 0;
-        continue;
-      }
-      const known = cycles.get(next);
+    const path: BindingId[] = [];
+    const pathIndexes = new Map<BindingId, number>();
+    let current: BindingId | undefined = start;
+    while (current !== undefined) {
+      const known = cycles.get(current);
       if (known !== undefined) {
-        if (known !== null) {
-          for (const id of path) cycles.set(id, known);
-          stack.length = 0;
-        }
-        continue;
+        for (const id of path) cycles.set(id, known);
+        break;
       }
-      pathIndexes.set(next, path.length);
-      path.push(next);
-      stack.push({ id: next, nextIndex: 0 });
+      const repeatedAt = pathIndexes.get(current);
+      if (repeatedAt !== undefined) {
+        const cycle = [...path.slice(repeatedAt), current];
+        for (const id of path) cycles.set(id, cycle);
+        break;
+      }
+      pathIndexes.set(current, path.length);
+      path.push(current);
+      const next = fallbackIds.get(current);
+      if (next === undefined) {
+        for (const id of path) cycles.set(id, null);
+        break;
+      }
+      current = next;
     }
   }
   return cycles;
 };
 
+const candidateSpecificCycle = (
+  binding: CanonicalBinding,
+  effectiveFallbackIds: ReadonlyMap<BindingId, BindingId>,
+  effectiveCycles: ReadonlyMap<BindingId, readonly BindingId[] | null>,
+): readonly BindingId[] | undefined => {
+  const primary = binding.fallbackFor;
+  if (primary === undefined) return undefined;
+  if (effectiveFallbackIds.get(binding.bindingId) === primary) {
+    return effectiveCycles.get(binding.bindingId) ?? undefined;
+  }
+  const path: BindingId[] = [binding.bindingId];
+  const pathIndexes = new Map<BindingId, number>([[binding.bindingId, 0]]);
+  let current: BindingId | undefined = primary;
+  while (current !== undefined) {
+    const repeatedAt = pathIndexes.get(current);
+    if (repeatedAt !== undefined) return [...path.slice(repeatedAt), current];
+    pathIndexes.set(current, path.length);
+    path.push(current);
+    current = effectiveFallbackIds.get(current);
+  }
+  return undefined;
+};
+
 const fallbackRelation = (
   binding: CanonicalBinding,
   bindingIds: ReadonlySet<BindingId>,
+  effectiveFallbackIds: ReadonlyMap<BindingId, BindingId>,
   fallbackCycles: ReadonlyMap<BindingId, readonly BindingId[] | null>,
 ): BindingFallbackRelationDto => {
   const primaryBindingId = binding.fallbackFor;
   if (primaryBindingId === undefined) return { kind: "none" };
   if (!bindingIds.has(primaryBindingId)) return { kind: "missing", primaryBindingId };
-  const cycle = fallbackCycles.get(binding.bindingId);
-  return cycle === undefined || cycle === null
+  const cycle = candidateSpecificCycle(binding, effectiveFallbackIds, fallbackCycles);
+  return cycle === undefined
     ? { kind: "linked", primaryBindingId }
     : { kind: "cycle", primaryBindingId, cycle: [...cycle] };
 };
@@ -298,12 +314,11 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   const bindingIds = new Set(entries
     .filter(({ binding }) => binding.asset.operation !== "disable")
     .map(({ binding }) => binding.bindingId));
-  const fallbackIds = new Map<BindingId, BindingId[]>();
-  for (const { binding } of entries) {
-    if (binding.fallbackFor === undefined) continue;
-    const targets = fallbackIds.get(binding.bindingId) ?? [];
-    if (!targets.includes(binding.fallbackFor)) targets.push(binding.fallbackFor);
-    fallbackIds.set(binding.bindingId, targets);
+  const fallbackIds = new Map<BindingId, BindingId>();
+  for (const { binding, evaluation } of entries) {
+    if (evaluation.reason.kind !== "included" || binding.asset.operation === "disable") continue;
+    if (binding.fallbackFor === undefined) fallbackIds.delete(binding.bindingId);
+    else fallbackIds.set(binding.bindingId, binding.fallbackFor);
   }
   const fallbackCycles = fallbackCycleIndex(fallbackIds);
   const diagnostics: Detail[] = [];
@@ -333,7 +348,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     const resolvedCandidate = {
       definition: definitionDto(binding)!,
       targetAvailability: targetAvailability(binding, input.catalog),
-      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackCycles),
+      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackIds, fallbackCycles),
       ...candidateBase,
     };
     if (binding.asset.operation === "override") {

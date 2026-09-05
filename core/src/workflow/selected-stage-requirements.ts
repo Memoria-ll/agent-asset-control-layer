@@ -125,7 +125,7 @@ export const resolveSelectedStageRequirements = async (
     ok: false,
     failure: coreFailure(parsed.error.code, parsed.error.message, parsed.error.details),
   };
-  const resolved = await resolveAssets(parsed.value, options);
+  const resolved = await resolveAssets(parsed.value, { ...options, metadataCatalog: catalog });
   if (!resolved.ok) return resolved;
   const selected = selectRequirements(resolved.value.resolution.context, resolved.value, catalog);
   const diagnostics = [...(selected.diagnostics ?? []), ...assetDiagnosticDetails(resolved.value)];
