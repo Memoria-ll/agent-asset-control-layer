@@ -16,6 +16,7 @@ import {
   type StoredAsset,
 } from "./filesystem-store.ts";
 import { toResolutionSnapshot } from "./resolution-input.ts";
+import { withFilePath } from "../internal/diagnostics.ts";
 
 export type SharedManagedAssetRoot = Extract<
   ManagedAssetRoot,
@@ -145,7 +146,26 @@ export const resolveAssets = async (
 
   if (options.deriveContext !== undefined) {
     const derived = options.deriveContext(context, listed.assets);
-    if (!derived.ok) return derived;
+    if (!derived.ok) {
+      // A file the store could not read is absent from `listed.assets`, so a
+      // derivation looking for it reports it as missing. On this path the
+      // failure ends the request before the diagnostics are assembled, and the
+      // read error is the only actionable half — carry it on the failure.
+      const storeDetails = listed.failures.flatMap(({ source, failure }) => {
+        const rooted = source.relativePath === undefined
+          ? failure
+          : withFilePath(source.rootId, source.relativePath, failure);
+        return rooted.details ?? [];
+      });
+      if (storeDetails.length === 0) return derived;
+      return {
+        ok: false,
+        failure: coreFailure(derived.failure.code, derived.failure.message, [
+          ...(derived.failure.details ?? []),
+          ...storeDetails,
+        ]),
+      };
+    }
     context = derived.value;
   }
 

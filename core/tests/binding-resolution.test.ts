@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -248,6 +248,46 @@ malformed
       .toMatchObject({ status: "eligible" });
     expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
       .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
+  });
+
+  it("carries the read failure when the selected Workflow file cannot be read", async ({ skip }) => {
+    if (process.platform === "win32") {
+      skip("POSIX permission bits cannot reproduce this read failure on Windows.");
+      return;
+    }
+    const fixture = await makeFixture();
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding"));
+    const workflowPath = join(fixture.globalRoot.directory, "review-flow.md");
+    await chmod(workflowPath, 0o000);
+
+    let permissionDenied = false;
+    try {
+      await readFile(workflowPath);
+    } catch (error) {
+      permissionDenied = error !== null && typeof error === "object" && "code" in error
+        && (error.code === "EACCES" || error.code === "EPERM");
+    }
+    if (!permissionDenied) {
+      await chmod(workflowPath, 0o644);
+      skip("The environment cannot reproduce a POSIX permission-denied read.");
+      return;
+    }
+
+    const result = await resolve(fixture, selectedStageRequest());
+    await chmod(workflowPath, 0o644);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // The Workflow reads as absent, but the reason it is absent is the only
+      // thing the caller can act on.
+      expect(result.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "unavailable",
+          path: ["root", "global", "file", "review-flow.md"],
+        }),
+      ]));
+    }
   });
 
   it("keeps a Role the caller supplied over the one the selected Stage requires", async () => {

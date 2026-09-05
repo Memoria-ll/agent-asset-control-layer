@@ -200,6 +200,9 @@ const targetKey = (target: BindingTargetDto): string => {
   }
 };
 
+const requirementReasons = (failedRequirements: readonly AssetId[]): BindingReasonDto[] =>
+  failedRequirements.map((requirementId) => ({ kind: "requirement_unavailable", requirementId }));
+
 const reasonForGeneric = (reason: CandidateReason, bindingId: BindingId): BindingReasonDto[] => {
   switch (reason.kind) {
     case "included": {
@@ -234,18 +237,28 @@ const reasonForGeneric = (reason: CandidateReason, bindingId: BindingId): Bindin
       // Binding as malformed and drops the ids the resolver had already worked
       // out. A new cause now leaves this function without a return and fails to
       // compile rather than reaching that fallback.
+      // `cause` names the one failure that decided the outcome, but both lists
+      // stay populated: a denied capability wins the cause while the Binding's
+      // unsatisfied `requires` entries are still in `failedRequirements`. Both
+      // are emitted, so neither half of a combined failure is dropped.
       switch (reason.cause) {
         case "capability_not_allowed":
-          return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_not_allowed", capabilityId: id }));
+          return [
+            ...(reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_not_allowed", capabilityId: id } as const)),
+            ...requirementReasons(reason.failedRequirements),
+          ];
         case "capability_unavailable":
-          return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_unavailable", capabilityId: id }));
+          return [
+            ...(reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_unavailable", capabilityId: id } as const)),
+            ...requirementReasons(reason.failedRequirements),
+          ];
         case "missing_requirement":
         case "requirement_out_of_scope":
         case "requirement_disabled":
         case "requirement_overridden":
         case "requirement_cycle":
         case "requirement_invalid":
-          return reason.failedRequirements.map((id) => ({ kind: "requirement_unavailable", requirementId: id }));
+          return requirementReasons(reason.failedRequirements);
       }
   }
 };
@@ -285,6 +298,21 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
      */
     readonly included: boolean;
   };
+  // Every field of the result is drawn from one of the two halves of an entry —
+  // the definition and target from the Binding, the reason, revision and tier
+  // from the evaluation — so a pair that names two different assets produces a
+  // verdict about neither. This is a published entry point, so the pairing is
+  // checked here rather than trusted to the one caller that exists today.
+  const identityMismatch = input.entries.find(({ binding, evaluation }) =>
+    evaluation.candidate.assetType !== "binding"
+    || String(evaluation.candidate.assetId) !== String(binding.bindingId));
+  if (identityMismatch !== undefined) {
+    return invalidBinding([detail(
+      ["entries", String(identityMismatch.binding.bindingId), "evaluation", "candidate", "assetId"],
+      "binding_candidate_mismatch",
+      "The resolution candidate must be the Binding's own asset.",
+    )]);
+  }
   const sourceMismatch = input.entries.find(({ evaluation, source }) => evaluation.candidate.source.layer !== source.layer);
   if (sourceMismatch !== undefined) {
     return invalidBinding([detail(

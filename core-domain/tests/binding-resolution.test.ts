@@ -329,6 +329,46 @@ describe("binding resolution", () => {
     ]));
   });
 
+  it("keeps the unsatisfied requirement when a capability failure decides the cause", () => {
+    const candidate = binding(
+      "reviewer-both",
+      "capability.required: [filesystem-read]\nmetadata.target-kind: model\nmetadata.model-id: gpt-5\n",
+      "requires: [missing-asset]\nscope.role: [reviewer]\n",
+    );
+    const capabilityContext = unwrap(validateCapabilityContext({
+      catalog: unwrap(buildCapabilityCatalog([
+        { capabilityId: "filesystem-read" as CapabilityId, displayName: "Filesystem read", features: [] },
+      ])),
+      offers: [{ capabilityId: "filesystem-read" as CapabilityId, features: [], permission: "denied" }],
+    }));
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([candidate], [], capabilityContext),
+      catalog,
+    }));
+
+    expect(result.candidates[0]?.reasons).toEqual(expect.arrayContaining([
+      { kind: "capability_not_allowed", capabilityId: "filesystem-read" },
+      { kind: "requirement_unavailable", requirementId: "missing-asset" },
+    ]));
+  });
+
+  it("rejects an entry whose evaluation belongs to another asset", () => {
+    const first = binding("reviewer-first", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
+    const second = binding("reviewer-second", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
+    const entries = entriesFor([first, second]);
+    const crossed = [{ ...entries[0]!, evaluation: entries[1]!.evaluation }];
+
+    const result = resolveBindings({ entries: crossed, catalog });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "binding_candidate_mismatch" }),
+      ]));
+    }
+  });
+
   it("names the unsatisfied requirement instead of calling the Binding malformed", () => {
     const dependent = binding(
       "reviewer-dependent",
