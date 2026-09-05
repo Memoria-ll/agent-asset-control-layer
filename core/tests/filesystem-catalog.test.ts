@@ -56,12 +56,19 @@ const writeRaw = async (directory: string, relativePath: string, value: string |
 };
 
 const minimalDocument = (id: string, type = "rule", body = "body"): string =>
-  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 2\ntier: core\n---\n" + body;
+  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 3\noperation: add\ntier: core\n---\n" + body;
 
-const namedDocument = (id: string, type: string, displayName: string, body: string): string =>
+const namedDocument = (
+  id: string,
+  type: string,
+  displayName: string,
+  body: string,
+  operation: "add" | "override" | "disable" = "add",
+): string =>
   [
     "---",
-    "schema-version: 2",
+    "schema-version: 3",
+    "operation: " + operation,
     "id: " + id,
     "type: " + type,
     "tier: core",
@@ -177,6 +184,24 @@ describe("filesystem metadata catalog", () => {
     }
   });
 
+  it.each(["override", "disable"] as const)("refuses to project a role %s overlay into the catalog", async (operation) => {
+    const fixture = await createFixture();
+    await writeAsset(
+      fixture.assetsRoot,
+      "roles/reviewer.md",
+      namedDocument("reviewer", "role", "Reviewer", "reviewer body", operation),
+    );
+
+    const result = await loadMetadataCatalog(sourceFor(fixture));
+
+    expectFailure(result, "invalid_request", "unresolved_asset_operation");
+    if (!result.ok) {
+      expect(result.failure.details?.[0]?.path).toEqual([
+        "root", "global", "file", "roles/reviewer.md", "asset", "operation",
+      ]);
+    }
+  });
+
   it("reports a missing display name for a role asset", async () => {
     const fixture = await createFixture();
     await writeAsset(fixture.assetsRoot, "roles/reviewer.md", minimalDocument("reviewer", "role", "reviewer body"));
@@ -209,7 +234,8 @@ describe("filesystem metadata catalog", () => {
       "roles/reviewer.md",
       [
         "---",
-        "schema-version: 2",
+        "schema-version: 3",
+        "operation: add",
         "id: reviewer",
         "type: role",
         "tier: core",

@@ -31,10 +31,11 @@ export type ParsedAssetDocument = {
 };
 
 export type CanonicalAsset = {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly id: AssetId;
   readonly type: AssetType;
   readonly tier: LoadingTier;
+  readonly operation: "add" | "override" | "disable";
   readonly metadata: Readonly<Record<string, AssetFieldValue>>;
   readonly scope: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
   readonly requires: readonly AssetId[];
@@ -280,10 +281,11 @@ export const validateAsset = (
 
   const fields = parsed.fields;
   const details: Detail[] = [];
-  let schemaVersion = 2 as 2;
+  let schemaVersion = 3 as 3;
   let id: AssetId | undefined;
   let type: AssetType | undefined;
   let tier: LoadingTier | undefined;
+  let operation: CanonicalAsset["operation"] | undefined;
   let lifecycle: string | undefined;
   let mandatory: boolean | undefined;
   let priority: number | undefined;
@@ -304,7 +306,7 @@ export const validateAsset = (
       if (scalar === undefined) continue;
       if (!/^[1-9][0-9]*$/.test(scalar)) {
         details.push(detail(["document", "frontmatter", key], "invalid_value", `Schema version "${scalar}" is malformed.`));
-      } else if (scalar !== "2") {
+      } else if (scalar !== "3") {
         unsupportedSchemaVersion = true;
         details.push(detail(["document", "frontmatter", key], "unsupported_schema_version", `Schema version "${scalar}" is not supported.`));
       }
@@ -331,6 +333,14 @@ export const validateAsset = (
       if (scalar !== undefined) {
         if (isLoadingTier(scalar)) tier = scalar;
         else details.push(detail(["document", "frontmatter", key], "invalid_value", `Unknown loading tier "${scalar}".`));
+      }
+      continue;
+    }
+    if (key === "operation") {
+      const scalar = validateScalar(value, key, details);
+      if (scalar !== undefined) {
+        if (scalar === "add" || scalar === "override" || scalar === "disable") operation = scalar;
+        else details.push(detail(["document", "frontmatter", key], "invalid_value", `Unknown asset operation "${scalar}".`));
       }
       continue;
     }
@@ -483,6 +493,7 @@ export const validateAsset = (
   if (!Object.prototype.hasOwnProperty.call(fields, "id")) details.push(detail(["document", "frontmatter", "id"], "missing_field", 'Required field "id" is missing.'));
   if (!Object.prototype.hasOwnProperty.call(fields, "type")) details.push(detail(["document", "frontmatter", "type"], "missing_field", 'Required field "type" is missing.'));
   if (!Object.prototype.hasOwnProperty.call(fields, "tier")) details.push(detail(["document", "frontmatter", "tier"], "missing_field", 'Required field "tier" is missing.'));
+  if (!Object.prototype.hasOwnProperty.call(fields, "operation")) details.push(detail(["document", "frontmatter", "operation"], "missing_field", 'Required field "operation" is missing.'));
   if (!Object.prototype.hasOwnProperty.call(fields, "schema-version")) {
     unsupportedSchemaVersion = true;
     details.push(detail(["document", "frontmatter", "schema-version"], "unsupported_schema_version", "The asset schema version is required."));
@@ -553,7 +564,7 @@ export const validateAsset = (
     );
   }
 
-  if (id === undefined || type === undefined || tier === undefined) {
+  if (id === undefined || type === undefined || tier === undefined || operation === undefined) {
     return failure("internal", "The validated asset is missing required fields.", [
       detail(["document"], "invalid_value", "The validated asset is missing required fields."),
     ]);
@@ -574,10 +585,11 @@ export const validateAsset = (
   }
 
   const model: {
-    schemaVersion: 2;
+    schemaVersion: 3;
     id: AssetId;
     type: AssetType;
     tier: LoadingTier;
+    operation: CanonicalAsset["operation"];
     metadata: Readonly<Record<string, AssetFieldValue>>;
     scope: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
     requires: readonly AssetId[];
@@ -593,6 +605,7 @@ export const validateAsset = (
     id,
     type,
     tier,
+    operation,
     metadata,
     scope,
     requires,
@@ -637,10 +650,11 @@ export const serializeCanonicalAsset = (
   asset: CanonicalAsset,
 ): AssetResult<string> => {
   if (asset === null || typeof asset !== "object") return serializationFailure("The canonical asset is invalid.");
-  if (asset.schemaVersion !== 2) return serializationFailure("Only asset schema version 2 can be serialized.");
+  if (asset.schemaVersion !== 3) return serializationFailure("Only asset schema version 3 can be serialized.");
   const idResult = asAssetId(asset.id);
   if (!idResult.ok) return serializationFailure("The canonical asset id is invalid.", "invalid_asset_id");
   if (!isAssetType(asset.type) || !isLoadingTier(asset.tier)) return serializationFailure("The canonical asset type or tier is invalid.");
+  if (asset.operation !== "add" && asset.operation !== "override" && asset.operation !== "disable") return serializationFailure("The canonical asset operation is invalid.");
   if (typeof asset.body !== "string" || asset.body.includes("\r")) return serializationFailure("The canonical asset body is invalid.");
   if (asset.lifecycle !== undefined && (typeof asset.lifecycle !== "string" || !isLowerKebabToken(asset.lifecycle))) return serializationFailure("The canonical asset lifecycle is invalid.");
   if (asset.mandatory !== undefined && typeof asset.mandatory !== "boolean") return serializationFailure("The canonical asset mandatory directive is invalid.");
@@ -667,9 +681,10 @@ export const serializeCanonicalAsset = (
     return { ok: true, value: undefined };
   };
   lines.push("---");
-  if (!append("schema-version", "2").ok) return serializationFailure("The schema version cannot be serialized.");
+  if (!append("schema-version", "3").ok) return serializationFailure("The schema version cannot be serialized.");
   if (!append("id", asset.id).ok) return serializationFailure("The canonical asset id cannot be serialized.", "invalid_asset_id");
   if (!append("type", asset.type).ok || !append("tier", asset.tier).ok) return serializationFailure("The canonical asset type or tier cannot be serialized.");
+  if (!append("operation", asset.operation).ok) return serializationFailure("The canonical asset operation cannot be serialized.");
   if (asset.lifecycle !== undefined && !append("lifecycle", asset.lifecycle).ok) return serializationFailure("The canonical asset lifecycle cannot be serialized.");
   if (asset.mandatory !== undefined) lines.push(`mandatory: ${asset.mandatory}`);
   if (asset.priority !== undefined) lines.push(`priority: ${asset.priority}`);

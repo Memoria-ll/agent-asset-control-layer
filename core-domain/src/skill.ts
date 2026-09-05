@@ -12,7 +12,7 @@ import {
 } from "./assets.ts";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import { codeUnitCompare } from "./ordering.ts";
-import type { ResolutionAxis } from "./resolution/resolution-context.ts";
+import { toAssetCandidate } from "./resolution/asset-candidate-projection.ts";
 import type {
   AssetCandidate,
   ResolutionSource,
@@ -73,6 +73,7 @@ export type CanonicalSkill = {
  * of deriving them from `SkillInput`.
  */
 export type SkillResolutionDirectives = {
+  readonly operation?: CanonicalAsset["operation"];
   readonly mandatory?: boolean;
   readonly priority?: number;
   readonly mergeMode?: "additive" | "exclusive";
@@ -135,6 +136,7 @@ export const skillAssetId = (skillId: SkillId): AssetId => skillId as string as 
 export type SkillCandidateProjection = {
   readonly revision: AssetRevision;
   readonly source: ResolutionSource;
+  readonly owningProjectId?: string;
 };
 
 const SKILL_METADATA_KEYS = new Set([
@@ -371,10 +373,11 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
   }
 
   const asset: CanonicalAsset = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: skillAssetId(input.id),
     type: "skill",
     tier: input.tier,
+    operation: input.resolutionDirectives?.operation ?? "add",
     metadata,
     scope: sortedScope(input.scope),
     requires: [...(input.requires ?? [])].sort(codeUnitCompare),
@@ -438,6 +441,7 @@ export const updateSkillAsset = (asset: CanonicalAsset, patch: SkillPatch): Asse
     capabilityDependencies: patch.capabilityDependencies ?? skill.capabilityDependencies,
     additionalMetadata: patch.additionalMetadata ?? skill.additionalMetadata,
     resolutionDirectives: {
+      operation: asset.operation,
       ...(asset.mandatory === undefined ? {} : { mandatory: asset.mandatory }),
       ...(asset.priority === undefined ? {} : { priority: asset.priority }),
       ...(asset.mergeMode === undefined ? {} : { mergeMode: asset.mergeMode }),
@@ -447,40 +451,10 @@ export const updateSkillAsset = (asset: CanonicalAsset, patch: SkillPatch): Asse
   });
 };
 
-const selectorsFromScope = (
-  scope: CanonicalAsset["scope"],
-): Readonly<Partial<Record<ResolutionAxis, readonly string[]>>> => {
-  const selectors: Partial<Record<ResolutionAxis, readonly string[]>> = {};
-  if (scope.project !== undefined) selectors.projectId = scope.project;
-  if (scope.workflow !== undefined) selectors.workflowId = scope.workflow;
-  if (scope.stage !== undefined) selectors.stageId = scope.stage;
-  if (scope["task-type"] !== undefined) selectors.taskTypeId = scope["task-type"];
-  if (scope.role !== undefined) selectors.roleId = scope.role;
-  if (scope.provider !== undefined) selectors.providerId = scope.provider;
-  if (scope.runtime !== undefined) selectors.runtimeId = scope.runtime;
-  if (scope.model !== undefined) selectors.modelId = scope.model;
-  if (scope.directory !== undefined) selectors.directory = scope.directory;
-  return selectors;
-};
-
 export const projectSkillCandidate = (
   skill: CanonicalSkill,
   projection: SkillCandidateProjection,
-): AssetCandidate => ({
-  assetId: skill.asset.id,
-  revision: projection.revision,
-  assetType: "skill",
-  loadingTier: skill.asset.tier,
-  source: projection.source,
-  rule: {
-    selectors: selectorsFromScope(skill.asset.scope),
-    mandatory: false,
-    operation: { kind: "add" },
-    ...(skill.priority === undefined ? {} : { explicitPriority: skill.priority }),
-    requires: skill.asset.requires,
-    ...(skill.capabilityDependencies.length === 0
-      ? {}
-      : { capabilityDependencies: skill.capabilityDependencies }),
-    mergeMode: "additive",
-  },
-});
+): AssetResult<AssetCandidate> => toAssetCandidate(
+  skill.priority === undefined ? skill.asset : { ...skill.asset, priority: skill.priority },
+  projection,
+);

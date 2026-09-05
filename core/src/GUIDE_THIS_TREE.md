@@ -6,6 +6,7 @@
 
 - 一時ファイルから rename する atomic write は、既存ファイルの mode を一時ファイルの作成時に指定して狭い権限を最初から適用し、umask で落ちた既存 mode のビットは書込み後かつ rename 前の `chmod` で復元する。
 - managed root の読取り失敗は `withFilePath` で `CoreErrorDetail.path` を実ファイル位置へ変換する。複数ファイル全体を指す失敗だけは message で対象を表す。
+- asset 1件をそのまま有効な成果物へ変える reader — 実行可能な Workflow definition、稼働中の metadata catalog — は `unresolvedOperationFailure` で `operation !== "add"` を拒否する。単一ファイルしか見ないので、`override` は置換対象を知らず `disable` は指示そのものであり、そのまま通すと resolution が外したはずの asset を有効化する。編集のための読取り (`loadSkill` → `updateSkill`) はこの対象ではない — 拒否すると overlay ファイルを所有 store から編集できなくなる。
 - Registry、asset、workflow state などの永続化を追加するときは、同一 process 内の直列化だけで process 間競合を解決したものと扱わない。
 - Project Registry reconciliation の timeout は warning を記録して listen を継続し、Registry の read / parse / lock / write failure は listen 前の startup failure とする。
 - Workflow State と Agent Execution の link を別 document に永続化する場合、片側の atomic rename を全体の transaction と扱わず、transaction または idempotency を設計する。

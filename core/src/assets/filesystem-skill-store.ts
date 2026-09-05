@@ -6,6 +6,7 @@ import {
   skillAssetId,
   updateSkillAsset,
   type AssetCandidate,
+  type AssetResult,
   type CanonicalSkill,
   type CoreFailure,
   type SkillInput,
@@ -182,11 +183,17 @@ export const updateSkill = async (
     : { ...parsed, assetDiagnostics: loaded.assetDiagnostics };
 };
 
-export const projectStoredSkillCandidate = (stored: StoredSkill): AssetCandidate =>
+export const projectStoredSkillCandidate = (stored: StoredSkill): AssetResult<AssetCandidate> =>
   projectSkillCandidate(stored.skill, {
     revision: stored.revision,
     source: {
       layer: stored.source.kind,
-      sourceId: JSON.stringify([stored.source.rootId, stored.source.relativePath]),
+      sourceId: JSON.stringify([
+        stored.source.kind,
+        stored.source.rootId,
+        stored.source.kind === "project" ? stored.source.projectId : null,
+        stored.source.relativePath,
+      ]),
     },
+    ...(stored.source.kind === "project" ? { owningProjectId: stored.source.projectId } : {}),
   });

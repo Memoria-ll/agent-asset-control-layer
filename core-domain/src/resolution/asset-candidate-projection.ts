@@ -26,9 +26,6 @@ export type AssetProjectionSource = {
   readonly owningProjectId?: string;
 };
 
-/** The single operation this projection can produce; `overrides` / `disables` are #4's. */
-const PROJECTED_OPERATION_KIND: AssetOperationKind = "add";
-
 const detail = (path: readonly string[], code: string, message: string) => ({
   path: [...path],
   code,
@@ -50,11 +47,18 @@ export const toAssetCandidate = (
   contracts: AssetTypeContractRegistry = DEFAULT_ASSET_TYPE_CONTRACTS,
 ): AssetResult<AssetCandidate> => {
   const contract = contracts[asset.type];
-  if (!contract.allowedOperationKinds.includes(PROJECTED_OPERATION_KIND)) {
+  if (!contract.allowedOperationKinds.includes(asset.operation as AssetOperationKind)) {
     return projectionFailure(
       "operation_not_allowed",
       ["asset", asset.id, "operation"],
       "The asset type does not allow this operation.",
+    );
+  }
+  if (asset.operation !== "add" && origin.source.layer !== "project") {
+    return projectionFailure(
+      "operation_requires_project_source",
+      ["asset", asset.id, "operation"],
+      "Override and disable operations require a project source.",
     );
   }
   const resolvedMergeMode = asset.mergeMode ?? contract.mergePolicy.defaultMode;
@@ -113,10 +117,13 @@ export const toAssetCandidate = (
     : asset.mergeGroup === undefined
       ? { mergeMode: "additive" }
       : { mergeMode: "additive", mergeGroup: asset.mergeGroup };
+  const operation: ResolutionRule["operation"] = asset.operation === "add"
+    ? { kind: "add" }
+    : { kind: asset.operation, targetAssetId: asset.id };
   const rule: ResolutionRule = {
     selectors,
     mandatory: asset.mandatory ?? false,
-    operation: { kind: PROJECTED_OPERATION_KIND },
+    operation,
     ...(Object.hasOwn(asset, "priority") ? { explicitPriority: asset.priority as number } : {}),
     requires: asset.requires,
     ...(capabilityDependencies.length === 0 ? {} : { capabilityDependencies }),

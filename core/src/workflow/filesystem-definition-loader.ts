@@ -13,7 +13,7 @@ import {
   type StoredAsset,
   type StoredAssetSource,
 } from "../assets/filesystem-store.ts";
-import { withFilePath } from "../internal/diagnostics.ts";
+import { unresolvedOperationFailure, withFilePath } from "../internal/diagnostics.ts";
 
 export type WorkflowDefinitionLoadResult =
   | {
@@ -58,6 +58,14 @@ export const loadWorkflowDefinition = async (
     ? workflowMatches[0]
     : undefined;
   if (selected !== undefined) {
+    const unresolvedOperation = unresolvedOperationFailure(selected.asset);
+    if (unresolvedOperation !== undefined) {
+      return failureResult(
+        withFilePath(selected.source.rootId, selected.source.relativePath, unresolvedOperation),
+        lookup.matches,
+        lookup.failures,
+      );
+    }
     const parsed = parseWorkflowDefinitionAsset(selected.asset, catalog);
     if (!parsed.ok) {
       return failureResult(

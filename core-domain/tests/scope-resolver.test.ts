@@ -86,7 +86,8 @@ const capabilityContext = (
 const assetDocument = (id: string, fields = "", type: AssetType = "rule"): string => `---
 id: ${id}
 type: ${type}
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 ${fields}---
 `;
@@ -968,6 +969,39 @@ scope.project: [acme]
     expect(result.outcome).toBe("resolved");
     expect(result.conflicts).toHaveLength(0);
     expect(lowerEvaluations.every((item) => item.reason.kind === (operationKind === "override" ? "overridden" : "disabled"))).toBe(true);
+  });
+
+  it("case 9-e: overrides a same-ID target that declares no merge group", () => {
+    const base = candidateFromDocument(assetDocument("asset-plain"), add(), {
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("asset-plain"), {
+      ...add(), operation: { kind: "override", targetAssetId: "asset-plain" as AssetId },
+    }, { source: { layer: "project", sourceId: "project-source" } });
+    const result = resultValue({}, [base, overlay]);
+    const baseEvaluation = result.evaluations.find((item) => item.candidate.source.layer === "global");
+    const overlayEvaluation = result.evaluations.find((item) => item.candidate.source.layer === "project");
+
+    expect(result.outcome).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(baseEvaluation?.reason).toMatchObject({ kind: "overridden", overriddenBy: "asset-plain" });
+    expect(baseEvaluation?.reason).not.toHaveProperty("mergeGroup");
+    expect(overlayEvaluation?.reason.kind).toBe("included");
+  });
+
+  it("case 9-f: keeps a cross-ID override conflicted without a shared merge group", () => {
+    const base = candidateFromDocument(assetDocument("asset-target"), add(), {
+      source: { layer: "global", sourceId: "global-source" },
+    });
+    const overlay = candidateFromDocument(assetDocument("asset-issuer"), {
+      ...add(), operation: { kind: "override", targetAssetId: "asset-target" as AssetId },
+    }, { source: { layer: "project", sourceId: "project-source" } });
+    const result = resultValue({}, [base, overlay]);
+
+    expect(result.outcome).toBe("conflicted");
+    expect(result.conflicts).toEqual([
+      { kind: "operation_conflict", targetAssetId: "asset-target", involvedAssetIds: ["asset-issuer", "asset-target"] },
+    ]);
   });
 
   it("case 10: keeps additive assets and resolves the exclusive subgroup", () => {

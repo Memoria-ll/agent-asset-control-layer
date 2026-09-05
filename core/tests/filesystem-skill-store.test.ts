@@ -110,7 +110,8 @@ describe("filesystem Skill store", () => {
     ]));
     await mkdir(join(directory, "skills"), { recursive: true });
     await writeFile(join(directory, "skills", "CON.md"), `---
-schema-version: 2
+schema-version: 3
+operation: add
 id: reserved-name-skill
 type: skill
 tier: on-demand
@@ -158,10 +159,11 @@ Report advice.
       rootId: "project",
       relativePath: "rules/review-change.md",
       asset: {
-        schemaVersion: 2,
+        schemaVersion: 3,
         id: "review-change" as AssetId,
         type: "rule",
         tier: "core",
+        operation: "add",
         metadata: {},
         scope: {},
         requires: [],
@@ -229,7 +231,7 @@ Report advice.
       },
     }));
     const reloaded = expectStored(await loadSkill(store, "browser-review" as SkillId));
-    const candidate = projectStoredSkillCandidate(reloaded);
+    const candidate = unwrap(projectStoredSkillCandidate(reloaded));
     const result = unwrap(resolveScope({
       context: {
         executionMode: "advisory_preparation",
@@ -245,7 +247,7 @@ Report advice.
     expect(result.evaluations[0]?.candidate.revision).toBe(saved.revision);
     expect(result.evaluations[0]?.candidate.source).toEqual({
       layer: "project",
-      sourceId: '["project","skills/browser-review.md"]',
+      sourceId: '["project","project","project-aacl","skills/browser-review.md"]',
     });
     expect(result.evaluations[0]?.reason).toMatchObject({
       kind: "included",
@@ -274,13 +276,36 @@ Report advice.
         projectId: "project-aacl",
         roleId: "reviewer",
       },
-      snapshot: { candidates: [projectStoredSkillCandidate(reloadedPreferred)] },
+      snapshot: { candidates: [unwrap(projectStoredSkillCandidate(reloadedPreferred))] },
       capabilityContext: { catalog: capabilityCatalog(["browser-screenshot"]), offers: [] },
     }));
     expect(preferredResult.evaluations[0]?.reason).toMatchObject({
       kind: "included",
       degradedCapabilities: [{ capabilityId: "browser-screenshot", strength: "preferred" }],
     });
+  });
+
+  it("keeps StoredSkill operation, Project owner, revision, and source identity in specialized projection", async () => {
+    const store = await fixture();
+    const saved = expectStored(await saveSkill(store, {
+      rootId: "project",
+      relativePath: "skills/disable-review.md",
+      skill: {
+        ...skillInput(),
+        id: "disable-review" as SkillId,
+        scope: {},
+        requires: [],
+        resolutionDirectives: { operation: "disable" },
+      },
+    }));
+    const candidate = unwrap(projectStoredSkillCandidate(expectStored(await loadSkill(store, "disable-review" as SkillId))));
+    expect(candidate.revision).toBe(saved.revision);
+    expect(candidate.source).toEqual({
+      layer: "project",
+      sourceId: '["project","project","project-aacl","skills/disable-review.md"]',
+    });
+    expect(candidate.rule.selectors).toEqual({ projectId: ["project-aacl"] });
+    expect(candidate.rule.operation).toEqual({ kind: "disable", targetAssetId: "disable-review" });
   });
 
   it("preserves required, fallback, and Asset dependency reasons across the saved-Skill path", async () => {
@@ -307,7 +332,7 @@ Report advice.
     const reloadedRequired = expectStored(await loadSkill(store, "required-browser" as SkillId));
     const withoutContext = unwrap(resolveScope({
       context,
-      snapshot: { candidates: [projectStoredSkillCandidate(reloadedRequired)] },
+      snapshot: { candidates: [unwrap(projectStoredSkillCandidate(reloadedRequired))] },
     }));
     const requiredReason = withoutContext.evaluations[0]?.reason;
     expect(requiredReason).toMatchObject({
@@ -323,7 +348,7 @@ Report advice.
 
     const available = unwrap(resolveScope({
       context,
-      snapshot: { candidates: [projectStoredSkillCandidate(reloadedRequired)] },
+      snapshot: { candidates: [unwrap(projectStoredSkillCandidate(reloadedRequired))] },
       capabilityContext: {
         catalog: capabilityCatalog(["browser"]),
         offers: [{ capabilityId: "browser" as CapabilityId, features: [], permission: "allowed" }],
@@ -351,7 +376,7 @@ Report advice.
     const reloadedFallback = expectStored(await loadSkill(store, "fallback-browser" as SkillId));
     const fallbackResult = unwrap(resolveScope({
       context,
-      snapshot: { candidates: [projectStoredSkillCandidate(reloadedFallback)] },
+      snapshot: { candidates: [unwrap(projectStoredSkillCandidate(reloadedFallback))] },
       capabilityContext: {
         catalog: capabilityCatalog(["browser", "vision"]),
         offers: [{ capabilityId: "vision" as CapabilityId, features: [], permission: "allowed" }],
@@ -379,7 +404,7 @@ Report advice.
     const reloadedMissingAsset = expectStored(await loadSkill(store, "missing-rule-skill" as SkillId));
     const missingAssetResult = unwrap(resolveScope({
       context,
-      snapshot: { candidates: [projectStoredSkillCandidate(reloadedMissingAsset)] },
+      snapshot: { candidates: [unwrap(projectStoredSkillCandidate(reloadedMissingAsset))] },
       capabilityContext: { catalog: capabilityCatalog([]), offers: [] },
     }));
     expect(missingAssetResult.evaluations[0]?.reason).toMatchObject({

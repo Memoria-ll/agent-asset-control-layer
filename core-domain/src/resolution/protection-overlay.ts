@@ -84,7 +84,7 @@ export const statusForState = (
       return {
         kind: "overridden",
         overriddenBy: evidence.overriddenBy,
-        mergeGroup: evidence.mergeGroup,
+        ...(evidence.mergeGroup === undefined ? {} : { mergeGroup: evidence.mergeGroup }),
         winnerRank: evidence.winnerRank,
       };
     }
@@ -97,7 +97,7 @@ export const statusForState = (
       return {
         kind: "overridden",
         overriddenBy: reason.overriddenBy,
-        mergeGroup: reason.mergeGroup,
+        ...(reason.mergeGroup === undefined ? {} : { mergeGroup: reason.mergeGroup }),
         winnerRank: reason.winnerRank,
       };
     }
@@ -210,7 +210,12 @@ export const evaluatePlan = (
         });
         continue;
       }
-      if (operation.kind === "override" && (
+      // A shared merge group is what makes a cross-ID override expressible: it is the
+      // only declaration saying the two candidates are alternatives rather than
+      // unrelated assets.  A same-ID overlay carries that relation in the identity
+      // itself, so requiring a group there would restrict overrides to assets whose
+      // author happened to declare one — the additive default could never be overridden.
+      if (operation.kind === "override" && operation.targetAssetId !== issuer.candidate.assetId && (
         issuer.candidate.rule.mergeGroup === undefined ||
         targets.some((target) => target.candidate.rule.mergeGroup === undefined || issuer.candidate.rule.mergeGroup !== target.candidate.rule.mergeGroup)
       )) {
@@ -279,7 +284,9 @@ export const evaluatePlan = (
         : {
             kind: "overridden",
             overriddenBy: action.issuer.candidate.assetId,
-            mergeGroup: action.issuer.candidate.rule.mergeGroup as string,
+            ...(action.issuer.candidate.rule.mergeGroup === undefined
+              ? {}
+              : { mergeGroup: action.issuer.candidate.rule.mergeGroup }),
             winnerRank: action.issuer.rank!,
           });
     }

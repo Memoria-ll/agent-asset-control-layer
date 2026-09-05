@@ -1,4 +1,28 @@
-import { coreFailure, type CoreFailure } from "@aacl/core-domain";
+import { coreFailure, type CanonicalAsset, type CoreFailure } from "@aacl/core-domain";
+
+/**
+ * The failure a reader owes when an asset carries an operation it cannot apply,
+ * or `undefined` when the asset is a plain `add`.
+ *
+ * A reader that turns one asset straight into an active artifact — an executable
+ * Workflow definition, the live metadata catalogue — sees a single file and never
+ * the snapshot the operation is about. An `override` is applicable only relative to
+ * the candidate it replaces and a `disable` is an instruction to drop one, so
+ * consuming either here activates exactly what resolution would have removed. The
+ * Skill store's read half is deliberately not a caller: `loadSkill` feeds
+ * `updateSkill`, and refusing there would make an overlay file uneditable through
+ * the store that owns it.
+ */
+export const unresolvedOperationFailure = (asset: CanonicalAsset): CoreFailure | undefined =>
+  asset.operation === "add"
+    ? undefined
+    : coreFailure("invalid_request", "The asset carries a resolution operation this reader cannot apply.", [
+        {
+          path: ["asset", "operation"],
+          code: "unresolved_asset_operation",
+          message: `The asset declares operation "${asset.operation}", which only scope resolution can apply.`,
+        },
+      ]);
 
 /**
  * Re-root a failure's detail paths at the file they came from, so every reader of a

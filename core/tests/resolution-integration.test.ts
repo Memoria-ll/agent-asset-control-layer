@@ -73,7 +73,8 @@ describe("filesystem assets to resolution snapshot", () => {
     await saveAsset(store, "global-root", "nested/low.md", `---
 id: low-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 mandatory: false
 priority: 1
@@ -88,7 +89,8 @@ low
     await saveAsset(store, "personal-root", "high.md", `---
 id: high-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 mandatory: true
 priority: 9
@@ -103,7 +105,8 @@ high
     await saveAsset(store, "project-root", "flex.md", `---
 id: flexible-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 scope.role: [implementer, reviewer]
 ---
@@ -112,7 +115,8 @@ flexible
     await saveAsset(store, "global-root", "invalid/bad-role.md", `---
 id: invalid-role
 type: role
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 merge-mode: exclusive
 merge-group: review
@@ -215,7 +219,8 @@ invalid
     await saveAsset(store, "one-root", "unscoped.md", `---
 id: project-one-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 scope.role: [reviewer]
 ---
@@ -224,7 +229,8 @@ one
     await saveAsset(store, "two-root", "unscoped.md", `---
 id: project-two-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 scope.role: [reviewer]
 ---
@@ -233,7 +239,8 @@ two
     await saveAsset(store, "two-root", "foreign.md", `---
 id: foreign-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 scope.project: [project-one]
 ---
@@ -323,7 +330,8 @@ foreign
     await saveAsset(store, "global-root", "skills/broken.md", `---
 id: broken-skill
 type: skill
-schema-version: 2
+schema-version: 3
+operation: add
 tier: on-demand
 metadata.kind: advisory
 ---
@@ -332,7 +340,8 @@ broken
     await saveAsset(store, "global-root", "sound.md", `---
 id: sound-rule
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 ---
 sound

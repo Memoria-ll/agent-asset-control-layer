@@ -137,6 +137,12 @@ export type {
 } from "./assets/filesystem-skill-store.ts";
 export { toResolutionSnapshot } from "./assets/resolution-input.ts";
 export type { ResolutionInputProjection } from "./assets/resolution-input.ts";
+export { resolveAssets } from "./assets/resolve-assets.ts";
+export type {
+  ResolveAssetsOptions,
+  ResolvedAssets,
+  SharedManagedAssetRoot,
+} from "./assets/resolve-assets.ts";
 
 export { loadMetadataCatalog } from "./catalog/filesystem-catalog.ts";
 export type {

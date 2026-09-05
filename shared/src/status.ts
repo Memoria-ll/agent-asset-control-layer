@@ -143,7 +143,8 @@ export const ResolutionReason = z.discriminatedUnion("kind", [
     kind: z.literal("overridden"),
     explanation: NonEmptyString,
     overriddenBy: AssetId,
-    mergeGroup: NonEmptyString,
+    /** Absent for a same-ID overlay: it replaces one identity, not a merge group. */
+    mergeGroup: z.optional(NonEmptyString),
   }),
   z.strictObject({
     kind: z.literal("disabled"),

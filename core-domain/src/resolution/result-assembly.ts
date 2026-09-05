@@ -37,7 +37,7 @@ export const assembleResult = (ctx: ResultAssemblyContext): AssetResult<Resoluti
       selectionEvidence.set(state, {
         kind: "overridden",
         overriddenBy: status.overriddenBy,
-        mergeGroup: status.mergeGroup,
+        ...(status.mergeGroup === undefined ? {} : { mergeGroup: status.mergeGroup }),
         winnerRank: status.winnerRank,
       });
       continue;
@@ -81,7 +81,7 @@ export const assembleResult = (ctx: ResultAssemblyContext): AssetResult<Resoluti
       finalReasons.set(state, {
         kind: "overridden",
         overriddenBy: status.overriddenBy,
-        mergeGroup: status.mergeGroup,
+        ...(status.mergeGroup === undefined ? {} : { mergeGroup: status.mergeGroup }),
         winnerRank: status.winnerRank,
       });
     } else if (status.kind === "conflict") {
@@ -330,7 +330,7 @@ export const toResolutionReasonDto = (reason: CandidateReason): ResolutionReason
       kind: "overridden",
       explanation: "The candidate was overridden by a higher-ranked candidate.",
       overriddenBy: reason.overriddenBy,
-      mergeGroup: reason.mergeGroup,
+      ...(reason.mergeGroup === undefined ? {} : { mergeGroup: reason.mergeGroup }),
     };
     case "disabled": return { kind: "disabled", explanation: "The candidate was disabled by an operation.", disabledBy: reason.disabledBy };
     case "unavailable": {
