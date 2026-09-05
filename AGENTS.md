@@ -71,6 +71,9 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   required 欄の追加を含む境界 DTO の変更は contract version を更新する。
 - Asset の source of truth は人間可読な filesystem file。その on-disk shape も公開契約であり、
   変更時は `save-schema-check` を通す。
+- asset schema version は frontmatter の形、すなわち top-level 欄・namespace・directive の集合に
+  対応する。`type` など既存欄の値集合の拡張は形を変えないので版数を動かさない。Core の
+  ダウングレードは支援対象外とし、新しい Asset を古い Core が読めること（前方互換）も担保しない。
 - Core API の request / response / error / version は公開契約。`GET /health` は
   `{ contractVersion }` を返す。`HEAD /health` は同じ status / headers を body なしで返す。
 
