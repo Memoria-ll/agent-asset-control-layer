@@ -1,4 +1,5 @@
 import {
+  parseBindingAsset,
   parseSkillAsset,
   toAssetCandidate,
   type AssetCandidate,
@@ -14,7 +15,7 @@ export type ResolutionInputProjection = {
   readonly excluded: readonly AssetDiagnostic[];
 };
 
-const sourceIdFor = (source: StoredAsset["source"]): string => {
+export const sourceIdFor = (source: StoredAsset["source"]): string => {
   // rootId alone collides within a root, while relativePath alone collides across roots.
   return JSON.stringify([
     source.kind,
@@ -36,6 +37,10 @@ const sourceIdFor = (source: StoredAsset["source"]): string => {
  * reported as included.
  */
 const withTypeSpecificDirectives = (asset: CanonicalAsset): AssetResult<CanonicalAsset> => {
+  if (asset.type === "binding") {
+    const binding = parseBindingAsset(asset);
+    return binding.ok ? { ok: true, value: asset } : binding;
+  }
   if (asset.type !== "skill") return { ok: true, value: asset };
   const skill = parseSkillAsset(asset);
   if (!skill.ok) return skill;

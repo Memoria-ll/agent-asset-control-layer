@@ -165,6 +165,7 @@ const representativeInputs: Record<string, unknown> = {
     },
     source: { layer: "project", projectId: "project-1" },
     revision: "revision-1",
+    loadingTier: "core",
   },
   BindingReasonDto: { kind: "eligible" },
   BindingCandidateDto: {
@@ -177,6 +178,7 @@ const representativeInputs: Record<string, unknown> = {
     reasons: [{ kind: "eligible" }],
     source: { layer: "project", projectId: "project-1" },
     revision: "revision-1",
+    loadingTier: "core",
   },
   BindingResolutionRequest: {
     context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },

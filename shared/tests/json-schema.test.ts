@@ -120,7 +120,7 @@ describe("contract JSON Schemas", () => {
     for (const arm of schemas.BindingReasonDto.oneOf) expect(arm.additionalProperties).toBe(false);
     for (const arm of schemas.BindingCandidateDto.oneOf) expect(arm.additionalProperties).toBe(false);
     const disabled = schemas.BindingRecordDto.oneOf.find((arm: any) => arm.properties.operation.const === "disable");
-    expect(disabled.required).toEqual(expect.arrayContaining(["operation", "bindingId", "revision", "source"]));
+    expect(disabled.required).toEqual(expect.arrayContaining(["operation", "bindingId", "revision", "source", "loadingTier"]));
     expect(disabled.properties.definition).toBeUndefined();
   });
 

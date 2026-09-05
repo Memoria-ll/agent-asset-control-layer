@@ -325,7 +325,11 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   const candidates: BindingCandidateDto[] = [];
   for (const item of base) {
     const { binding } = item;
-    const candidateBase = { revision: item.evaluation.candidate.revision, source: item.source };
+    const candidateBase = {
+      revision: item.evaluation.candidate.revision,
+      source: item.source,
+      loadingTier: item.evaluation.candidate.loadingTier,
+    };
     const primaryId = binding.fallbackFor;
     if (!item.eligible) {
       candidates.push({
@@ -404,5 +408,6 @@ const candidateSortKey = (candidate: BindingCandidateDto): string => {
     candidate.source.layer,
     candidate.source.layer === "project" ? candidate.source.projectId : "",
     candidate.revision,
+    candidate.loadingTier,
   ].join("\u0000");
 };
