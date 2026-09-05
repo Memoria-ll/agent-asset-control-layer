@@ -220,6 +220,40 @@ describe("resolveCapabilityBindings", () => {
     expect(result.evaluations.find((evaluation) => evaluation.bindingId === bindingId("denied"))).toMatchObject({ eligible: false, permission: "denied" });
   });
 
+  it("aggregates a group as denied only when every available binding is denied", () => {
+    const group = (permissions: ResolveCapabilityBindingsInput["permissions"]) => expectValue(resolveCapabilityBindings({
+      context: context(),
+      catalog: catalog(),
+      bindings: [binding("denied", "project-a", "tool-denied"), binding("other", "project-a", "tool-other")],
+      observations: [
+        { target: target("provider", "tool-denied"), state: "available" },
+        { target: target("provider", "tool-other"), state: "available" },
+      ],
+      permissions,
+    }));
+
+    const mixed = group([{ bindingId: bindingId("denied"), decision: "denied" }]);
+    expect(mixed.capabilityResults[0]).toMatchObject({
+      availability: "available",
+      permission: "unknown",
+      reasons: [{ kind: "available_but_permission_unknown" }],
+    });
+    expect(mixed.capabilityResults[0]?.eligibleBindingIds).toBeUndefined();
+    expect(mixed.executionCandidates).toEqual([]);
+    expect(mixed.capabilityContext.offers[0]?.permission).toBe("denied");
+
+    const allDenied = group([
+      { bindingId: bindingId("denied"), decision: "denied" },
+      { bindingId: bindingId("other"), decision: "denied" },
+    ]);
+    expect(allDenied.capabilityResults[0]).toMatchObject({
+      availability: "available",
+      permission: "denied",
+      reasons: [{ kind: "available_but_denied" }],
+    });
+    expect(allDenied.capabilityContext.offers[0]?.permission).toBe("denied");
+  });
+
   it("is independent of input array order", () => {
     const input = {
       context: context(),

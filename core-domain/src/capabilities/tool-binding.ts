@@ -450,22 +450,24 @@ export const resolveCapabilityBindings = (
     const applicable = group.evaluations.filter((evaluation) => evaluation.scope === "matched" && evaluation.enabled);
     const available = applicable.filter((evaluation) => evaluation.observation === "available");
     const eligible = available.filter((evaluation) => evaluation.permission === "allowed");
-    const denied = available.filter((evaluation) => evaluation.permission === "denied");
+    const unresolved = available.filter((evaluation) => evaluation.permission === "unknown");
     const bindingIds = group.evaluations.map((evaluation) => evaluation.bindingId).sort(codeUnitCompare);
     const eligibleBindingIds = eligible.map((evaluation) => evaluation.bindingId).sort(codeUnitCompare);
     const result: CapabilityAvailabilityResult = {
       capability: cloneReference(group.capability),
       availability: available.length > 0 ? "available" : "unavailable",
-      permission: eligible.length > 0 ? "allowed" : available.length === 0 ? "unknown" : denied.length > 0 ? "denied" : "unknown",
+      // A group is denied only when every available binding is denied. One unresolved
+      // binding keeps the aggregate unknown, so a caller can still ask for that decision.
+      permission: eligible.length > 0 ? "allowed" : available.length === 0 || unresolved.length > 0 ? "unknown" : "denied",
       bindingIds,
       ...(eligibleBindingIds.length === 0 ? {} : { eligibleBindingIds }),
       reasons: available.length === 0
         ? [{ kind: applicable.length === 0 ? "no_applicable_binding" : "no_available_binding" }]
         : eligible.length > 0
           ? [{ kind: "allowed_bindings_available" }]
-          : denied.length > 0
-            ? [{ kind: "available_but_denied" }]
-            : [{ kind: "available_but_permission_unknown" }],
+          : unresolved.length > 0
+            ? [{ kind: "available_but_permission_unknown" }]
+            : [{ kind: "available_but_denied" }],
     };
     capabilityResults.push(result);
     for (const evaluation of eligible) executionCandidates.push({
