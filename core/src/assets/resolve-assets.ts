@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { tryParseResolveRequest, type ResolutionContextDto } from "@aacl/shared";
+import { tryParseResolveRequest } from "@aacl/shared";
 import {
   coreFailure,
   resolveScope,
@@ -16,7 +16,6 @@ import {
   type StoredAsset,
 } from "./filesystem-store.ts";
 import { toResolutionSnapshot } from "./resolution-input.ts";
-import { withFilePath } from "../internal/diagnostics.ts";
 
 export type SharedManagedAssetRoot = Extract<
   ManagedAssetRoot,
@@ -28,16 +27,6 @@ export type ResolveAssetsOptions = {
   readonly projectService: ProjectService;
   readonly capabilityContext: CapabilityResolutionContext;
   readonly contracts?: AssetTypeContractRegistry;
-  /**
-   * Fill context axes an Asset is the source of truth for, once the store is
-   * listed and before scope matching runs. Scope matching reads an axis the
-   * context omits as neutral, so an axis derived after `resolveScope` narrows
-   * nothing and an axis derived before the store is listed cannot be read.
-   */
-  readonly deriveContext?: (
-    context: ResolutionContextDto,
-    assets: readonly StoredAsset[],
-  ) => AssetResult<ResolutionContextDto>;
 };
 
 export type ResolvedAssets = {
@@ -143,31 +132,6 @@ export const resolveAssets = async (
   const listed = await storeResult.value.list();
   const rootFailure = listed.failures.find(({ source }) => source.relativePath === undefined);
   if (rootFailure !== undefined) return { ok: false, failure: rootFailure.failure };
-
-  if (options.deriveContext !== undefined) {
-    const derived = options.deriveContext(context, listed.assets);
-    if (!derived.ok) {
-      // A file the store could not read is absent from `listed.assets`, so a
-      // derivation looking for it reports it as missing. On this path the
-      // failure ends the request before the diagnostics are assembled, and the
-      // read error is the only actionable half — carry it on the failure.
-      const storeDetails = listed.failures.flatMap(({ source, failure }) => {
-        const rooted = source.relativePath === undefined
-          ? failure
-          : withFilePath(source.rootId, source.relativePath, failure);
-        return rooted.details ?? [];
-      });
-      if (storeDetails.length === 0) return derived;
-      return {
-        ok: false,
-        failure: coreFailure(derived.failure.code, derived.failure.message, [
-          ...(derived.failure.details ?? []),
-          ...storeDetails,
-        ]),
-      };
-    }
-    context = derived.value;
-  }
 
   const projection = toResolutionSnapshot(listed.assets, options.contracts);
   const resolved = resolveScope({

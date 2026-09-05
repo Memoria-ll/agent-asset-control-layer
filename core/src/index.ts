@@ -153,10 +153,7 @@ export type {
   SharedManagedAssetRoot,
 } from "./assets/resolve-assets.ts";
 export { resolveBindingAssets } from "./assets/binding-resolution.ts";
-export type {
-  BindingResolutionServiceResult,
-  ResolveBindingAssetsOptions,
-} from "./assets/binding-resolution.ts";
+export type { BindingResolutionServiceResult } from "./assets/binding-resolution.ts";
 
 export { loadMetadataCatalog } from "./catalog/filesystem-catalog.ts";
 export type {

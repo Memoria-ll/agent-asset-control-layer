@@ -292,6 +292,28 @@ describe("binding resolution", () => {
       .toMatchObject({ status: "unavailable", reasons: [{ kind: "fallback_not_needed", primaryBindingId: "chain-first" }] });
   });
 
+  it("does not cover a chain through an overridden revision's fallback relation", () => {
+    const head = binding("chain-head", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
+    // The overridden revision declares the relation; the revision that applies
+    // does not, and its target is missing.
+    const overriddenMiddle = binding("chain-middle", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-head\n", "scope.role: [reviewer]\n");
+    const effectiveMiddle = binding("chain-middle", "metadata.target-kind: model\nmetadata.model-id: missing-model\n", "scope.role: [reviewer]\n", "override");
+    const tail = binding("chain-tail", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-middle\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([head, overriddenMiddle, effectiveMiddle, tail], [
+        { layer: "global", sourceId: "global-head" },
+        { layer: "global", sourceId: "global-middle" },
+        { layer: "project", sourceId: "project-middle" },
+        { layer: "global", sourceId: "global-tail" },
+      ]),
+      catalog,
+    }));
+
+    // Nothing at `chain-middle` serves, so its own fallback has to activate.
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-tail"))
+      .toMatchObject({ status: "fallback", reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "chain-middle" }] });
+  });
+
   it("does not let a Binding with a missing primary cover the chain beneath it", () => {
     const first = binding("chain-first", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-absent\n", "scope.role: [reviewer]\n");
     const second = binding("chain-second", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-first\n", "scope.role: [reviewer]\n");

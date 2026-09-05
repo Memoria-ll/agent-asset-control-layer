@@ -437,6 +437,11 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     }
     const nested = new Set([...path, String(id)]);
     const covered = states.some((state) => {
+      // Same admission rule as the fallback graph above: a candidate the
+      // resolver dropped neither serves the chain nor lends it its declared
+      // edge, so an overridden revision's `fallbackFor` cannot make an id read
+      // as covered while the revision that actually applies is unavailable.
+      if (!state.included) return false;
       if (brokenFallback(state) !== undefined) return false;
       if (state.eligible) return true;
       const primary = state.binding.fallbackFor;

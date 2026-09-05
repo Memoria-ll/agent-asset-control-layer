@@ -115,34 +115,44 @@ ${options.operation === "disable" ? "" : `metadata.target-kind: model\nmetadata.
 ${options.body ?? id}
 `;
 
-const workflowDocument = (): string => [
-  "---",
-  "schema-version: 3",
-  "id: review-flow",
-  "type: workflow",
-  "tier: core",
-  "operation: add",
-  "---",
-  "```aacl-workflow",
-  JSON.stringify({
-    entryRoleId: "reviewer",
-    entryStageId: "review",
-    terminalStageId: "done",
-    stages: [
-      {
-        stageId: "review",
-        displayName: "Review",
-        description: "Review the change",
-        requiredRoleId: "reviewer",
-        requiredTaskTypeId: "code-review",
-      },
-      { stageId: "done", displayName: "Done", description: "Finish" },
-    ],
-    transitions: [{ fromStageId: "review", toStageId: "done", transitionKind: "advance" }],
-  }),
-  "```",
-  "",
-].join("\n");
+const workflowDocument = (
+  options: {
+    readonly operation?: "add" | "override";
+    readonly requiredRoleId?: string;
+    readonly model?: string;
+  } = {},
+): string => {
+  const requiredRoleId = options.requiredRoleId ?? "reviewer";
+  return [
+    "---",
+    "schema-version: 3",
+    "id: review-flow",
+    "type: workflow",
+    "tier: core",
+    `operation: ${options.operation ?? "add"}`,
+    ...(options.model === undefined ? [] : [`scope.model: [${options.model}]`]),
+    "---",
+    "```aacl-workflow",
+    JSON.stringify({
+      entryRoleId: requiredRoleId,
+      entryStageId: "review",
+      terminalStageId: "done",
+      stages: [
+        {
+          stageId: "review",
+          displayName: "Review",
+          description: "Review the change",
+          requiredRoleId,
+          requiredTaskTypeId: "code-review",
+        },
+        { stageId: "done", displayName: "Done", description: "Finish" },
+      ],
+      transitions: [{ fromStageId: "review", toStageId: "done", transitionKind: "advance" }],
+    }),
+    "```",
+    "",
+  ].join("\n");
+};
 
 const selectedStageRequest = () => ({
   context: {
@@ -248,6 +258,52 @@ malformed
       .toMatchObject({ status: "eligible" });
     expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
       .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
+  });
+
+  it("derives the Stage axes from the Workflow the Project override makes effective", async () => {
+    const fixture = await makeFixture();
+    const projectRoot = join(fixture.root, "project");
+    await mkdir(projectRoot);
+    await fixture.service.initialize(projectRoot);
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
+    await write(join(projectRoot, ".aacl"), "review-flow.md", workflowDocument({
+      operation: "override",
+      requiredRoleId: "implementer",
+    }));
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding", { role: "reviewer" }));
+    await write(fixture.globalRoot.directory, "implementer.md", binding("implementer-binding", { role: "implementer" }));
+
+    const response = unwrap(await resolve(fixture, {
+      ...selectedStageRequest(),
+      ide: { workspaceFolder: projectRoot },
+    }));
+
+    // The override is the effective Definition, so its Stage's Role decides.
+    expect(response.context).toMatchObject({ roleId: "implementer" });
+    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
+      .toMatchObject({ status: "eligible" });
+    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "reviewer-binding"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
+  });
+
+  it("does not derive Stage axes from a Workflow the scope excludes", async () => {
+    const fixture = await makeFixture();
+    // Declares a Model the request's context does not carry, so scope matching
+    // drops it — the Definition exists on disk but does not apply here.
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument({ model: "other-model" }));
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding", { role: "reviewer" }));
+
+    const result = await resolve(fixture, {
+      context: { ...selectedStageRequest().context, modelId: "gpt-5" },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("not_found");
+      expect(result.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "workflow_definition_missing" }),
+      ]));
+    }
   });
 
   it("carries the read failure when the selected Workflow file cannot be read", async ({ skip }) => {
