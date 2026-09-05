@@ -198,6 +198,8 @@ const representativeInputs: Record<string, unknown> = {
   },
   SelectedStageRequirementsResponse: {
     context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    outcome: "unavailable",
+    diagnostics: [{ path: ["context", "workflow"], code: "selection_required", message: "Selection required." }],
   },
   BindingResolutionResponse: {
     context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },

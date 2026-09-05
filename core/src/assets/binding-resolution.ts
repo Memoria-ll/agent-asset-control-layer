@@ -74,7 +74,7 @@ export const resolveBindingAssets = async (
   }
 
   const { loadingTiers, ...unfilteredRequest } = parsed.value;
-  const resolved = await resolveAssets(unfilteredRequest, options);
+  const resolved = await resolveAssets(unfilteredRequest, { ...options, metadataCatalog: catalog });
   if (!resolved.ok) return resolved;
 
   const bindingsByCandidate = new Map<string, StoredAsset>();

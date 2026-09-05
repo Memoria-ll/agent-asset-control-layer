@@ -147,8 +147,10 @@ describe("binding resolution", () => {
   it("resolves a long fallback chain without recursive traversal", () => {
     const template = binding("chain-0", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n");
     const templateEntry = entriesFor([template])[0]!;
+    if (templateEntry.evaluation.reason.kind !== "included") throw new Error("Expected included template.");
+    const winnerRank = templateEntry.evaluation.reason.rank;
     const length = 12_000;
-    const entries = Array.from({ length }, (_, index) => {
+    const chainEntries = Array.from({ length }, (_, index) => {
       const bindingId = `chain-${index}` as never;
       const fallbackFor = index === length - 1 ? undefined : `chain-${index + 1}` as never;
       const item: CanonicalBinding = {
@@ -177,9 +179,37 @@ describe("binding resolution", () => {
         source: { layer: "global" as const },
       };
     });
+    const overlayCount = 2_000;
+    const alternateEntries = Array.from({ length: overlayCount }, (_, index) => {
+      const bindingId = "alternate" as never;
+      const fallbackFor = "chain-0" as never;
+      return {
+        binding: {
+          ...template,
+          bindingId,
+          fallbackFor,
+          asset: {
+            ...template.asset,
+            id: bindingId,
+            metadata: { ...template.asset.metadata, "fallback-for": fallbackFor },
+          },
+        },
+        evaluation: {
+          ...templateEntry.evaluation,
+          candidate: {
+            ...templateEntry.evaluation.candidate,
+            assetId: bindingId,
+            revision: `alternate-revision-${index}` as never,
+            source: { layer: "global" as const, sourceId: `alternate-source-${index}` },
+          },
+          reason: { kind: "overridden" as const, overriddenBy: "alternate-winner" as never, winnerRank },
+        },
+        source: { layer: "global" as const },
+      };
+    });
 
-    const result = unwrap(resolveBindings({ entries, catalog }));
-    expect(result.candidates).toHaveLength(length);
+    const result = unwrap(resolveBindings({ entries: [...chainEntries, ...alternateEntries], catalog }));
+    expect(result.candidates).toHaveLength(length + overlayCount);
     expect(result.candidates[0]).toMatchObject({ fallbackRelation: expect.objectContaining({ kind: "linked" }) });
   });
 

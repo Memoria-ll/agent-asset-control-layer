@@ -2,6 +2,7 @@ import {
   tryParseSelectedStageRequirementsRequest,
   type CoreErrorDetail,
   type ResolutionContextDto,
+  type SelectedStageRequirementsDto,
   type SelectedStageRequirementsResponse,
 } from "@aacl/shared";
 import {
@@ -62,7 +63,10 @@ const selectRequirements = (
   context: ResolutionContextDto,
   resolved: ResolvedAssets,
   catalog: MetadataCatalog,
-): Omit<SelectedStageRequirementsResponse, "context"> => {
+): {
+  readonly requirements?: SelectedStageRequirementsDto;
+  readonly diagnostics?: readonly CoreErrorDetail[];
+} => {
   const selection = context.workflow;
   if (selection.kind !== "selected") return {
     diagnostics: [{
@@ -133,8 +137,13 @@ export const resolveSelectedStageRequirements = async (
     ok: true,
     value: {
       context: resolved.value.resolution.context,
-      ...(selected.requirements === undefined ? {} : { requirements: selected.requirements }),
-      ...(diagnostics.length === 0 ? {} : { diagnostics }),
+      ...(selected.requirements === undefined
+        ? { outcome: "unavailable" as const, diagnostics }
+        : {
+            outcome: "resolved" as const,
+            requirements: selected.requirements,
+            ...(diagnostics.length === 0 ? {} : { diagnostics }),
+          }),
     },
   };
 };

@@ -5,6 +5,7 @@ import {
   parseBindingRecordDto,
   parseBindingScopeDto,
   parseBindingTargetDto,
+  parseSelectedStageRequirementsResponse,
   tryParseBindingDefinitionDto,
 } from "../src/index.ts";
 
@@ -105,6 +106,26 @@ describe("Binding shared contract", () => {
       loadingTier: "core",
     })).toThrow();
     expect(() => parseBindingCandidateDto({
+      operation: "add",
+      definition: { ...definition, fallbackFor: "primary-a" },
+      applicability: { kind: "included", explanation: "Matched.", matchedAxes: [] },
+      targetAvailability: { status: "available" },
+      fallbackRelation: { kind: "linked", primaryBindingId: "primary-b" },
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
+    expect(() => parseBindingCandidateDto({
+      operation: "add",
+      definition,
+      applicability: { kind: "included", explanation: "Matched.", matchedAxes: [] },
+      targetAvailability: { status: "available" },
+      fallbackRelation: { kind: "linked", primaryBindingId: "primary-a" },
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
+    expect(() => parseBindingCandidateDto({
       operation: "disable",
       bindingId: "binding-1",
       applicability: { kind: "disabled", explanation: "Disabled.", disabledBy: "binding-1" },
@@ -123,6 +144,17 @@ describe("Binding shared contract", () => {
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
+  });
+
+  it("requires selected-stage responses to contain an outcome", () => {
+    expect(() => parseSelectedStageRequirementsResponse({
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    })).toThrow();
+    expect(parseSelectedStageRequirementsResponse({
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      outcome: "unavailable",
+      diagnostics: [{ path: ["context", "workflow"], code: "selection_required", message: "Selection required." }],
+    })).toMatchObject({ outcome: "unavailable" });
   });
 
   it("accepts only marker-shaped project ids", () => {

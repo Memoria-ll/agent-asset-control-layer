@@ -64,7 +64,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - `shared/src/` の公開型が公開契約。network / IPC / filesystem 境界を越える値には明示的な
   serialization schema を持たせ、TypeScript 型は schema から導出する。
 - 境界 DTO は成立し得ない状態を parse させない。JSON Schema で表せる制約は parser と
-  draft 2020-12 schema の両方へ反映する。
+  draft 2020-12 schema の両方へ反映する。同じ事実から導出される複数欄は相互一致を検証し、
+  成功値も失敗理由もない response arm を作らない。
 - operation と source の組み合わせを持つ境界 DTO は、各 union arm に許可された source を
   直接置く。共通 base の広い source 型で project-only operation を表現しない。
 - `zod` は `shared` の実装詳細。consumer へは TypeScript 型と素の JavaScript の関数・データだけを
@@ -106,7 +107,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   candidate projector は、この経路だけでは表現できない (#121)。
 - `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
   除いて診断として返す。type 固有 parser が検証する body semantics や catalog reference も
-  overlay 解決前に検証し、採用候補を決めた後まで遅延させない。`resolveScope` は候補1件の構造違反で snapshot 全体を
+  overlay 解決前に同じ catalog で検証し、採用候補を決めた後まで遅延させない。definition body を
+  持たない disable directive はtype固有definition parserへ渡さず、operation候補として保持する。`resolveScope` は候補1件の構造違反で snapshot 全体を
   `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は
   `AssetTypeContract` のうち、その producer が出力しうる値を持つ全欄。merge policy だけを
   見て `allowedOperationKinds` を見落とすと、`resolveScope` 側の同名判定が snapshot 全体を

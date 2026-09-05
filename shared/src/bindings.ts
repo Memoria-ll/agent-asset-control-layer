@@ -199,7 +199,13 @@ export const BindingCandidateDto = z.discriminatedUnion("operation", [
     source: bindingSourceArms[2],
     ...bindingCandidateBase,
   }),
-]);
+]).check(z.refine((candidate) => {
+  if (candidate.operation === "disable") return true;
+  const fallbackFor = candidate.definition.fallbackFor;
+  if (fallbackFor === undefined) return candidate.fallbackRelation.kind === "none";
+  return candidate.fallbackRelation.kind !== "none"
+    && candidate.fallbackRelation.primaryBindingId === fallbackFor;
+}, { error: "Binding fallback evidence must match the candidate definition." }));
 export type BindingCandidateDto = z.infer<typeof BindingCandidateDto>;
 export type BindingCandidateDtoInput = z.input<typeof BindingCandidateDto>;
 
@@ -227,11 +233,21 @@ export const SelectedStageRequirementsRequest = z.strictObject({
 export type SelectedStageRequirementsRequest = z.infer<typeof SelectedStageRequirementsRequest>;
 export type SelectedStageRequirementsRequestInput = z.input<typeof SelectedStageRequirementsRequest>;
 
-export const SelectedStageRequirementsResponse = z.strictObject({
-  context: ResolutionContextInput,
-  requirements: z.optional(SelectedStageRequirementsDto),
-  diagnostics: z.optional(z.array(CoreErrorDetail).check(z.minLength(1))),
-});
+const selectedStageResponseBase = { context: ResolutionContextInput };
+const selectedStageDiagnostics = z.array(CoreErrorDetail).check(z.minLength(1));
+export const SelectedStageRequirementsResponse = z.discriminatedUnion("outcome", [
+  z.strictObject({
+    ...selectedStageResponseBase,
+    outcome: z.literal("resolved"),
+    requirements: SelectedStageRequirementsDto,
+    diagnostics: z.optional(selectedStageDiagnostics),
+  }),
+  z.strictObject({
+    ...selectedStageResponseBase,
+    outcome: z.literal("unavailable"),
+    diagnostics: selectedStageDiagnostics,
+  }),
+]);
 export type SelectedStageRequirementsResponse = z.infer<typeof SelectedStageRequirementsResponse>;
 export type SelectedStageRequirementsResponseInput = z.input<typeof SelectedStageRequirementsResponse>;
 

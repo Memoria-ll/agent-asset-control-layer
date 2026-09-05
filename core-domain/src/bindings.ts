@@ -257,35 +257,67 @@ const candidateSpecificCycle = (
   binding: CanonicalBinding,
   effectiveFallbackIds: ReadonlyMap<BindingId, BindingId>,
   effectiveCycles: ReadonlyMap<BindingId, readonly BindingId[] | null>,
+  reachabilityCaches: Map<BindingId, Map<BindingId, CandidateReachability>>,
 ): readonly BindingId[] | undefined => {
   const primary = binding.fallbackFor;
   if (primary === undefined) return undefined;
   if (effectiveFallbackIds.get(binding.bindingId) === primary) {
     return effectiveCycles.get(binding.bindingId) ?? undefined;
   }
-  const path: BindingId[] = [binding.bindingId];
-  const pathIndexes = new Map<BindingId, number>([[binding.bindingId, 0]]);
+  const cache = reachabilityCaches.get(binding.bindingId) ?? new Map<BindingId, CandidateReachability>();
+  reachabilityCaches.set(binding.bindingId, cache);
+  const path: BindingId[] = [];
+  const pathIndexes = new Map<BindingId, number>();
   let current: BindingId | undefined = primary;
+  let result: CandidateReachability = { kind: "none" };
   while (current !== undefined) {
+    if (current === binding.bindingId) {
+      result = { kind: "target" };
+      break;
+    }
+    const known = cache.get(current);
+    if (known !== undefined) {
+      result = known;
+      break;
+    }
     const repeatedAt = pathIndexes.get(current);
-    if (repeatedAt !== undefined) return [...path.slice(repeatedAt), current];
+    if (repeatedAt !== undefined) {
+      result = { kind: "cycle", cycle: [...path.slice(repeatedAt), current] };
+      break;
+    }
     pathIndexes.set(current, path.length);
     path.push(current);
     current = effectiveFallbackIds.get(current);
   }
-  return undefined;
+  for (const id of path) cache.set(id, result);
+  if (result.kind === "none") return undefined;
+  if (result.kind === "cycle") return result.cycle;
+  const cycle: BindingId[] = [binding.bindingId];
+  current = primary;
+  while (current !== undefined && current !== binding.bindingId) {
+    cycle.push(current);
+    current = effectiveFallbackIds.get(current);
+  }
+  cycle.push(binding.bindingId);
+  return cycle;
 };
+
+type CandidateReachability =
+  | { readonly kind: "none" }
+  | { readonly kind: "target" }
+  | { readonly kind: "cycle"; readonly cycle: readonly BindingId[] };
 
 const fallbackRelation = (
   binding: CanonicalBinding,
   bindingIds: ReadonlySet<BindingId>,
   effectiveFallbackIds: ReadonlyMap<BindingId, BindingId>,
   fallbackCycles: ReadonlyMap<BindingId, readonly BindingId[] | null>,
+  reachabilityCaches: Map<BindingId, Map<BindingId, CandidateReachability>>,
 ): BindingFallbackRelationDto => {
   const primaryBindingId = binding.fallbackFor;
   if (primaryBindingId === undefined) return { kind: "none" };
   if (!bindingIds.has(primaryBindingId)) return { kind: "missing", primaryBindingId };
-  const cycle = candidateSpecificCycle(binding, effectiveFallbackIds, fallbackCycles);
+  const cycle = candidateSpecificCycle(binding, effectiveFallbackIds, fallbackCycles, reachabilityCaches);
   return cycle === undefined
     ? { kind: "linked", primaryBindingId }
     : { kind: "cycle", primaryBindingId, cycle: [...cycle] };
@@ -321,6 +353,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     else fallbackIds.set(binding.bindingId, binding.fallbackFor);
   }
   const fallbackCycles = fallbackCycleIndex(fallbackIds);
+  const reachabilityCaches = new Map<BindingId, Map<BindingId, CandidateReachability>>();
   const diagnostics: Detail[] = [];
   const candidates: BindingCandidateDto[] = [];
   for (const item of entries) {
@@ -348,7 +381,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     const resolvedCandidate = {
       definition: definitionDto(binding)!,
       targetAvailability: targetAvailability(binding, input.catalog),
-      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackIds, fallbackCycles),
+      fallbackRelation: fallbackRelation(binding, bindingIds, fallbackIds, fallbackCycles, reachabilityCaches),
       ...candidateBase,
     };
     if (binding.asset.operation === "override") {

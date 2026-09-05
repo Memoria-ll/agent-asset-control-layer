@@ -262,6 +262,8 @@ malformed
     }, catalog));
     const bindings = unwrap(await resolve(fixture, selected));
 
+    expect(requirements.outcome).toBe("resolved");
+    if (requirements.outcome !== "resolved") throw new Error("Expected resolved Stage requirements.");
     expect(requirements.requirements).toEqual({
       workflowId: "review-flow",
       stageId: "review",
@@ -295,7 +297,63 @@ malformed
       capabilityContext: capabilities(),
     }, catalog));
 
+    expect(response.outcome).toBe("resolved");
+    if (response.outcome !== "resolved") throw new Error("Expected resolved Stage requirements.");
     expect(response.requirements).toMatchObject({ requiredRoleId: "reviewer" });
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: expect.arrayContaining(["review-flow.md"]), code: expect.any(String) }),
+    ]));
+  });
+
+  it("keeps a Workflow disable directive in resolution while skipping definition validation", async () => {
+    const fixture = await makeFixture();
+    const projectRoot = join(fixture.root, "project");
+    await mkdir(projectRoot);
+    await fixture.service.initialize(projectRoot);
+    await write(fixture.globalRoot.directory, "review-flow.md", workflow());
+    await write(join(projectRoot, ".aacl"), "review-flow-disable.md", `---
+schema-version: 3
+id: review-flow
+type: workflow
+tier: core
+operation: disable
+---
+`);
+
+    const response = unwrap(await resolveSelectedStageRequirements({
+      context: {
+        executionMode: "advisory_preparation",
+        workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+      },
+      ide: { workspaceFolder: projectRoot },
+    }, {
+      roots: [fixture.globalRoot, fixture.personalRoot],
+      projectService: fixture.service,
+      capabilityContext: capabilities(),
+    }, catalog));
+
+    expect(response.outcome).toBe("unavailable");
+    expect(response).not.toHaveProperty("requirements");
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "workflow_definition_missing" }),
+      expect.objectContaining({ code: "workflow_disabled" }),
+    ]));
+  });
+
+  it("does not satisfy a Binding dependency with an invalid Workflow definition", async () => {
+    const fixture = await makeFixture();
+    const invalidWorkflow = workflow()
+      .replace('"entryRoleId":"reviewer"', '"entryRoleId":"missing-role"');
+    await write(fixture.globalRoot.directory, "review-flow.md", invalidWorkflow);
+    await write(fixture.globalRoot.directory, "dependent.md", binding("dependent")
+      .replace("scope.role: [reviewer]", "requires: [review-flow]\nscope.role: [reviewer]"));
+
+    const response = unwrap(await resolve(fixture, request()));
+
+    expect(response.candidates[0]).toMatchObject({
+      definition: { bindingId: "dependent" },
+      applicability: { kind: "unavailable", detail: { cause: "missing_requirement" } },
+    });
     expect(response.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: expect.arrayContaining(["review-flow.md"]), code: expect.any(String) }),
     ]));

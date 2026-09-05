@@ -46,7 +46,7 @@ const withTypeSpecificDirectives = (
     const binding = parseBindingAsset(asset);
     return binding.ok ? { ok: true, value: asset } : binding;
   }
-  if (asset.type === "workflow" && metadataCatalog !== undefined) {
+  if (asset.type === "workflow" && asset.operation !== "disable" && metadataCatalog !== undefined) {
     const workflow = parseWorkflowDefinitionAsset(asset, metadataCatalog);
     return workflow.ok ? { ok: true, value: asset } : workflow;
   }
