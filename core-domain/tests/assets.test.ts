@@ -11,7 +11,8 @@ import {
 } from "../src/index.ts";
 
 const fullDocument = `---
-schema-version: 2
+schema-version: 3
+operation: add
 id: review-checklist
 type: rule
 tier: core
@@ -38,10 +39,11 @@ metadata.tags: [Doe, John]
 - inspect`;
 
 const goldenDocument = `---
-schema-version: 2
+schema-version: 3
 id: review-checklist
 type: rule
 tier: core
+operation: add
 lifecycle: active
 mandatory: true
 priority: 0
@@ -99,9 +101,25 @@ describe("canonical asset domain", () => {
     expect(serialized).toEqual({ ok: true, value: goldenDocument });
   });
 
+  it.each(["add", "override", "disable"] as const)("parses and round-trips operation %s", (operation) => {
+    const asset = parseAndValidate(`---\nschema-version: 3\noperation: ${operation}\nid: operation-${operation}\ntype: rule\ntier: core\n---\nbody`);
+    expect(asset.operation).toBe(operation);
+    expect(serializeCanonicalAsset(asset)).toMatchObject({ ok: true, value: expect.stringContaining(`operation: ${operation}`) });
+  });
+
+  it("rejects missing, unknown, and list-valued operations", () => {
+    const documents = [
+      `---\nschema-version: 3\nid: missing-operation\ntype: rule\ntier: core\n---\nbody`,
+      `---\nschema-version: 3\noperation: replace\nid: invalid-operation\ntype: rule\ntier: core\n---\nbody`,
+      `---\nschema-version: 3\noperation: [add, disable]\nid: list-operation\ntype: rule\ntier: core\n---\nbody`,
+    ];
+    for (const document of documents) expect(failurePath(validateAsset(parseDocument(document)))).toEqual(["document", "frontmatter", "operation"]);
+  });
+
   it("keeps omitted directives absent from the model and serialized document", () => {
     const asset = parseAndValidate(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: omitted-directives
 type: rule
 tier: core
@@ -120,7 +138,8 @@ body`);
 
   it("distinguishes explicit directive values from omitted values through round-trip", () => {
     const asset = parseAndValidate(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: explicit-directives
 type: rule
 tier: core
@@ -147,7 +166,8 @@ body`);
     const document = `---
 id: normalized-asset
 type: skill
-schema-version: 2
+schema-version: 3
+operation: add
 tier: discoverable
 scope.role: [z-role, a-role]
 scope.model: [z-model, a-model]
@@ -175,7 +195,8 @@ body`;
     const asset = parseAndValidate(`---
 id: comma-values
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 metadata.tags: [Doe, John]
 metadata.author: Doe, John
@@ -190,7 +211,8 @@ metadata.author: Doe, John
     const withoutTerminal = parseAndValidate(`---
 id: literal-body
 type: knowledge
-schema-version: 2
+schema-version: 3
+operation: add
 tier: on-demand
 metadata.author: colon: # quote " value
 ---
@@ -200,7 +222,8 @@ tail`);
     const withTerminal = parseAndValidate(`---
 id: literal-body
 type: knowledge
-schema-version: 2
+schema-version: 3
+operation: add
 tier: on-demand
 metadata.author: colon: # quote " value
 ---
@@ -220,7 +243,8 @@ tail
         const asset = parseAndValidate(`---
 id: all-members-${type.replace(/-/g, "")}-${tier.replace(/-/g, "")}
 type: ${type}
-schema-version: 2
+schema-version: 3
+operation: add
 tier: ${tier}
 ---
 `);
@@ -234,7 +258,8 @@ tier: ${tier}
     const malformedList = parseAssetDocument(`---
 id: malformed-list
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 requires: [a,,b]
 ---
@@ -244,7 +269,8 @@ requires: [a,,b]
     const invalidType = validateAsset(parseDocument(`---
 id: invalid-type
 type: unknown
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 ---
 `));
@@ -253,14 +279,16 @@ tier: core
     const invalidIdResult = validateAsset(parseDocument(`---
 id: Invalid_ID
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 ---
 `));
     expect(failureCodes(invalidIdResult)).toContain("invalid_asset_id");
 
     const missing = validateAsset(parseDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 type: rule
 ---
 `));
@@ -269,7 +297,8 @@ type: rule
     const empty = validateAsset(parseDocument(`---
 id: empty-list
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 scope.role: []
 ---
@@ -279,7 +308,8 @@ scope.role: []
     const duplicate = validateAsset(parseDocument(`---
 id: duplicate-list
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 requires: [same-id, same-id]
 ---
@@ -289,7 +319,8 @@ requires: [same-id, same-id]
     const unknown = validateAsset(parseDocument(`---
 id: unknown-key
 type: rule
-schema-version: 2
+schema-version: 3
+operation: add
 tier: core
 priority: high
 ---
@@ -297,7 +328,8 @@ priority: high
     expect(failureCodes(unknown)).toEqual(["invalid_value"]);
 
     const unknownKey = validateAsset(parseDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: unknown-key
 type: rule
 tier: core
@@ -308,7 +340,8 @@ overrides: [other-asset]
     expect(failurePath(unknownKey)).toEqual(["document", "frontmatter", "overrides"]);
 
     const unsupported = validateAsset(parseDocument(`---
-schema-version: 3
+schema-version: 4
+operation: add
 id: future-schema
 type: rule
 tier: core
@@ -322,13 +355,23 @@ tier: core
   it("rejects legacy and missing schema versions with incompatible contract details", () => {
     for (const document of [
       `---
+schema-version: 2
+operation: add
+id: previous-schema
+type: rule
+tier: core
+---
+`,
+      `---
 schema-version: 1
+operation: add
 id: legacy-schema
 type: rule
 tier: core
 ---
 `,
       `---
+operation: add
 id: missing-schema
 type: rule
 tier: core
@@ -358,7 +401,8 @@ tier: core
 
     for (const [line, key] of invalidValues) {
       const result = validateAsset(parseDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: invalid-directive
 type: rule
 tier: core
@@ -370,7 +414,8 @@ ${line}
     }
 
     const missingMergeGroup = validateAsset(parseDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: missing-merge-group
 type: rule
 tier: core
@@ -383,7 +428,8 @@ merge-mode: exclusive
 
   it("runtime-validates directives before serializing", () => {
     const base = parseAndValidate(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: runtime-directive
 type: rule
 tier: core
@@ -397,11 +443,14 @@ body`);
     if (!invalidMandatory.ok) expect(invalidMandatory.failure.code).toBe("invalid_request");
     const missingMergeGroup = serializeCanonicalAsset({ ...base, mergeMode: "exclusive" });
     expect(failureCodes(missingMergeGroup)).toEqual(["invalid_merge_group"]);
+    const invalidOperation = serializeCanonicalAsset({ ...base, operation: "replace" as never });
+    expect(failureCodes(invalidOperation)).toEqual(["invalid_value"]);
   });
 
   it("rejects duplicate keys and aggregates independent syntax details in source order", () => {
     const result = parseAssetDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id:
 bad line
 type: rule
@@ -426,9 +475,9 @@ id: later-id
 
   it("round-trips deterministic boundary values and rejects unrepresentable values", () => {
     const documents = [
-      `---\nid: property-empty\ntype: rule\nschema-version: 2\ntier: core\nmetadata.author: comma, scalar\n---\n`,
-      `\uFEFF---\r\nid: property-one\r\ntype: skill\r\nschema-version: 2\r\ntier: discoverable\r\nrequires: [one-requirement]\r\nmetadata.tags: [one-tag]\r\n---\r\nbody`,
-      `---\nid: property-many\ntype: knowledge\nschema-version: 2\ntier: on-demand\nscope.project: [project-b, project-a]\nrequires: [requirement-b, requirement-a]\nmetadata.tags: [first, second]\n---\nbody\n`,
+      `---\nid: property-empty\ntype: rule\nschema-version: 3\noperation: add\ntier: core\nmetadata.author: comma, scalar\n---\n`,
+      `\uFEFF---\r\nid: property-one\r\ntype: skill\r\nschema-version: 3\r\noperation: add\r\ntier: discoverable\r\nrequires: [one-requirement]\r\nmetadata.tags: [one-tag]\r\n---\r\nbody`,
+      `---\nid: property-many\ntype: knowledge\nschema-version: 3\noperation: add\ntier: on-demand\nscope.project: [project-b, project-a]\nrequires: [requirement-b, requirement-a]\nmetadata.tags: [first, second]\n---\nbody\n`,
     ];
 
     for (const document of documents) {
@@ -436,7 +485,7 @@ id: later-id
       const serialized = serializeCanonicalAsset(asset);
       expect(serialized.ok).toBe(true);
       if (!serialized.ok) continue;
-      expect(serialized.value).toContain("schema-version: 2\n");
+      expect(serialized.value).toContain("operation: add\n");
       const reparsed = parseAndValidate(serialized.value);
       expect(reparsed).toEqual(asset);
     }

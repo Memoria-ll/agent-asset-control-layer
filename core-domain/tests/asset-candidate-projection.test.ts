@@ -23,10 +23,11 @@ const origin: AssetProjectionSource = {
   source: { layer: "project", sourceId: "source-projection" },
 };
 
-const assetDocument = (id: string, type: string, fields = ""): string => `---
+const assetDocument = (id: string, type: string, fields = "", operation = "add"): string => `---
 id: ${id}
 type: ${type}
-schema-version: 2
+schema-version: 3
+operation: ${operation}
 tier: core
 ${fields}---
 body
@@ -105,6 +106,27 @@ describe("asset candidate projection", () => {
 
     expect(candidate.rule.operation).toEqual({ kind: "add" });
     expect(Object.hasOwn(candidate.rule, "capabilityDependencies")).toBe(false);
+  });
+
+  it.each(["override", "disable"] as const)("projects %s to its own Asset ID", (operation) => {
+    const candidate = unwrap(toAssetCandidate(
+      assetFromDocument(assetDocument(`project-${operation}`, "rule", "", operation)),
+      origin,
+    ));
+    expect(candidate.rule.operation).toEqual({ kind: operation, targetAssetId: `project-${operation}` });
+  });
+
+  it("excludes non-add operations from Global and Personal sources", () => {
+    for (const layer of ["global", "personal"] as const) {
+      const result = toAssetCandidate(
+        assetFromDocument(assetDocument(`${layer}-override`, "rule", "", "override")),
+        { ...origin, source: { layer, sourceId: `${layer}-source` } },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        failure: { details: [{ code: "operation_requires_project_source", path: ["asset", `${layer}-override`, "operation"] }] },
+      });
+    }
   });
 
   it("carries declared capability dependencies for a type that allows them", () => {

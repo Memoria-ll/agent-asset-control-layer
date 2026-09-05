@@ -43,7 +43,7 @@ const temporaryDirectory = async (): Promise<string> => {
 
 const catalog = (): MetadataCatalog => unwrap(buildMetadataCatalog({
   revision: "sha256:workflow-loader" as CatalogRevision,
-  roles: [unwrap(projectRoleDefinition(assetFromDocument("---\nid: reviewer\ntype: role\nschema-version: 2\ntier: core\nmetadata.display-name: Reviewer\n---\n")))],
+  roles: [unwrap(projectRoleDefinition(assetFromDocument("---\nid: reviewer\ntype: role\nschema-version: 3\noperation: add\ntier: core\nmetadata.display-name: Reviewer\n---\n")))],
   taskTypes: [],
   providers: [],
   runtimes: [],
@@ -58,7 +58,8 @@ const assetFromDocument = (source: string): CanonicalAsset => {
 
 const workflowDocument = (id: string, body: string): string => [
   "---",
-  "schema-version: 2",
+  "schema-version: 3",
+  "operation: add",
   `id: ${id}`,
   "type: workflow",
   "tier: core",
@@ -173,7 +174,7 @@ describe("filesystem workflow definition loader", () => {
   it("keeps filesystem diagnostics and rejects an asset identity mismatch", async () => {
     const fixtureValue = await fixture([
       { path: "workflows/review-flow.md", document: workflowDocument("review-flow", validBody("other-flow")) },
-      { path: "broken.md", document: "---\nid: broken\ntype: workflow\nschema-version: 2\ntier: wrong\n---\n", raw: true },
+      { path: "broken.md", document: "---\nid: broken\ntype: workflow\nschema-version: 3\noperation: add\ntier: wrong\n---\n", raw: true },
     ]);
 
     const result = await load(fixtureValue.store);
@@ -189,7 +190,7 @@ describe("filesystem workflow definition loader", () => {
   });
 
   it("classifies wrong type, duplicate workflow matches, and missing matches", async () => {
-    const wrongType = await fixture([{ path: "rule.md", document: "---\nid: review-flow\ntype: rule\nschema-version: 2\ntier: core\n---\n" }]);
+    const wrongType = await fixture([{ path: "rule.md", document: "---\nid: review-flow\ntype: rule\nschema-version: 3\noperation: add\ntier: core\n---\n" }]);
     const wrongTypeResult = await load(wrongType.store);
     expect(wrongTypeResult.ok).toBe(false);
     if (!wrongTypeResult.ok) {

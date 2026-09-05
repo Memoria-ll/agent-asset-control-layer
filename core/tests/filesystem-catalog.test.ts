@@ -56,12 +56,13 @@ const writeRaw = async (directory: string, relativePath: string, value: string |
 };
 
 const minimalDocument = (id: string, type = "rule", body = "body"): string =>
-  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 2\ntier: core\n---\n" + body;
+  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 3\noperation: add\ntier: core\n---\n" + body;
 
 const namedDocument = (id: string, type: string, displayName: string, body: string): string =>
   [
     "---",
-    "schema-version: 2",
+    "schema-version: 3",
+    "operation: add",
     "id: " + id,
     "type: " + type,
     "tier: core",
@@ -209,7 +210,8 @@ describe("filesystem metadata catalog", () => {
       "roles/reviewer.md",
       [
         "---",
-        "schema-version: 2",
+        "schema-version: 3",
+        "operation: add",
         "id: reviewer",
         "type: role",
         "tier: core",

@@ -32,7 +32,8 @@ const capabilityId = (value: string): CapabilityId => value as CapabilityId;
 const featureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
 
 const workflowSkillDocument = `---
-schema-version: 2
+schema-version: 3
+operation: add
 id: issue-development
 type: skill
 tier: discoverable
@@ -94,7 +95,8 @@ describe("Canonical Skill", () => {
     ["system-operation", "standalone"],
   ] as const)("accepts %s with %s relation", (kind, relation) => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: sample-skill
 type: skill
 tier: on-demand
@@ -112,7 +114,8 @@ Perform the bounded instructions.
 
   it("requires named Workflow scope for a workflow-scoped Skill", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: workflow-review
 type: skill
 tier: on-demand
@@ -136,7 +139,8 @@ Review the selected Workflow stage.
 
   it("rejects Workflow scope on a standalone Skill", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: scoped-standalone
 type: skill
 tier: on-demand
@@ -161,7 +165,8 @@ Review the selected input.
 
   it("requires explicit permission for a development execution Skill", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: unsafe-development
 type: skill
 tier: on-demand
@@ -185,7 +190,8 @@ Modify the selected repository.
 
   it("carries metadata outside the Skill contract through parse and update", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: annotated-skill
 type: skill
 tier: on-demand
@@ -234,7 +240,8 @@ Report advice.
 
   it("rejects orphan capability fallback and feature declarations", () => {
     const fallback = validateAsset(expectOk(parseAssetDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: orphan-fallback
 type: skill
 tier: on-demand
@@ -247,7 +254,8 @@ Body
     expect(fallback.failure.details?.map(({ code }) => code)).toContain("unknown_fallback_primary");
 
     const features = validateAsset(expectOk(parseAssetDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: orphan-features
 type: skill
 tier: on-demand
@@ -260,7 +268,8 @@ Body
     expect(features.failure.details?.map(({ code }) => code)).toContain("unknown_capability_reference");
 
     const redundant = validateAsset(expectOk(parseAssetDocument(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: redundant-fallback
 type: skill
 tier: on-demand
@@ -276,7 +285,8 @@ Body
 
   it("represents a weaker same-capability fallback without losing either feature set", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: weaker-browser-fallback
 type: skill
 tier: on-demand
@@ -308,7 +318,8 @@ Inspect the browser DOM.
 
   it("keeps an authored metadata list in its authored order across an unrelated edit", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: ordered-conflicts
 type: skill
 tier: on-demand
@@ -417,10 +428,10 @@ Report advice.
     expect(skill.asset.lifecycle).toBe("active");
     expect(skill.capabilityDependencies).toEqual(capabilityDependencies);
 
-    expect(projectSkillCandidate(skill, {
+    expect(expectOk(projectSkillCandidate(skill, {
       revision: "sha256:revision" as AssetRevision,
       source: { layer: "project", sourceId: "project-root/skills/review-change.md" },
-    })).toEqual({
+    }))).toEqual({
       assetId: "review-change",
       revision: "sha256:revision",
       assetType: "skill",
@@ -434,6 +445,48 @@ Report advice.
         capabilityDependencies,
         mergeMode: "additive",
       },
+    });
+  });
+
+  it("preserves the asset operation and resolution directives through Skill create/update", () => {
+    const created = expectOk(createSkillAsset({
+      id: skillId("operation-skill"),
+      tier: "on-demand",
+      displayName: "Operation Skill",
+      description: "Carries operation directives.",
+      kind: "advisory",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      resolutionDirectives: { operation: "override", mandatory: true, priority: 7, mergeMode: "exclusive", mergeGroup: "review" },
+      body: "Apply the operation.",
+    }));
+    expect(created.operation).toBe("override");
+    expect(created.mandatory).toBe(true);
+    const updated = expectOk(updateSkillAsset(created, { description: "Updated operation skill." }));
+    expect(updated).toMatchObject({ operation: "override", mandatory: true, priority: 7, mergeMode: "exclusive", mergeGroup: "review" });
+
+    const skill = expectOk(parseSkillAsset(updated));
+    const personal = projectSkillCandidate(skill, {
+      revision: "sha256:personal" as AssetRevision,
+      source: { layer: "personal", sourceId: "personal/operation-skill.md" },
+    });
+    expect(personal).toMatchObject({
+      ok: false,
+      failure: { details: [{ code: "operation_requires_project_source" }] },
+    });
+
+    const wrongOwner = projectSkillCandidate({
+      ...skill,
+      asset: { ...skill.asset, operation: "add", scope: { project: ["project-one"] } },
+    }, {
+      revision: "sha256:project" as AssetRevision,
+      source: { layer: "project", sourceId: "project/operation-skill.md" },
+      owningProjectId: "project-two",
+    });
+    expect(wrongOwner).toMatchObject({
+      ok: false,
+      failure: { details: [{ code: "project_scope_conflict" }] },
     });
   });
 
@@ -463,7 +516,8 @@ Report advice.
 
   it("returns failures for malformed runtime capability values instead of throwing or dropping them", () => {
     const base = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: malformed-capability
 type: skill
 tier: on-demand
@@ -498,7 +552,8 @@ Inspect input.
 
   it("keeps the asset resolution directives across an unrelated Skill update", () => {
     const asset = parseAsset(`---
-schema-version: 2
+schema-version: 3
+operation: add
 id: directive-skill
 type: skill
 tier: on-demand

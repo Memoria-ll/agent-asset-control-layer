@@ -61,14 +61,15 @@ const storeFor = (
 ): AssetStore => unwrap(createFilesystemAssetStore(roots, options));
 
 const minimalDocument = (id: string, type = "rule", body = "body"): string =>
-  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 2\ntier: core\n---\n" + body;
+  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 3\noperation: add\ntier: core\n---\n" + body;
 
 const goldenDocument = [
   "---",
-  "schema-version: 2",
+  "schema-version: 3",
   "id: review-checklist",
   "type: rule",
   "tier: core",
+  "operation: add",
   "lifecycle: active",
   "scope.project: [project-one, project-two]",
   "scope.workflow: [review-flow]",
@@ -105,7 +106,7 @@ describe("filesystem asset store", () => {
   it("keeps valid assets when another headed file is malformed", async () => {
     const root = await temporaryDirectory();
     await writeAsset(root, "valid.md", minimalDocument("valid-asset"));
-    await writeRaw(root, "broken.md", "---\nschema-version: 2\nid: broken\n---\nbody");
+    await writeRaw(root, "broken.md", "---\nschema-version: 3\noperation: add\nid: broken\n---\nbody");
     const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
 
     const result = await store.list();
@@ -195,7 +196,7 @@ describe("filesystem asset store", () => {
     const result = await store.list();
 
     expect(result.failures).toHaveLength(0);
-    expect(result.assets[0]?.revision).toBe("sha256:6b86d6697350aae674ce00aeaf7071fd8496dccbe9220ee84e30661171277a9e");
+    expect(result.assets[0]?.revision).toBe("sha256:d428cd8c9cb929b22d038b6f14f4c14299e75a6d12f9ff333c28fb5bff1c9b8c");
   });
 
   it("changes revision when only the declared type changes", async () => {
@@ -230,9 +231,9 @@ describe("filesystem asset store", () => {
     expect(first.ok && second.ok ? first.value.revision : "").not.toBe(second.ok ? second.value.revision : "");
   });
 
-  it("saves and round-trips a schema-version-2 asset with directives", async () => {
+  it("saves and round-trips a schema-version-3 asset with directives", async () => {
     const root = await temporaryDirectory();
-    const input = "---\nid: round-trip\ntype: rule\nschema-version: 2\ntier: core\nmandatory: true\npriority: 0\nmerge-mode: exclusive\nmerge-group: review\nscope.project: [project-two, project-one]\nrequires: [safety-rule, naming-convention]\n---\nbody";
+    const input = "---\nid: round-trip\ntype: rule\nschema-version: 3\noperation: add\ntier: core\nmandatory: true\npriority: 0\nmerge-mode: exclusive\nmerge-group: review\nscope.project: [project-two, project-one]\nrequires: [safety-rule, naming-convention]\n---\nbody";
     const canonical = assetFromDocument(input);
     const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
 
@@ -241,7 +242,7 @@ describe("filesystem asset store", () => {
     const listed = await store.get(canonical.asset.id);
 
     expect(saved.ok).toBe(true);
-    expect(storedText).toContain("schema-version: 2\n");
+    expect(storedText).toContain("schema-version: 3\nid: round-trip\ntype: rule\ntier: core\noperation: add\n");
     expect(storedText.split("\n")).toHaveLength(input.split("\n").length);
     expect(listed.matches[0]?.asset).toEqual(canonical.asset);
     expect(listed.matches[0]?.asset.mandatory).toBe(true);
@@ -264,6 +265,7 @@ describe("filesystem asset store", () => {
     await writeRaw(root, "legacy.md", [
       "---",
       "schema-version: 1",
+      "operation: add",
       "id: legacy",
       "type: rule",
       "tier: core",
@@ -276,7 +278,7 @@ describe("filesystem asset store", () => {
     expect(listed.assets).toHaveLength(0);
     expect(listed.failures).toHaveLength(2);
     expect(listed.failures.map((item) => item.failure.details?.[0]?.code).sort()).toEqual([
-      "unsupported_schema_version",
+      "missing_field",
       "unsupported_schema_version",
     ]);
 

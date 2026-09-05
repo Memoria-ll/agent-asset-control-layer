@@ -37,13 +37,13 @@ const unwrap = <Value>(result: AssetResult<Value>): Value => {
 
 const catalog = (): MetadataCatalog => unwrap(buildMetadataCatalog({
   revision: "sha256:workflow-integration" as CatalogRevision,
-  roles: [unwrap(projectRoleDefinition(assetFromDocument("---\nid: reviewer\ntype: role\nschema-version: 2\ntier: core\nmetadata.display-name: Reviewer\n---\n")))],
+  roles: [unwrap(projectRoleDefinition(assetFromDocument("---\nid: reviewer\ntype: role\nschema-version: 3\noperation: add\ntier: core\nmetadata.display-name: Reviewer\n---\n")))],
   taskTypes: [], providers: [], runtimes: [], models: [], roleModelRelations: [],
 }));
 
 const assetFromDocument = (source: string) => unwrap(validateAsset(unwrap(parseAssetDocument(source))));
 
-const workflowDocument = "---\nid: review-flow\ntype: workflow\nschema-version: 2\ntier: core\n---\n```aacl-workflow\n" + JSON.stringify({
+const workflowDocument = "---\nid: review-flow\ntype: workflow\nschema-version: 3\noperation: add\ntier: core\n---\n```aacl-workflow\n" + JSON.stringify({
   entryRoleId: "reviewer",
   entryStageId: "start",
   terminalStageId: "done",
