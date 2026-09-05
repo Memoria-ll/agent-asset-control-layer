@@ -11,6 +11,7 @@ import {
   parseBindingAsset,
   parseWorkflowDefinitionAsset,
   resolveBindings,
+  toResolutionConflictDetails,
   type AssetResult,
   type CanonicalBinding,
   type MetadataCatalog,
@@ -62,6 +63,30 @@ const diagnosticDetails = (resolved: Awaited<ReturnType<typeof resolveAssets>>):
 };
 
 /**
+ * Why the resolver did not keep this candidate, in the shape the response
+ * already uses. `included` says nothing a failure needs, so it contributes
+ * nothing; the rest carry the ids the caller would otherwise have to guess at.
+ */
+const evaluationDetails = (evaluation: ResolutionEvaluation): readonly CoreErrorDetail[] => {
+  const reason = evaluation.reason;
+  const at = (code: string, message: string): CoreErrorDetail => ({
+    path: ["asset", String(evaluation.candidate.assetId)],
+    code,
+    message,
+  });
+  switch (reason.kind) {
+    case "included": return [];
+    case "excluded":
+      if (reason.cause === "resolution_conflict") return toResolutionConflictDetails(reason.conflict);
+      if (reason.cause === "invalid_directory") return reason.diagnostics;
+      return [at(reason.cause, `The Workflow Definition was excluded: ${reason.cause}.`)];
+    case "overridden": return [at("binding_overridden", "The Workflow Definition was overridden.")];
+    case "disabled": return [at("binding_disabled", "The Workflow Definition was disabled.")];
+    case "unavailable": return [at(reason.cause, `The Workflow Definition is unavailable: ${reason.cause}.`)];
+  }
+};
+
+/**
  * The Role and Task Type the selected Stage requires, which the Workflow
  * Definition owns and no Binding repeats. `undefined` means the context already
  * carries every axis this can supply, so nothing has to be resolved again.
@@ -85,26 +110,36 @@ const workflowStageContext = (
     message: string,
     path: readonly string[],
     detailCode: string,
+    evaluationReasons: readonly CoreErrorDetail[] = [],
   ): AssetResult<never> => ({
     ok: false,
     failure: coreFailure(code, message, [
       { path: [...path], code: detailCode, message },
+      ...evaluationReasons,
       // A file the store could not read is absent from the resolution, so the
       // Workflow reads as missing for a reason only these carry.
       ...diagnosticDetails({ ok: true, value: resolved }),
     ]),
   });
 
-  const applicable = resolved.resolution.evaluations.filter((evaluation) =>
+  const forSelection = resolved.resolution.evaluations.filter((evaluation) =>
     evaluation.candidate.assetType === "workflow"
-    && String(evaluation.candidate.assetId) === String(selection.workflowId)
-    && evaluation.reason.kind === "included");
+    && String(evaluation.candidate.assetId) === String(selection.workflowId));
+  // A `disable` directive stays `included` — it is the instruction that took the
+  // base out — so selecting on inclusion alone picks the directive itself, which
+  // has no definition to read and names a Workflow that was switched off.
+  const applicable = forSelection.filter((evaluation) =>
+    evaluation.reason.kind === "included"
+    && evaluation.candidate.rule.operation.kind !== "disable");
   if (applicable.length === 0) {
     return workflowFailure(
       "not_found",
       "The selected Workflow Definition does not apply to this context.",
       ["context", "workflow", "workflowId"],
       "workflow_definition_missing",
+      // Why it does not apply lives in the evaluations that were filtered out;
+      // without them the caller sees only that the Workflow is not there.
+      forSelection.flatMap((evaluation) => evaluationDetails(evaluation)),
     );
   }
   if (applicable.length > 1) {

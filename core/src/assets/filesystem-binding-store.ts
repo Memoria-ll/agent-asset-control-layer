@@ -119,6 +119,22 @@ export const saveBinding = async (
       [],
     );
   }
+  // Candidate projection rejects any operation but `add` from a non-Project
+  // layer, so writing one here would succeed and leave a file that resolution
+  // can only ever exclude. The destination decides this, not the document.
+  const destination = assetStore.roots.find((root) => root.rootId === input.rootId);
+  if (input.asset.operation !== "add" && destination?.kind !== "project") {
+    const message = "A Binding overlay can only be saved to a Project root.";
+    return failureResult(
+      withFilePath(input.rootId, input.relativePath, coreFailure("invalid_request", message, [{
+        path: ["document", "frontmatter", "operation"],
+        code: "operation_requires_project_source",
+        message,
+      }])),
+      [],
+      [],
+    );
+  }
   const saved = await assetStore.save({
     rootId: input.rootId,
     relativePath: input.relativePath,

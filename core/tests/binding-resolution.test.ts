@@ -286,6 +286,40 @@ malformed
       .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
   });
 
+  it("treats a disabled Workflow as inapplicable rather than reading the directive", async () => {
+    const fixture = await makeFixture();
+    const projectRoot = join(fixture.root, "project");
+    await mkdir(projectRoot);
+    await fixture.service.initialize(projectRoot);
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
+    await write(join(projectRoot, ".aacl"), "review-flow.md", [
+      "---",
+      "schema-version: 3",
+      "id: review-flow",
+      "type: workflow",
+      "tier: core",
+      "operation: disable",
+      "---",
+      "",
+    ].join("\n"));
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding"));
+
+    const result = await resolve(fixture, {
+      ...selectedStageRequest(),
+      ide: { workspaceFolder: projectRoot },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("not_found");
+      expect(result.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "workflow_definition_missing" }),
+        // The base says why it is gone, rather than the Workflow just being absent.
+        expect.objectContaining({ code: "binding_disabled", path: ["asset", "review-flow"] }),
+      ]));
+    }
+  });
+
   it("does not derive Stage axes from a Workflow the scope excludes", async () => {
     const fixture = await makeFixture();
     // Declares a Model the request's context does not carry, so scope matching

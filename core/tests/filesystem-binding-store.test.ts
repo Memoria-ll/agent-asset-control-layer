@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +37,16 @@ metadata.model-id: gpt-5
 ${body}
 `));
 
+const disableDirective = (id: string): CanonicalBinding => unwrap(parseBindingDocument(`---
+schema-version: 3
+id: ${id}
+type: binding
+tier: core
+operation: disable
+---
+disable
+`));
+
 const rule = (id: string): string => `---
 schema-version: 3
 id: ${id}
@@ -65,6 +75,25 @@ const makeStore = async () => {
 };
 
 describe("filesystem Binding store", () => {
+  it("refuses to persist an overlay to a root resolution can never apply it from", async () => {
+    const { store, directory } = await makeStore();
+
+    const saved = await saveBinding(store, {
+      rootId: "global",
+      relativePath: "bindings/disable.md",
+      asset: disableDirective("reviewer-binding").asset,
+    });
+
+    expect(saved.ok).toBe(false);
+    if (!saved.ok) {
+      expect(saved.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "operation_requires_project_source" }),
+      ]));
+    }
+    // Nothing was written: the check runs before the store is touched.
+    await expect(readdir(join(directory, "bindings"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("saves, reloads, and preserves the stored revision and source", async () => {
     const { store } = await makeStore();
     const saved = await saveBinding(store, {

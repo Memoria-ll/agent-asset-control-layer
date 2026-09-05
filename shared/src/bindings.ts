@@ -220,7 +220,9 @@ export const BindingCandidateDto = z.discriminatedUnion("status", [
   z.strictObject({
     status: z.literal("eligible"),
     definition: BindingEligibleDefinitionDto,
-    reasons: z.array(eligibleBindingReason).check(z.minLength(1)),
+    // Exactly one: an eligible candidate has a single reason, with every
+    // capability degradation nested inside it rather than split across entries.
+    reasons: z.array(eligibleBindingReason).check(z.minLength(1)).check(z.maxLength(1)),
     ...bindingCandidateBase,
   }),
   z.strictObject({

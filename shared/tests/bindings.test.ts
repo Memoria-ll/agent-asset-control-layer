@@ -185,6 +185,23 @@ describe("Binding shared contract", () => {
     })).toThrow();
   });
 
+  it("accepts exactly one eligible reason on an eligible candidate", () => {
+    const eligible = {
+      status: "eligible" as const,
+      definition: { bindingId: "binding-1", target, description: "" },
+      source: { layer: "global" as const },
+      revision: "revision-1",
+      loadingTier: "core" as const,
+    };
+    expect(parseBindingCandidateDto({ ...eligible, reasons: [{ kind: "eligible" }] }).reasons)
+      .toHaveLength(1);
+    expect(() => parseBindingCandidateDto({ ...eligible, reasons: [] })).toThrow();
+    expect(() => parseBindingCandidateDto({
+      ...eligible,
+      reasons: [{ kind: "eligible" }, { kind: "eligible" }],
+    })).toThrow();
+  });
+
   it("accepts an overlay record only from a Project source", () => {
     const overlay = {
       operation: "override" as const,
