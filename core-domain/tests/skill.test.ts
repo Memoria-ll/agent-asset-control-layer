@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AssetId, AssetRevision } from "@aacl/shared";
+import type { AssetId, AssetRevision, SkillId } from "@aacl/shared";
 import {
   createSkillAsset,
   parseAssetDocument,
@@ -27,6 +27,7 @@ const parseAsset = (document: string): CanonicalAsset =>
   expectOk(validateAsset(expectOk(parseAssetDocument(document))));
 
 const assetId = (value: string): AssetId => value as AssetId;
+const skillId = (value: string): SkillId => value as SkillId;
 const capabilityId = (value: string): CapabilityId => value as CapabilityId;
 const featureId = (value: string): CapabilityFeatureId => value as CapabilityFeatureId;
 
@@ -207,7 +208,7 @@ Report advice.
 
   it("rejects additional metadata that claims a Skill contract key", () => {
     const result = createSkillAsset({
-      id: assetId("reserved-metadata"),
+      id: skillId("reserved-metadata"),
       tier: "on-demand",
       displayName: "Reserved metadata",
       description: "Claims a contract key.",
@@ -296,13 +297,33 @@ Inspect the browser DOM.
     expect(expectOk(serializeCanonicalAsset(parseAsset(serialized)))).toBe(serialized);
   });
 
+  it("normalizes supplied scope values the way a loaded document is normalized", () => {
+    const created = expectOk(createSkillAsset({
+      id: skillId("unsorted-scope"),
+      tier: "on-demand",
+      scope: { role: ["reviewer", "author"], project: ["project-b", "project-a"] },
+      displayName: "Unsorted scope",
+      description: "Supplies scope values out of order.",
+      kind: "advisory",
+      executionMode: "advisory_preparation",
+      executionPermission: "advisory-only",
+      workflowRelation: { kind: "standalone" },
+      body: "Report advice.",
+    }));
+
+    expect(created.scope).toEqual({ project: ["project-a", "project-b"], role: ["author", "reviewer"] });
+    const serialized = expectOk(serializeCanonicalAsset(created));
+    expect(serialized).toContain("scope.project: [project-a, project-b]");
+    expect(serialized).toContain("scope.role: [author, reviewer]");
+  });
+
   it("creates, updates, and projects one Skill without duplicating its identity", () => {
     const capabilityDependencies: readonly CapabilityDependency[] = [{
       strength: "required",
       capability: { capabilityId: capabilityId("filesystem-read"), features: [featureId("text")] },
     }];
     const input: SkillInput = {
-      id: assetId("review-change"),
+      id: skillId("review-change"),
       tier: "discoverable",
       scope: { project: ["project-aacl"], role: ["reviewer"] },
       requires: [assetId("review-rule")],
@@ -354,7 +375,7 @@ Inspect the browser DOM.
 
   it("normalizes capability dependency order in the created Canonical Asset", () => {
     const created = expectOk(createSkillAsset({
-      id: assetId("ordered-capabilities"),
+      id: skillId("ordered-capabilities"),
       tier: "on-demand",
       displayName: "Ordered capabilities",
       description: "Keeps one canonical dependency order.",

@@ -1,5 +1,5 @@
 import { EXECUTION_MODES } from "@aacl/shared";
-import type { AssetId, AssetRevision, ExecutionMode, LoadingTier } from "@aacl/shared";
+import type { AssetId, AssetRevision, ExecutionMode, LoadingTier, SkillId } from "@aacl/shared";
 import type { CapabilityDependency } from "./capabilities/dependencies.ts";
 import {
   asAssetId,
@@ -44,7 +44,7 @@ export type SkillExecutionPermission = (typeof SKILL_EXECUTION_PERMISSIONS)[numb
 
 export type CanonicalSkill = {
   readonly asset: CanonicalAsset;
-  readonly skillId: AssetId;
+  readonly skillId: SkillId;
   readonly kind: SkillKind;
   readonly displayName: string;
   readonly description: string;
@@ -67,7 +67,7 @@ export type CanonicalSkill = {
 };
 
 export type SkillInput = {
-  readonly id: AssetId;
+  readonly id: SkillId;
   readonly tier: LoadingTier;
   readonly scope?: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
   readonly requires?: readonly AssetId[];
@@ -108,6 +108,15 @@ export type SkillPatch = {
   readonly additionalMetadata?: Readonly<Record<string, AssetFieldValue>>;
   readonly body?: string;
 };
+
+/**
+ * A Skill is named by `SkillId` wherever a caller addresses one — the brand the standalone
+ * Workflow selection carries — while the Asset layer keys every Asset by `AssetId`. Both brands
+ * constrain the value to a non-empty string and nothing else, so crossing between them is a
+ * rebrand rather than a parse, and these two functions are the only places it happens.
+ */
+export const asSkillId = (assetId: AssetId): SkillId => assetId as string as SkillId;
+export const skillAssetId = (skillId: SkillId): AssetId => skillId as string as AssetId;
 
 export type SkillCandidateProjection = {
   readonly revision: AssetRevision;
@@ -202,6 +211,21 @@ const optionalMetadata = (metadata: Record<string, string | readonly string[]>, 
   if (value !== undefined) metadata[key] = value;
 };
 
+/**
+ * Scope axes reach the serializer already sorted, the shape `validateAsset` produces when the
+ * equivalent document is read from disk. Duplicates stay the serializer's to reject, so a caller
+ * supplying them is answered the same way whichever side it entered through.
+ */
+const sortedScope = (
+  scope: SkillInput["scope"],
+): Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>> => {
+  const sorted: Partial<Record<AssetScopeAxis, readonly string[]>> = {};
+  for (const [axis, values] of Object.entries(scope ?? {}) as [AssetScopeAxis, readonly string[] | undefined][]) {
+    if (values !== undefined) sorted[axis] = [...values].sort(codeUnitCompare);
+  }
+  return sorted;
+};
+
 export const parseSkillAsset = (asset: CanonicalAsset): AssetResult<CanonicalSkill> => {
   const details: Detail[] = [];
   if (asset.type !== "skill") {
@@ -269,7 +293,7 @@ export const parseSkillAsset = (asset: CanonicalAsset): AssetResult<CanonicalSki
     ok: true,
     value: {
       asset,
-      skillId: asset.id,
+      skillId: asSkillId(asset.id),
       kind,
       displayName,
       description,
@@ -310,11 +334,11 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
 
   const asset: CanonicalAsset = {
     schemaVersion: 1,
-    id: input.id,
+    id: skillAssetId(input.id),
     type: "skill",
     tier: input.tier,
     metadata,
-    scope: input.scope ?? {},
+    scope: sortedScope(input.scope),
     requires: [...(input.requires ?? [])].sort(codeUnitCompare),
     ...(input.capabilityDependencies === undefined || input.capabilityDependencies.length === 0
       ? {}
@@ -337,7 +361,7 @@ export const updateSkillAsset = (asset: CanonicalAsset, patch: SkillPatch): Asse
   if (!current.ok) return current;
   const skill = current.value;
   return createSkillAsset({
-    id: asset.id,
+    id: asSkillId(asset.id),
     tier: patch.tier ?? asset.tier,
     scope: patch.scope ?? asset.scope,
     requires: patch.requires ?? asset.requires,

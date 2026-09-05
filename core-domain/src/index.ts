@@ -18,9 +18,11 @@ export {
   SKILL_KINDS,
   SKILL_EXECUTION_PERMISSIONS,
   SKILL_WORKFLOW_RELATIONS,
+  asSkillId,
   createSkillAsset,
   parseSkillAsset,
   projectSkillCandidate,
+  skillAssetId,
   updateSkillAsset,
 } from "./skill.ts";
 export type {

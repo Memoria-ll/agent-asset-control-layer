@@ -3,6 +3,7 @@ import {
   createSkillAsset,
   parseSkillAsset,
   projectSkillCandidate,
+  skillAssetId,
   updateSkillAsset,
   type AssetCandidate,
   type CanonicalSkill,
@@ -10,8 +11,9 @@ import {
   type SkillInput,
   type SkillPatch,
 } from "@aacl/core-domain";
-import type { AssetId, AssetRevision } from "@aacl/shared";
+import type { AssetRevision, SkillId } from "@aacl/shared";
 import { withFilePath } from "../internal/diagnostics.ts";
+import { isSavableAssetPath } from "./filesystem-store.ts";
 import type {
   AssetDiagnostic,
   AssetStore,
@@ -71,9 +73,9 @@ const parseStoredSkill = (stored: StoredAsset): SkillLoadResult => {
 
 export const loadSkill = async (
   assetStore: AssetStore,
-  skillId: AssetId,
+  skillId: SkillId,
 ): Promise<SkillLoadResult> => {
-  const lookup = await assetStore.get(skillId);
+  const lookup = await assetStore.get(skillAssetId(skillId));
   const unavailable = lookup.failures.find((item) => item.failure.code === "unavailable");
   if (unavailable !== undefined) return failureResult(unavailable.failure, lookup.matches, lookup.failures);
 
@@ -137,11 +139,28 @@ export const saveSkill = async (
 
 export const updateSkill = async (
   assetStore: AssetStore,
-  skillId: AssetId,
+  skillId: SkillId,
   patch: SkillPatch,
 ): Promise<SkillLoadResult> => {
   const loaded = await loadSkill(assetStore, skillId);
   if (!loaded.ok) return loaded;
+  // `list` admits a name the filesystem already holds; `save` admits only a portable one. Writing
+  // the listed path straight back answers a hand-authored Skill with `path_outside_root`, which
+  // names the wrong problem — the path is inside the root and simply cannot be a write target.
+  // Relocating such a Skill needs a store-level move (#124).
+  if (!isSavableAssetPath(loaded.value.source.relativePath)) {
+    // The failure names the file itself rather than a place inside it, so it is written already
+    // rooted instead of going through `withFilePath`, which re-roots a domain failure's paths.
+    return failureResult(
+      coreFailure("invalid_request", "The Skill is stored under a path the asset store cannot write to.", [{
+        path: ["root", loaded.value.source.rootId, "file", loaded.value.source.relativePath],
+        code: "nonportable_source_path",
+        message: "The Skill must be renamed to a portable path before it can be updated.",
+      }]),
+      [],
+      loaded.assetDiagnostics,
+    );
+  }
   const updated = updateSkillAsset(loaded.value.skill.asset, patch);
   if (!updated.ok) {
     return failureResult(

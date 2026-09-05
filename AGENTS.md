@@ -100,6 +100,10 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
 - scope matching は context に載っていない軸の selector を中立として読み飛ばす。候補が宣言した
   適用条件は、その軸が context にあるときだけ絞り込みに効く。宣言を必須条件として扱わせたい
   candidate projector は、この経路だけでは表現できない (#121)。
+- Skill を指名する値は `SkillId`、Asset 層が索く値は `AssetId`。公開 API の引数と
+  `CanonicalSkill.skillId` は前者で受け、Asset store を呼ぶ直前に `skillAssetId` /
+  `asSkillId` で変換する。両 brand とも値制約は非空文字列だけなので、変換を各所で直接
+  cast すると片方向の取り違えが型検査を素通りする。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、

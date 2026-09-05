@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AssetId } from "@aacl/shared";
+import type { AssetId, SkillId } from "@aacl/shared";
 import {
   buildCapabilityCatalog,
   coreFailure,
@@ -41,7 +41,7 @@ const fixture = async (): Promise<AssetStore> => {
 };
 
 const skillInput = (): SkillInput => ({
-  id: "review-change" as AssetId,
+  id: "review-change" as SkillId,
   tier: "discoverable",
   scope: { project: ["project-aacl"], role: ["reviewer"] },
   requires: ["review-rule" as AssetId],
@@ -84,13 +84,13 @@ describe("filesystem Skill store", () => {
     });
     expect(saved.revision).toMatch(/^sha256:[a-f0-9]{64}$/);
 
-    const loaded = await loadSkill(store, "review-change" as AssetId);
+    const loaded = await loadSkill(store, "review-change" as SkillId);
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) throw new Error(loaded.failure.message);
     expect(loaded.value.skill.displayName).toBe("Review change");
     expect(loaded.value.revision).toBe(saved.revision);
 
-    const updated = await updateSkill(store, "review-change" as AssetId, {
+    const updated = await updateSkill(store, "review-change" as SkillId, {
       displayName: "Review selected change",
       priority: null,
     });
@@ -102,12 +102,45 @@ describe("filesystem Skill store", () => {
     expect(updated.value.source).toEqual(saved.source);
   });
 
+  it("refuses to update a Skill the store cannot write back to", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aacl-skill-store-"));
+    temporaryDirectories.push(directory);
+    const store = unwrap(createFilesystemAssetStore([
+      { rootId: "project", kind: "project", projectId: "project-aacl", directory },
+    ]));
+    await mkdir(join(directory, "skills"), { recursive: true });
+    await writeFile(join(directory, "skills", "CON.md"), `---
+id: reserved-name-skill
+type: skill
+tier: on-demand
+metadata.description: Lives under a name Windows reserves.
+metadata.display-name: Reserved name Skill
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Report advice.
+`, "utf8");
+
+    const loaded = expectStored(await loadSkill(store, "reserved-name-skill" as SkillId));
+    expect(loaded.source.relativePath).toBe("skills/CON.md");
+
+    const updated = await updateSkill(store, "reserved-name-skill" as SkillId, { displayName: "Renamed" });
+    expect(updated.ok).toBe(false);
+    if (updated.ok) throw new Error("Expected failure.");
+    expect(updated.failure.details).toContainEqual(expect.objectContaining({
+      path: ["root", "project", "file", "skills/CON.md"],
+      code: "nonportable_source_path",
+    }));
+  });
+
   it("returns typed validation details with the target file path", async () => {
     const store = await fixture();
     const result = await saveSkill(store, {
       rootId: "project",
       relativePath: "skills/empty.md",
-      skill: { ...skillInput(), id: "empty-skill" as AssetId, body: "" },
+      skill: { ...skillInput(), id: "empty-skill" as SkillId, body: "" },
     });
 
     expect(result.ok).toBe(false);
@@ -136,7 +169,7 @@ describe("filesystem Skill store", () => {
     });
     expect(wrongType.ok).toBe(true);
 
-    const wrongTypeResult = await loadSkill(store, "review-change" as AssetId);
+    const wrongTypeResult = await loadSkill(store, "review-change" as SkillId);
     expect(wrongTypeResult.ok).toBe(false);
     if (!wrongTypeResult.ok) {
       expect(wrongTypeResult.failure.details?.[0]).toEqual(expect.objectContaining({
@@ -145,7 +178,7 @@ describe("filesystem Skill store", () => {
       }));
     }
 
-    const missing = await loadSkill(store, "missing-skill" as AssetId);
+    const missing = await loadSkill(store, "missing-skill" as SkillId);
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.failure.code).toBe("not_found");
   });
@@ -170,7 +203,7 @@ describe("filesystem Skill store", () => {
       }),
     };
 
-    const result = await updateSkill(conflictingStore, "review-change" as AssetId, { displayName: "Changed" });
+    const result = await updateSkill(conflictingStore, "review-change" as SkillId, { displayName: "Changed" });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -186,7 +219,7 @@ describe("filesystem Skill store", () => {
       relativePath: "skills/browser-review.md",
       skill: {
         ...skillInput(),
-        id: "browser-review" as AssetId,
+        id: "browser-review" as SkillId,
         requires: [],
         capabilityDependencies: [{
           strength: "optional",
@@ -194,7 +227,7 @@ describe("filesystem Skill store", () => {
         }],
       },
     }));
-    const reloaded = expectStored(await loadSkill(store, "browser-review" as AssetId));
+    const reloaded = expectStored(await loadSkill(store, "browser-review" as SkillId));
     const candidate = projectStoredSkillCandidate(reloaded);
     const result = unwrap(resolveScope({
       context: {
@@ -224,7 +257,7 @@ describe("filesystem Skill store", () => {
       relativePath: "skills/screenshot-review.md",
       skill: {
         ...skillInput(),
-        id: "screenshot-review" as AssetId,
+        id: "screenshot-review" as SkillId,
         requires: [],
         capabilityDependencies: [{
           strength: "preferred",
@@ -232,7 +265,7 @@ describe("filesystem Skill store", () => {
         }],
       },
     }));
-    const reloadedPreferred = expectStored(await loadSkill(store, "screenshot-review" as AssetId));
+    const reloadedPreferred = expectStored(await loadSkill(store, "screenshot-review" as SkillId));
     const preferredResult = unwrap(resolveScope({
       context: {
         executionMode: "advisory_preparation",
@@ -256,7 +289,7 @@ describe("filesystem Skill store", () => {
       relativePath: "skills/required-browser.md",
       skill: {
         ...skillInput(),
-        id: "required-browser" as AssetId,
+        id: "required-browser" as SkillId,
         requires: [],
         capabilityDependencies: [{
           strength: "required",
@@ -270,7 +303,7 @@ describe("filesystem Skill store", () => {
       projectId: "project-aacl",
       roleId: "reviewer",
     };
-    const reloadedRequired = expectStored(await loadSkill(store, "required-browser" as AssetId));
+    const reloadedRequired = expectStored(await loadSkill(store, "required-browser" as SkillId));
     const withoutContext = unwrap(resolveScope({
       context,
       snapshot: { candidates: [projectStoredSkillCandidate(reloadedRequired)] },
@@ -302,7 +335,7 @@ describe("filesystem Skill store", () => {
       relativePath: "skills/fallback-browser.md",
       skill: {
         ...skillInput(),
-        id: "fallback-browser" as AssetId,
+        id: "fallback-browser" as SkillId,
         requires: [],
         capabilityDependencies: [
           { strength: "required", capability: { capabilityId: "browser" as CapabilityId } },
@@ -314,7 +347,7 @@ describe("filesystem Skill store", () => {
         ],
       },
     }));
-    const reloadedFallback = expectStored(await loadSkill(store, "fallback-browser" as AssetId));
+    const reloadedFallback = expectStored(await loadSkill(store, "fallback-browser" as SkillId));
     const fallbackResult = unwrap(resolveScope({
       context,
       snapshot: { candidates: [projectStoredSkillCandidate(reloadedFallback)] },
@@ -338,11 +371,11 @@ describe("filesystem Skill store", () => {
       relativePath: "skills/missing-rule.md",
       skill: {
         ...skillInput(),
-        id: "missing-rule-skill" as AssetId,
+        id: "missing-rule-skill" as SkillId,
         requires: ["missing-rule" as AssetId],
       },
     }));
-    const reloadedMissingAsset = expectStored(await loadSkill(store, "missing-rule-skill" as AssetId));
+    const reloadedMissingAsset = expectStored(await loadSkill(store, "missing-rule-skill" as SkillId));
     const missingAssetResult = unwrap(resolveScope({
       context,
       snapshot: { candidates: [projectStoredSkillCandidate(reloadedMissingAsset)] },
