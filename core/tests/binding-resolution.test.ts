@@ -120,6 +120,7 @@ const workflowDocument = (
     readonly operation?: "add" | "override";
     readonly requiredRoleId?: string;
     readonly model?: string;
+    readonly requires?: string;
   } = {},
 ): string => {
   const requiredRoleId = options.requiredRoleId ?? "reviewer";
@@ -131,6 +132,7 @@ const workflowDocument = (
     "tier: core",
     `operation: ${options.operation ?? "add"}`,
     ...(options.model === undefined ? [] : [`scope.model: [${options.model}]`]),
+    ...(options.requires === undefined ? [] : [`requires: [${options.requires}]`]),
     "---",
     "```aacl-workflow",
     JSON.stringify({
@@ -313,11 +315,27 @@ malformed
     expect(response.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "workflow_definition_missing" }),
       // The base says why it is gone, rather than the Workflow just being absent.
-      expect.objectContaining({ code: "binding_disabled", path: ["asset", "review-flow"] }),
+      expect.objectContaining({ code: "workflow_disabled", path: ["asset", "review-flow"] }),
     ]));
     // The Bindings are unaffected: they never depended on the Workflow.
     expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "reviewer-binding"))
       .toMatchObject({ status: "eligible" });
+  });
+
+  it("names the requirement that made the selected Workflow unavailable", async () => {
+    const fixture = await makeFixture();
+    await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument({ requires: "missing-asset" }));
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding"));
+
+    const response = unwrap(await resolve(fixture, selectedStageRequest()));
+
+    expect(response.stage).toBeUndefined();
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "missing_requirement",
+        path: ["asset", "review-flow", "requires", "missing-asset"],
+      }),
+    ]));
   });
 
   it("reports no Stage for a Workflow the scope excludes", async () => {

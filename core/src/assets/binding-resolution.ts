@@ -64,26 +64,42 @@ const diagnosticDetails = (resolved: Awaited<ReturnType<typeof resolveAssets>>):
 };
 
 /**
- * Why the resolver did not keep this candidate, in the shape the response
- * already uses. `included` says nothing a failure needs, so it contributes
- * nothing; the rest carry the ids the caller would otherwise have to guess at.
+ * Why the resolver did not keep this Workflow candidate, in the shape the
+ * response already uses. `included` says nothing a failure needs, so it
+ * contributes nothing; the rest carry the ids the caller would otherwise have to
+ * guess at.
+ *
+ * The codes are the resolver's own, never the Binding reason kinds: the subject
+ * here is a Workflow Definition, and a client dispatching on `binding_disabled`
+ * would handle it as a Binding failure.
  */
 const evaluationDetails = (evaluation: ResolutionEvaluation): readonly CoreErrorDetail[] => {
-  const reason = evaluation.reason;
-  const at = (code: string, message: string): CoreErrorDetail => ({
-    path: ["asset", String(evaluation.candidate.assetId)],
+  const at = (code: string, message: string, id?: string): CoreErrorDetail => ({
+    path: ["asset", String(evaluation.candidate.assetId), ...(id === undefined ? [] : ["requires", id])],
     code,
     message,
   });
+  const reason = evaluation.reason;
   switch (reason.kind) {
     case "included": return [];
     case "excluded":
       if (reason.cause === "resolution_conflict") return toResolutionConflictDetails(reason.conflict);
       if (reason.cause === "invalid_directory") return reason.diagnostics;
       return [at(reason.cause, `The Workflow Definition was excluded: ${reason.cause}.`)];
-    case "overridden": return [at("binding_overridden", "The Workflow Definition was overridden.")];
-    case "disabled": return [at("binding_disabled", "The Workflow Definition was disabled.")];
-    case "unavailable": return [at(reason.cause, `The Workflow Definition is unavailable: ${reason.cause}.`)];
+    case "overridden":
+      return [at("workflow_overridden", "The Workflow Definition was overridden.")];
+    case "disabled":
+      return [at("workflow_disabled", "The Workflow Definition was disabled.")];
+    case "unavailable":
+      // One detail per failed requirement, so the asset to fix is named. The
+      // bare cause is only the answer when the resolver named nothing.
+      return reason.failedRequirements.length === 0
+        ? [at(reason.cause, `The Workflow Definition is unavailable: ${reason.cause}.`)]
+        : reason.failedRequirements.map((id) => at(
+            reason.cause,
+            `The Workflow Definition is unavailable: ${reason.cause}.`,
+            String(id),
+          ));
   }
 };
 

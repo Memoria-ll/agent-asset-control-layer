@@ -4,6 +4,7 @@ import {
   parseBindingCandidateDto,
   parseBindingDefinitionDto,
   parseBindingReasonDto,
+  parseBindingResolutionResponse,
   parseBindingRecordDto,
   parseBindingScopeDto,
   parseBindingSourceDto,
@@ -143,14 +144,25 @@ describe("Binding shared contract", () => {
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
+    // The actor may be another Binding; a cross-ID overlay is exactly that.
     expect(parseBindingCandidateDto({
       status: "unavailable",
       bindingId: "binding-1",
+      definition,
       reasons: [{ kind: "binding_overridden", actorBindingId: "binding-2" }],
       source: { layer: "global" },
       revision: "revision-1",
       loadingTier: "core",
     })).toMatchObject({ bindingId: "binding-1" });
+    // Without a definition the only statable failure is `invalid_binding`.
+    expect(() => parseBindingCandidateDto({
+      status: "unavailable",
+      bindingId: "binding-1",
+      reasons: [{ kind: "target_missing", targetId: "missing" }],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
   });
 
   it("parses a fallback candidate's own reason through the standalone reason schema", () => {
@@ -199,6 +211,29 @@ describe("Binding shared contract", () => {
     expect(() => parseBindingCandidateDto({
       ...eligible,
       reasons: [{ kind: "eligible" }, { kind: "eligible" }],
+    })).toThrow();
+  });
+
+  it("ties reported Stage requirements to the Stage the context selected", () => {
+    const selected = {
+      context: {
+        executionMode: "advisory_preparation" as const,
+        workflow: { kind: "selected" as const, workflowId: "review-flow", stageId: "review" },
+      },
+      candidates: [],
+    };
+    expect(parseBindingResolutionResponse({
+      ...selected,
+      stage: { stageId: "review", requiredRoleId: "reviewer" },
+    }).stage).toMatchObject({ stageId: "review" });
+    expect(() => parseBindingResolutionResponse({
+      ...selected,
+      stage: { stageId: "done", requiredRoleId: "reviewer" },
+    })).toThrow();
+    expect(() => parseBindingResolutionResponse({
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      candidates: [],
+      stage: { stageId: "review", requiredRoleId: "reviewer" },
     })).toThrow();
   });
 

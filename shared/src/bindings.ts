@@ -246,6 +246,13 @@ export const BindingCandidateDto = z.discriminatedUnion("status", [
     return candidate.reasons.every(({ primaryBindingId }) => primaryBindingId === candidate.definition.fallbackFor);
   }
   if (candidate.definition !== undefined && candidate.definition.bindingId !== candidate.bindingId) return false;
+  // Target, scope and fallback all read off the definition, so a reason naming
+  // any of them without one refers to data that is not there. The only failure
+  // the domain can state about a Binding it could not build is `invalid_binding`.
+  if (candidate.definition === undefined) {
+    return candidate.reasons.every((reason) => reason.kind === "invalid_binding"
+      && reason.bindingId === candidate.bindingId);
+  }
   return candidate.reasons.every((reason) => {
     // The only reason arm naming the Binding it is about rather than another
     // one: `binding_disabled` and `binding_overridden` name the actor, which a
@@ -304,7 +311,14 @@ export const BindingResolutionResponse = z.strictObject({
   /** Absent unless the request selected a Stage and its Definition resolved. */
   stage: z.optional(SelectedStageRequirementsDto),
   diagnostics: z.optional(z.array(CoreErrorDetail).check(z.minLength(1))),
-});
+}).check(z.refine((response) => {
+  // The requirements describe one Stage, and the only Stage in play is the one
+  // the context selected: reported against any other position they would be
+  // applied to a Stage nobody asked about.
+  if (response.stage === undefined) return true;
+  return response.context.workflow.kind === "selected"
+    && response.context.workflow.stageId === response.stage.stageId;
+}, { error: "Stage requirements must describe the Stage the context selected." }));
 export type BindingResolutionResponse = z.infer<typeof BindingResolutionResponse>;
 export type BindingResolutionResponseInput = z.input<typeof BindingResolutionResponse>;
 

@@ -82,6 +82,7 @@ export type {
   BindingResolutionRequestInput,
   BindingResolutionResponse,
   SelectedStageRequirementsDto,
+  SelectedStageRequirementsDtoInput,
   BindingResolutionResponseInput,
 } from "./bindings.ts";
 

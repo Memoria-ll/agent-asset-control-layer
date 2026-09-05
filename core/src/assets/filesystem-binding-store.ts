@@ -5,6 +5,7 @@ import {
   toAssetCandidate,
   type AssetResult,
   type CanonicalAsset,
+  type AssetTypeContractRegistry,
   type CanonicalBinding,
   type CoreFailure,
 } from "@aacl/core-domain";
@@ -48,6 +49,13 @@ export type SaveBindingInput = {
   readonly relativePath: string;
   readonly asset: CanonicalAsset;
   readonly expectedRevision?: AssetRevision;
+  /**
+   * The registry resolution will use. The save-time guarantee is only worth
+   * anything if it answers the same question the resolver will: a registry the
+   * caller configures decides which directives a Binding may carry, so probing
+   * with the default one lets a save pass that resolution then excludes.
+   */
+  readonly contracts?: AssetTypeContractRegistry;
 };
 
 const failureResult = (
@@ -133,14 +141,18 @@ export const saveBinding = async (
   // refusal. The destination decides the first of those, not the document, so
   // the check belongs here rather than in `parseBindingAsset`.
   const destination = assetStore.roots.find((root) => root.rootId === input.rootId);
-  const projected = toAssetCandidate(parsed.value.asset, {
-    revision: PROJECTION_PROBE_REVISION,
-    source: {
-      layer: destination?.kind ?? "global",
-      sourceId: `${input.rootId}:${input.relativePath}`,
+  const projected = toAssetCandidate(
+    parsed.value.asset,
+    {
+      revision: PROJECTION_PROBE_REVISION,
+      source: {
+        layer: destination?.kind ?? "global",
+        sourceId: `${input.rootId}:${input.relativePath}`,
+      },
+      ...(destination?.kind === "project" ? { owningProjectId: destination.projectId } : {}),
     },
-    ...(destination?.kind === "project" ? { owningProjectId: destination.projectId } : {}),
-  });
+    ...(input.contracts === undefined ? [] : [input.contracts]),
+  );
   if (!projected.ok) {
     return failureResult(
       withFilePath(input.rootId, input.relativePath, projected.failure),

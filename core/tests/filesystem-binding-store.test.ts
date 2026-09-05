@@ -8,8 +8,10 @@ import {
   saveBinding,
 } from "../src/index.ts";
 import {
+  DEFAULT_ASSET_TYPE_CONTRACTS,
   parseBindingDocument,
   type AssetResult,
+  type AssetTypeContractRegistry,
   type CanonicalBinding,
 } from "@aacl/core-domain";
 import type { BindingId } from "@aacl/shared";
@@ -124,6 +126,25 @@ describe("filesystem Binding store", () => {
       ]));
     }
     await expect(readdir(directory)).resolves.toEqual([]);
+  });
+
+  it("probes the save against the contract registry the caller configures", async () => {
+    const { store } = await makeStore();
+    // A registry that allows what the default forbids: the save has to follow
+    // the registry resolution will use, not the built-in one.
+    const permissive: AssetTypeContractRegistry = {
+      ...DEFAULT_ASSET_TYPE_CONTRACTS,
+      binding: { ...DEFAULT_ASSET_TYPE_CONTRACTS.binding, mergePolicy: { defaultMode: "additive", allowsExclusive: true } },
+    };
+
+    const saved = await saveBinding(store, {
+      rootId: "global",
+      relativePath: "exclusive.md",
+      asset: exclusiveBinding("exclusive-binding").asset,
+      contracts: permissive,
+    });
+
+    expect(saved.ok).toBe(true);
   });
 
   it("saves, reloads, and preserves the stored revision and source", async () => {
