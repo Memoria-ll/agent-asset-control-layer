@@ -6,6 +6,7 @@ import {
   parseResolvedContextDto,
   parseTransitionCandidateDto,
   parseWorkflowDefinitionDto,
+  parseWorkflowStartCommitRequest,
   parseWorkflowStateDto,
 } from "../src/index.ts";
 // Schema values and the graph bounds are internal to the package; asserted on directly here.
@@ -42,6 +43,51 @@ const resolvedContext = (overrides: {
   resolvedAt: "2026-08-30T01:02:03+09:00",
 });
 
+const workflowStartBundle = (
+  stateVersion: number,
+  axes: {
+    nextContext?: Record<string, unknown>;
+    agentExecution?: Record<string, unknown>;
+    preconditionContext?: Record<string, unknown>;
+    workflowState?: Record<string, unknown>;
+  } = {},
+): unknown => ({
+  operation: "workflow_start",
+  idempotencyKey: "start-1",
+  precondition: {
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" }, ...axes.preconditionContext },
+    target: { workflowId: "workflow-1", workflowRevision: "revision-1" },
+  },
+  nextContext: {
+    executionMode: "development_execution",
+    roleId: "role-1",
+    workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" },
+    ...axes.nextContext,
+  },
+  agentExecution: {
+    agentExecutionId: "execution-1",
+    executionMode: "development_execution",
+    workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "revision-1", executionInstanceId: "instance-1" },
+    stageId: "stage-1",
+    roleId: "role-1",
+    startedAt: "2026-08-30T01:02:03+09:00",
+    ...axes.agentExecution,
+  },
+  workflowState: {
+    workflowId: "workflow-1",
+    workflowRevision: "revision-1",
+    executionInstanceId: "instance-1",
+    stateVersion,
+    currentStageId: "stage-1",
+    entryRoleId: "role-1",
+    currentRoleId: "role-1",
+    linkedAgentExecutionIds: ["execution-1"],
+    linkedSnapshotIds: [],
+    updatedAt: "2026-08-30T01:02:03+09:00",
+    ...axes.workflowState,
+  },
+});
+
 describe("boundary states that cannot exist", () => {
   it("accepts a workflow-bound execution with both identifiers", () => {
     const parsed = parseAgentExecutionDto({
@@ -49,14 +95,17 @@ describe("boundary states that cannot exist", () => {
       workflowBinding: {
         kind: "workflow",
         workflowId: "workflow-1",
+        workflowRevision: "sha256:workflow-1",
         executionInstanceId: "instance-1",
       },
+      executionMode: "development_execution",
       startedAt: "2026-08-30T01:02:03+09:00",
     });
 
     expect(parsed.workflowBinding).toEqual({
       kind: "workflow",
       workflowId: "workflow-1",
+      workflowRevision: "sha256:workflow-1",
       executionInstanceId: "instance-1",
     });
   });
@@ -65,6 +114,7 @@ describe("boundary states that cannot exist", () => {
     const parsed = parseAgentExecutionDto({
       agentExecutionId: "execution-1",
       workflowBinding: { kind: "standalone" },
+      executionMode: "advisory_preparation",
       startedAt: "2026-08-30T01:02:03+09:00",
     });
 
@@ -337,6 +387,53 @@ describe("boundary states that cannot exist", () => {
     ).toThrow();
   });
 
+  it("rejects a workflow start whose state has already advanced", () => {
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0))).not.toThrow();
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(1))).toThrow();
+  });
+
+  // Every axis, not only the routing tuple that surfaced it: the scope axes are carried by
+  // the same two objects and disagree the same way.
+  it.each(["projectId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId"])(
+    "rejects a workflow start whose execution and next context disagree on %s",
+    (axis) => {
+      expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, {
+        nextContext: { [axis]: "value-a", ...(axis === "roleId" ? {} : { roleId: "role-1" }) },
+        agentExecution: { [axis]: "value-b", ...(axis === "roleId" ? {} : { roleId: "role-1" }) },
+      }))).toThrow();
+      expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, {
+        nextContext: { [axis]: "value-a" },
+      }))).toThrow();
+    },
+  );
+
+  it("rejects a workflow start whose execution role is not the state's current role", () => {
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, {
+      nextContext: { roleId: "role-2" },
+      agentExecution: { roleId: "role-2" },
+    }))).toThrow();
+  });
+
+  // The bundle carries four documents and no workflow definition, so this is the whole set of
+  // states it can be internally inconsistent in. Listed exhaustively so a gap is visible.
+  it.each([
+    ["the start is issued from a development context", {
+      preconditionContext: { executionMode: "development_execution", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
+    }],
+    ["the start is issued from an already selected workflow", {
+      preconditionContext: { workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "revision-1", stageId: "stage-1" } },
+    }],
+    ["the start moves the execution to another project", { preconditionContext: { projectId: "project-a" } }],
+    ["the start moves the execution to another directory", { preconditionContext: { directory: "/a" } }],
+    ["the initial state entered in a different role than it runs in", { workflowState: { entryRoleId: "role-2" } }],
+    ["the initial state links an execution the bundle does not carry", { workflowState: { linkedAgentExecutionIds: ["execution-1", "execution-2"] } }],
+    ["the initial state already links a snapshot", { workflowState: { linkedSnapshotIds: ["snapshot-1"] } }],
+    ["the started execution already names a snapshot", { agentExecution: { snapshotId: "snapshot-1" } }],
+    ["the started execution has already ended", { agentExecution: { endedAt: "2026-08-30T02:02:03+09:00" } }],
+  ])("rejects a workflow start where %s", (_name, axes) => {
+    expect(() => parseWorkflowStartCommitRequest(workflowStartBundle(0, axes))).toThrow();
+  });
+
   it("rejects an invalid transition kind", () => {
     expect(() =>
       parseTransitionCandidateDto({
@@ -492,11 +589,43 @@ describe("published JSON Schema carries the same constraints", () => {
 
     expect(binding.oneOf).toHaveLength(2);
     expect(workflow.additionalProperties).toBe(false);
-    expect(workflow.required).toEqual(["kind", "workflowId", "executionInstanceId"]);
+    expect(workflow.required).toEqual(["kind", "workflowId", "workflowRevision", "executionInstanceId"]);
     expect(standalone.additionalProperties).toBe(false);
     expect(standalone.required).toEqual(["kind"]);
     expect(standalone.properties.workflowId).toBeUndefined();
     expect(standalone.properties.executionInstanceId).toBeUndefined();
+  });
+
+  it("fixes the workflow-start state version at the initial snapshot", () => {
+    for (const name of ["WorkflowStartCommitRequest", "WorkflowStartResult"]) {
+      const bundle = schemas()[name] as any;
+
+      expect(bundle.properties.workflowState.properties.stateVersion.const, name).toBe(0);
+    }
+  });
+
+  // Every constraint a schema can carry belongs on the field, so a schema-driven consumer
+  // rejects what the parser rejects. These are the bundle's four documents.
+  it("publishes the workflow-start bundle as a start-shaped bundle", () => {
+    const bundle = schemas().WorkflowStartCommitRequest as any;
+    const next = bundle.properties.nextContext;
+    const execution = bundle.properties.agentExecution;
+
+    expect(next.properties.executionMode.const).toBe("development_execution");
+    expect(next.properties.workflow.properties.kind.const).toBe("selected");
+    expect(execution.properties.executionMode.const).toBe("development_execution");
+    expect(execution.properties.workflowBinding.properties.kind.const).toBe("workflow");
+    expect(execution.properties.endedAt).toBeUndefined();
+    expect(execution.properties.snapshotId).toBeUndefined();
+    expect(bundle.properties.workflowState.properties.stateVersion.const).toBe(0);
+  });
+
+  it("publishes the workflow-start precondition as an advisory, unselected context", () => {
+    const precondition = (schemas().WorkflowStartCommitRequest as any).properties.precondition.properties.context;
+    const kinds = precondition.properties.workflow.oneOf.map((arm: any) => arm.properties.kind.const).sort();
+
+    expect(precondition.properties.executionMode.const).toBe("advisory_preparation");
+    expect(kinds).toEqual(["none", "standalone"]);
   });
 
   it("states uniqueness on every requirement reference list", () => {

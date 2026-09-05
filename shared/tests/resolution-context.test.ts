@@ -22,7 +22,7 @@ describe("explicit resolution context", () => {
     const advisory = parseResolveRequest({
       context: {
         executionMode: "advisory_preparation",
-        workflow: { kind: "selected", workflowId: "workflow-1", stageId: "stage-1" },
+      workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", stageId: "stage-1" },
       },
     });
     const development = parseResolveRequest({
@@ -35,6 +35,7 @@ describe("explicit resolution context", () => {
     expect(advisory.context.workflow).toEqual({
       kind: "selected",
       workflowId: "workflow-1",
+      workflowRevision: "sha256:workflow-1",
       stageId: "stage-1",
     });
     expect(development.context.workflow).toEqual({ kind: "standalone", skillId: "skill-1" });

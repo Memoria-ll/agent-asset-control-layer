@@ -50,6 +50,7 @@ const workflowStandalone = z.strictObject({ kind: z.literal("standalone"), skill
 const workflowSelected = z.strictObject({
   kind: z.literal("selected"),
   workflowId: WorkflowId,
+  workflowRevision: AssetRevision,
   stageId: StageId,
 });
 
@@ -97,6 +98,27 @@ const developmentExecutionContext = z.strictObject({
   workflow: DevelopmentWorkflowSelectionSchema,
   ...resolutionContextAxes,
 });
+/**
+ * The only context a workflow start can be issued from: `authorizeExecutionOperation`
+ * denies the operation from `development_execution` and from an already-selected
+ * workflow, so the two exclusions are stated as schema arms and reach the emitted
+ * JSON Schema rather than living only in a cross-field check.
+ */
+export const WorkflowStartPreconditionContext = z.strictObject({
+  executionMode: z.literal("advisory_preparation"),
+  workflow: z.discriminatedUnion("kind", [workflowNone, workflowStandalone]),
+  ...resolutionContextAxes,
+});
+export type WorkflowStartPreconditionContext = z.infer<typeof WorkflowStartPreconditionContext>;
+
+/** The context a completed workflow start produces: development mode, on a selected workflow. */
+export const SelectedWorkflowContext = z.strictObject({
+  executionMode: z.literal("development_execution"),
+  workflow: workflowSelected,
+  ...resolutionContextAxes,
+});
+export type SelectedWorkflowContext = z.infer<typeof SelectedWorkflowContext>;
+
 export const ResolutionContextInput = z.discriminatedUnion("executionMode", [
   advisoryPreparationContext,
   developmentExecutionContext,

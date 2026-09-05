@@ -1,6 +1,7 @@
 import * as z from "zod/mini";
 import {
   AgentExecutionId,
+  AssetRevision,
   ExecutionInstanceId,
   RoleId,
   SnapshotId,
@@ -20,7 +21,7 @@ export type WorkflowStateVersion = z.infer<typeof WorkflowStateVersion>;
 
 /**
  * The current snapshot of one workflow instance. Its logical key is
- * `(workflowId, executionInstanceId)`: one definition carries many instances,
+ * `(workflowId, workflowRevision, executionInstanceId)`: one definition carries many instances,
  * and each instance owns an independent state.
  *
  * `stateVersion` names the exact snapshot a candidate query returned and the
@@ -35,6 +36,7 @@ export type WorkflowStateVersion = z.infer<typeof WorkflowStateVersion>;
  */
 export const WorkflowStateDto = z.strictObject({
   workflowId: WorkflowId,
+  workflowRevision: AssetRevision,
   executionInstanceId: ExecutionInstanceId,
   stateVersion: WorkflowStateVersion,
   currentStageId: StageId,

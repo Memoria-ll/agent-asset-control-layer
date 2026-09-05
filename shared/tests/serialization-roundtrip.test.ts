@@ -70,8 +70,10 @@ const representativeInputs: Record<string, unknown> = {
     workflowBinding: {
       kind: "workflow",
       workflowId: "workflow-1",
+      workflowRevision: "sha256:workflow-1",
       executionInstanceId: "instance-1",
     },
+    executionMode: "development_execution",
     stageId: "stage-1",
     taskTypeId: "task-type-1",
     roleId: "role-1",
@@ -84,6 +86,7 @@ const representativeInputs: Record<string, unknown> = {
   },
   WorkflowStateDto: {
     workflowId: "workflow-1",
+    workflowRevision: "sha256:workflow-1",
     stateVersion: 7,
     executionInstanceId: "instance-1",
     currentStageId: "stage-1",
@@ -146,6 +149,51 @@ const representativeInputs: Record<string, unknown> = {
     workspacePath: "/work/project/packages/a",
     projectRoot: "/work/project",
     projectId: "project-1",
+  },
+  ExecutionAuthorizationRequest: {
+    operation: "workflow_start",
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    workflowStart: {
+      startFrom: { kind: "advisory_none" },
+      target: { workflowId: "workflow-1", workflowRevision: "sha256:workflow-1" },
+    },
+  },
+  ExecutionAuthorizationResult: { decision: "allowed", operation: "workflow_start" },
+  WorkflowStartRequest: {
+    operation: "workflow_start",
+    idempotencyKey: "start-1",
+    context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    startFrom: { kind: "advisory_none" },
+    target: { workflowId: "workflow-1", workflowRevision: "sha256:workflow-1" },
+    availableCapabilityRefs: [],
+    availableArtifactRefs: [],
+  },
+  WorkflowStartCommitRequest: {
+    operation: "workflow_start",
+    idempotencyKey: "start-1",
+    precondition: {
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      target: { workflowId: "workflow-1", workflowRevision: "sha256:workflow-1" },
+    },
+    nextContext: { executionMode: "development_execution", roleId: "role-1", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", stageId: "stage-1" } },
+    agentExecution: {
+      agentExecutionId: "execution-1", executionMode: "development_execution",
+      workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", executionInstanceId: "instance-1" },
+      stageId: "stage-1",
+      roleId: "role-1",
+      startedAt: "2026-08-30T01:02:03+09:00",
+    },
+    workflowState: {
+      workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", executionInstanceId: "instance-1", stateVersion: 0,
+      currentStageId: "stage-1", entryRoleId: "role-1", currentRoleId: "role-1", linkedAgentExecutionIds: ["execution-1"], linkedSnapshotIds: [], updatedAt: "2026-08-30T01:02:03+09:00",
+    },
+  },
+  WorkflowStartResult: {
+    operation: "workflow_start", idempotencyKey: "start-1",
+    precondition: { context: { executionMode: "advisory_preparation", workflow: { kind: "none" } }, target: { workflowId: "workflow-1", workflowRevision: "sha256:workflow-1" } },
+    nextContext: { executionMode: "development_execution", roleId: "role-1", workflow: { kind: "selected", workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", stageId: "stage-1" } },
+    agentExecution: { agentExecutionId: "execution-1", executionMode: "development_execution", workflowBinding: { kind: "workflow", workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", executionInstanceId: "instance-1" }, stageId: "stage-1", roleId: "role-1", startedAt: "2026-08-30T01:02:03+09:00" },
+    workflowState: { workflowId: "workflow-1", workflowRevision: "sha256:workflow-1", executionInstanceId: "instance-1", stateVersion: 0, currentStageId: "stage-1", entryRoleId: "role-1", currentRoleId: "role-1", linkedAgentExecutionIds: ["execution-1"], linkedSnapshotIds: [], updatedAt: "2026-08-30T01:02:03+09:00" },
   },
 };
 

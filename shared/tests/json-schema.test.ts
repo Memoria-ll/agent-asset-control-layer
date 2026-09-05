@@ -80,6 +80,7 @@ describe("contract JSON Schemas", () => {
     const schemas = contractJsonSchemas() as any;
     expect(schemas.WorkflowStateDto.required).toEqual([
       "workflowId",
+      "workflowRevision",
       "executionInstanceId",
       "stateVersion",
       "currentStageId",
@@ -105,6 +106,39 @@ describe("contract JSON Schemas", () => {
     expect(blocked.required).toContain("blockedReasons");
     expect(blocked.properties.blockedReasons.minItems).toBe(1);
     expect(unblocked.properties.blockedReasons).toBeUndefined();
+  });
+
+  it("publishes each authorization denial with matching guidance", () => {
+    const schema = (contractJsonSchemas() as any).ExecutionAuthorizationResult;
+    const denials = schema.oneOf.filter((arm: any) => arm.properties.decision.const === "denied");
+
+    expect(denials).toHaveLength(7);
+    const selectionRequired = denials.find(
+      (arm: any) => arm.properties.reason.const === "workflow_selection_required",
+    );
+    expect(selectionRequired.properties.guidance.properties.kind.const).toBe("select_workflow");
+    expect(selectionRequired.properties.guidance.properties.nextOperation.const).toBe("workflow_start");
+  });
+
+  it("publishes strict nested execution-contract objects", () => {
+    const schemas = contractJsonSchemas() as any;
+    const authorizationStart = schemas.ExecutionAuthorizationRequest.oneOf.find(
+      (arm: any) => arm.properties.operation.const === "workflow_start",
+    ).properties.workflowStart;
+    const start = schemas.WorkflowStartRequest;
+    const commit = schemas.WorkflowStartCommitRequest;
+    const nodes = [
+      authorizationStart,
+      authorizationStart.properties.target,
+      ...authorizationStart.properties.startFrom.oneOf,
+      start.properties.target,
+      ...start.properties.startFrom.oneOf,
+      commit.properties.precondition,
+      commit.properties.precondition.properties.target,
+      commit.properties.sessionUpdate,
+    ];
+
+    for (const node of nodes) expect(node.additionalProperties).toBe(false);
   });
 
   it("publishes the Project boundary and nested failure strictness", () => {

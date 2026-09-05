@@ -102,11 +102,12 @@ ${fence}
 `);
 
 const definition = (body: unknown = basicDefinitionBody): ResolvedWorkflowDefinition =>
-  unwrap(parseWorkflowDefinitionAsset(workflowAsset(body), catalog()));
+  { const authored = unwrap(parseWorkflowDefinitionAsset(workflowAsset(body), catalog())); return { ...authored, workflowRevision: "sha256:workflow" as never }; };
 
 const stateFor = (value: ResolvedWorkflowDefinition, stateVersion = 7) =>
   parseWorkflowStateDto({
     workflowId: value.workflowId,
+    workflowRevision: "sha256:workflow" as never,
     executionInstanceId: "instance-1",
     stateVersion,
     currentStageId: value.entryStageId,
@@ -468,6 +469,7 @@ ${JSON.stringify(basicDefinitionBody)}
     }, { roleId: "reviewer" as RoleId, taskTypeId: "drafting" as TaskTypeId, availableCapabilityRefs: [], availableArtifactRefs: [] }));
     expect(seed).toEqual({
       workflowId: "review-flow",
+      workflowRevision: "sha256:workflow",
       currentStageId: "draft",
       entryRoleId: "reviewer",
       currentRoleId: "reviewer",
@@ -555,6 +557,7 @@ ${JSON.stringify(basicDefinitionBody)}
         ok: true,
         value: {
           workflowId: "review-flow",
+          workflowRevision: "sha256:workflow",
           executionInstanceId: "instance-1",
           stateVersion: 8,
           currentStageId: "done",

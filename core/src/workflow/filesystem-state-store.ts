@@ -12,6 +12,7 @@ import {
 } from "@aacl/shared";
 import type {
   ExecutionInstanceId,
+  AssetRevision,
   Timestamp,
   WorkflowId,
   WorkflowStateDto,
@@ -40,13 +41,16 @@ export type WorkflowStateStoreOptions = {
 };
 
 export type WorkflowStateStore = {
-  readonly create: (seed: WorkflowStateSeed) => Promise<AssetResult<WorkflowStateDto>>;
+  readonly issueExecutionInstanceId: () => AssetResult<ExecutionInstanceId>;
+  readonly create: (seed: WorkflowStateSeed, executionInstanceId?: ExecutionInstanceId) => Promise<AssetResult<WorkflowStateDto>>;
   readonly get: (
     workflowId: WorkflowId,
+    workflowRevision: AssetRevision,
     executionInstanceId: ExecutionInstanceId,
   ) => Promise<AssetResult<WorkflowStateDto>>;
   readonly compareAndSwap: (
     workflowId: WorkflowId,
+    workflowRevision: AssetRevision,
     executionInstanceId: ExecutionInstanceId,
     expectedStateVersion: WorkflowStateVersion,
     mutation: WorkflowStateMutation,
@@ -86,7 +90,7 @@ const isContainedPath = (rootDirectory: string, targetPath: string): boolean => 
 
 const STATE_FILE_EXTENSION = ".json";
 
-/** The shape this store issues. A caller supplies only the random part. */
+/** The shape this store issues, or persists when a composite boundary already minted it. */
 export const composeExecutionInstanceId = (suffix: string): ExecutionInstanceId =>
   `instance-${suffix}` as ExecutionInstanceId;
 
@@ -232,6 +236,11 @@ const workflowMismatch = (): AssetResult<never> => ({
   ),
 });
 
+const workflowRevisionMismatch = (): AssetResult<never> => ({
+  ok: false,
+  failure: stateFailure("conflict", "The workflow state belongs to a different workflow revision.", ["workflowState", "workflowRevision"], "workflow_revision_mismatch"),
+});
+
 // Write serialization is per state directory and spans every store instance in this Core
 // process. The key is the lexical resolve of the directory, matching the asset store, so a
 // symlink alias or a case variant on a case-insensitive filesystem is a different key (#60).
@@ -262,6 +271,7 @@ export const createWorkflowStateStore = async (
 
   const readStoredState = async (
     workflowId: WorkflowId,
+    expectedWorkflowRevision: AssetRevision,
     executionInstanceId: ExecutionInstanceId,
   ): Promise<AssetResult<StoredState>> => {
     const targetPath = filePathFor(workflowsDirectory, executionInstanceId);
@@ -296,6 +306,7 @@ export const createWorkflowStateStore = async (
     if (!parsed.ok) return parsed;
     if (parsed.value.executionInstanceId !== executionInstanceId) return instanceMismatch();
     if (parsed.value.workflowId !== workflowId) return workflowMismatch();
+    if (parsed.value.workflowRevision !== expectedWorkflowRevision) return workflowRevisionMismatch();
     let mode: number;
     try {
       mode = (await stat(targetPath)).mode & 0o777;
@@ -305,18 +316,21 @@ export const createWorkflowStateStore = async (
     return { ok: true, value: { state: parsed.value, mode } };
   };
 
-  const create = (seed: WorkflowStateSeed): Promise<AssetResult<WorkflowStateDto>> => inWriteChain(async () => {
+  const create = (seed: WorkflowStateSeed, requestedExecutionInstanceId?: ExecutionInstanceId): Promise<AssetResult<WorkflowStateDto>> => inWriteChain(async () => {
     // The generator is injectable, so a deterministic or coarse one can hand back an id whose
     // file already exists on every attempt. This runs inside the per-directory write chain, so
     // retrying forever would wedge every later create and compare-and-swap for that directory.
     for (let attempt = 0; attempt < COLLISION_ATTEMPT_LIMIT; attempt += 1) {
-      const executionInstanceId = composeExecutionInstanceId(newInstanceSuffix());
+      const executionInstanceId = requestedExecutionInstanceId ?? composeExecutionInstanceId(newInstanceSuffix());
       const targetPath = filePathFor(workflowsDirectory, executionInstanceId);
       if (targetPath === undefined) {
         return { ok: false, failure: stateFailure("invalid_request", "The generated execution instance id is not a valid state file name.", ["workflowState", "executionInstanceId"], "invalid_execution_instance_id") };
       }
       try {
         await lstat(targetPath);
+        if (requestedExecutionInstanceId !== undefined) {
+          return { ok: false, failure: stateFailure("conflict", "The execution instance id is already in use.", ["workflowState", "executionInstanceId"], "execution_instance_id_conflict") };
+        }
         continue;
       } catch (error) {
         if (errorCode(error) !== "ENOENT") {
@@ -326,6 +340,7 @@ export const createWorkflowStateStore = async (
 
       const candidate = {
         workflowId: seed.workflowId,
+        workflowRevision: seed.workflowRevision,
         executionInstanceId,
         stateVersion: 0 as WorkflowStateVersion,
         currentStageId: seed.currentStageId,
@@ -351,18 +366,19 @@ export const createWorkflowStateStore = async (
     return { ok: false, failure: stateFailure("conflict", "A free execution instance id could not be generated.", ["workflowState", "executionInstanceId"], "execution_instance_id_exhausted") };
   });
 
-  const get = async (workflowId: WorkflowId, executionInstanceId: ExecutionInstanceId): Promise<AssetResult<WorkflowStateDto>> => {
-    const result = await readStoredState(workflowId, executionInstanceId);
+  const get = async (workflowId: WorkflowId, expectedWorkflowRevision: AssetRevision, executionInstanceId: ExecutionInstanceId): Promise<AssetResult<WorkflowStateDto>> => {
+    const result = await readStoredState(workflowId, expectedWorkflowRevision, executionInstanceId);
     return result.ok ? { ok: true, value: result.value.state } : result;
   };
 
   const compareAndSwap = (
     workflowId: WorkflowId,
+    expectedWorkflowRevision: AssetRevision,
     executionInstanceId: ExecutionInstanceId,
     expectedStateVersion: WorkflowStateVersion,
     mutation: WorkflowStateMutation,
   ): Promise<AssetResult<WorkflowStateDto>> => inWriteChain(async () => {
-    const current = await readStoredState(workflowId, executionInstanceId);
+    const current = await readStoredState(workflowId, expectedWorkflowRevision, executionInstanceId);
     if (!current.ok) return current;
     if (current.value.state.stateVersion !== expectedStateVersion) {
       return {
@@ -377,11 +393,13 @@ export const createWorkflowStateStore = async (
     if (mutation.workflowId !== workflowId || mutation.executionInstanceId !== executionInstanceId) {
       return { ok: false, failure: stateFailure("invalid_request", "The workflow state update identity does not match the requested state.", ["workflowState"], "state_identity_mismatch") };
     }
+    if (mutation.workflowRevision !== current.value.state.workflowRevision) return workflowRevisionMismatch();
     if (mutation.stateVersion !== expectedStateVersion + 1) {
       return { ok: false, failure: stateFailure("invalid_request", "The workflow state update must advance the version by one.", ["workflowState", "stateVersion"], "invalid_state_version") };
     }
     const candidate = {
       workflowId: mutation.workflowId,
+      workflowRevision: mutation.workflowRevision,
       executionInstanceId: mutation.executionInstanceId,
       stateVersion: mutation.stateVersion,
       currentStageId: mutation.currentStageId,
@@ -409,5 +427,11 @@ export const createWorkflowStateStore = async (
     return { ok: true, value: parsed.value };
   });
 
-  return { ok: true, value: { create, get, compareAndSwap } };
+  const issueExecutionInstanceId = (): AssetResult<ExecutionInstanceId> => {
+    const executionInstanceId = composeExecutionInstanceId(newInstanceSuffix());
+    return filePathFor(workflowsDirectory, executionInstanceId) === undefined
+      ? { ok: false, failure: stateFailure("invalid_request", "The generated execution instance id is not a valid state file name.", ["workflowState", "executionInstanceId"], "invalid_execution_instance_id") }
+      : { ok: true, value: executionInstanceId };
+  };
+  return { ok: true, value: { issueExecutionInstanceId, create, get, compareAndSwap } };
 };

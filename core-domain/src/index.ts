@@ -1,6 +1,9 @@
 export { coreFailure, toCoreErrorDto } from "./failures.ts";
 export type { AssetResult, CoreFailure } from "./failures.ts";
 
+export { authorizeExecutionOperation } from "./execution-policy.ts";
+export type { WorkflowStartOrigin } from "./execution-policy.ts";
+
 export {
   asAssetId,
   parseAssetDocument,
@@ -156,6 +159,7 @@ export {
   validateWorkflowDefinition,
 } from "./workflow.ts";
 export type {
+  AuthoredWorkflowDefinition,
   ResolvedWorkflowDefinition,
   WorkflowEvaluationInput,
   WorkflowStateLinks,

@@ -150,7 +150,7 @@ export type {
   MetadataCatalogSource,
 } from "./catalog/filesystem-catalog.ts";
 
-export { loadWorkflowDefinition } from "./workflow/filesystem-definition-loader.ts";
+export { loadWorkflowDefinition, loadWorkflowDefinitionAtRevision } from "./workflow/filesystem-definition-loader.ts";
 export type { WorkflowDefinitionLoadResult } from "./workflow/filesystem-definition-loader.ts";
 
 export { loadWorkflowEntryReference } from "./workflow/filesystem-entry-loader.ts";
@@ -161,6 +161,14 @@ export type {
   WorkflowStateStore,
   WorkflowStateStoreOptions,
 } from "./workflow/filesystem-state-store.ts";
+
+export { startWorkflowExecution } from "./execution/application.ts";
+export type { WorkflowStartApplicationOptions } from "./execution/application.ts";
+export type {
+  BoundedSkillCompletionReference,
+  BoundedSkillCompletionVerifier,
+  WorkflowStartCommitPort,
+} from "./execution/ports.ts";
 
 export { createProjectService } from "./projects/service.ts";
 export type {

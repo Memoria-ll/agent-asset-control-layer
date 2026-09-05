@@ -14,6 +14,13 @@ import {
 } from "./projects.ts";
 import { AgentExecutionDto, SessionDto } from "./sessions.ts";
 import {
+  ExecutionAuthorizationRequest,
+  ExecutionAuthorizationResult,
+  WorkflowStartCommitRequest,
+  WorkflowStartRequest,
+  WorkflowStartResult,
+} from "./execution.ts";
+import {
   TransitionCandidateDto,
   WorkflowDefinitionDto,
   WorkflowStateDto,
@@ -33,6 +40,11 @@ export const contractSchemas: Readonly<Record<string, z.core.$ZodType>> = {
   ResolvedContextDto,
   SessionDto,
   AgentExecutionDto,
+  ExecutionAuthorizationRequest,
+  ExecutionAuthorizationResult,
+  WorkflowStartRequest,
+  WorkflowStartCommitRequest,
+  WorkflowStartResult,
   WorkflowDefinitionDto,
   WorkflowStateDto,
   TransitionCandidateDto,

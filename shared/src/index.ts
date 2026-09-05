@@ -117,6 +117,8 @@ export type {
   ResolutionContextInput,
   ResolutionContextDto,
   ResolutionContextDtoInput,
+  WorkflowStartPreconditionContext,
+  SelectedWorkflowContext,
   ResolvedAssetDto,
   ContextCostDto,
   ResolvedContextDto,
@@ -124,6 +126,18 @@ export type {
   ContextCostDtoInput,
   ResolvedContextDtoInput,
 } from "./resolved-context.ts";
+
+export type {
+  ExecutionOperationKind,
+  ExecutionAuthorizationRequest,
+  ExecutionAuthorizationRequestInput,
+  ExecutionAuthorizationResult,
+  WorkflowStartRequest,
+  WorkflowStartRequestInput,
+  WorkflowStartCommitRequest,
+  WorkflowStartCommitRequestInput,
+  WorkflowStartResult,
+} from "./execution.ts";
 
 export type {
   IdeContextInput,
@@ -174,6 +188,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 export { ASSET_TYPES, LOADING_TIERS, EXECUTION_MODES } from "./resolved-context.ts";
+export { EXECUTION_OPERATION_KINDS } from "./execution.ts";
 export { RESOLUTION_REASON_KINDS, AVAILABILITY_STATUSES } from "./status.ts";
 export { CONFLICT_KINDS } from "./status.ts";
 export { CORE_ERROR_CODES } from "./errors.ts";
@@ -225,6 +240,19 @@ export {
   parseResolvedContextDto,
   tryParseResolvedContextDto,
 } from "./resolved-context.ts";
+
+export {
+  parseExecutionAuthorizationRequest,
+  tryParseExecutionAuthorizationRequest,
+  parseExecutionAuthorizationResult,
+  tryParseExecutionAuthorizationResult,
+  parseWorkflowStartRequest,
+  tryParseWorkflowStartRequest,
+  parseWorkflowStartCommitRequest,
+  tryParseWorkflowStartCommitRequest,
+  parseWorkflowStartResult,
+  tryParseWorkflowStartResult,
+} from "./execution.ts";
 
 export {
   parseResolveRequest,

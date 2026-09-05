@@ -76,7 +76,7 @@ export const loadWorkflowDefinition = async (
     }
     return {
       ok: true,
-      definition: parsed.value,
+      definition: { ...parsed.value, workflowRevision: selected.revision },
       revision: selected.revision,
       source: selected.source,
       assetDiagnostics: lookup.failures,
@@ -113,4 +113,27 @@ export const loadWorkflowDefinition = async (
     lookup.matches,
     lookup.failures,
   );
+};
+
+/** Load a workflow only when the caller names the exact authored revision. */
+export const loadWorkflowDefinitionAtRevision = async (
+  assetStore: AssetStore,
+  workflowId: WorkflowId,
+  workflowRevision: AssetRevision,
+  catalog: MetadataCatalog,
+): Promise<WorkflowDefinitionLoadResult> => {
+  const loaded = await loadWorkflowDefinition(assetStore, workflowId, catalog);
+  if (!loaded.ok) return loaded;
+  if (loaded.revision !== workflowRevision) {
+    return failureResult(
+      coreFailure("conflict", "The requested workflow revision does not match the stored definition.", [{
+        path: ["target", "workflowRevision"],
+        code: "workflow_revision_mismatch",
+        message: "The requested workflow revision does not match the stored definition.",
+      }]),
+      [],
+      loaded.assetDiagnostics,
+    );
+  }
+  return { ...loaded, definition: { ...loaded.definition, workflowRevision } };
 };
