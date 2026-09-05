@@ -194,6 +194,11 @@ const member = <Value extends string>(
   return value as Value;
 };
 
+/**
+ * The authored order is kept. A metadata list is stored as written on both paths, so imposing a
+ * canonical order here would make `updateSkillAsset` rewrite the author's file on an edit that
+ * never mentioned the list.
+ */
 const assetIds = (values: readonly string[], key: string, details: Detail[]): readonly AssetId[] => {
   const ids: AssetId[] = [];
   for (const value of values) {
@@ -204,7 +209,7 @@ const assetIds = (values: readonly string[], key: string, details: Detail[]): re
       ids.push(parsed.value);
     }
   }
-  return [...ids].sort(codeUnitCompare);
+  return ids;
 };
 
 const optionalMetadata = (metadata: Record<string, string | readonly string[]>, key: string, value: string | undefined): void => {
@@ -340,7 +345,7 @@ export const createSkillAsset = (input: SkillInput): AssetResult<CanonicalAsset>
     "workflow-relation": input.workflowRelation.kind,
   };
   if (input.priority !== undefined) metadata.priority = String(input.priority);
-  if ((input.conflicts?.length ?? 0) > 0) metadata.conflicts = [...input.conflicts!].sort(codeUnitCompare);
+  if ((input.conflicts?.length ?? 0) > 0) metadata.conflicts = input.conflicts!;
   optionalMetadata(metadata, "activation-condition", input.activationCondition);
   optionalMetadata(metadata, "expected-output", input.expectedOutput);
   if ((input.completionCriteria?.length ?? 0) > 0) metadata["completion-criteria"] = input.completionCriteria!;

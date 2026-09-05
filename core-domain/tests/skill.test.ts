@@ -297,6 +297,31 @@ Inspect the browser DOM.
     expect(expectOk(serializeCanonicalAsset(parseAsset(serialized)))).toBe(serialized);
   });
 
+  it("keeps an authored metadata list in its authored order across an unrelated edit", () => {
+    const asset = parseAsset(`---
+id: ordered-conflicts
+type: skill
+tier: on-demand
+metadata.completion-criteria: [Second step, First step]
+metadata.conflicts: [zeta, alpha]
+metadata.description: Declares conflicts in a deliberate order.
+metadata.display-name: Ordered conflicts
+metadata.execution-mode: advisory_preparation
+metadata.execution-permission: advisory-only
+metadata.kind: advisory
+metadata.workflow-relation: standalone
+---
+Report advice.
+`);
+    expect(expectOk(parseSkillAsset(asset)).conflicts).toEqual(["zeta", "alpha"]);
+
+    const updated = expectOk(updateSkillAsset(asset, { description: "Edited elsewhere." }));
+    expect(updated.metadata.conflicts).toEqual(["zeta", "alpha"]);
+    const serialized = expectOk(serializeCanonicalAsset(updated));
+    expect(serialized).toContain("metadata.conflicts: [zeta, alpha]");
+    expect(serialized).toContain("metadata.completion-criteria: [Second step, First step]");
+  });
+
   it("normalizes supplied capability feature lists the way a loaded document is normalized", () => {
     const created = expectOk(createSkillAsset({
       id: skillId("unsorted-features"),
