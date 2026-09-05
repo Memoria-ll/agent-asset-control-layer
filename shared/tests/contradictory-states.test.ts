@@ -49,14 +49,17 @@ describe("boundary states that cannot exist", () => {
       workflowBinding: {
         kind: "workflow",
         workflowId: "workflow-1",
+        workflowRevision: "sha256:workflow-1",
         executionInstanceId: "instance-1",
       },
+      executionMode: "development_execution",
       startedAt: "2026-08-30T01:02:03+09:00",
     });
 
     expect(parsed.workflowBinding).toEqual({
       kind: "workflow",
       workflowId: "workflow-1",
+      workflowRevision: "sha256:workflow-1",
       executionInstanceId: "instance-1",
     });
   });
@@ -65,6 +68,7 @@ describe("boundary states that cannot exist", () => {
     const parsed = parseAgentExecutionDto({
       agentExecutionId: "execution-1",
       workflowBinding: { kind: "standalone" },
+      executionMode: "advisory_preparation",
       startedAt: "2026-08-30T01:02:03+09:00",
     });
 
@@ -492,7 +496,7 @@ describe("published JSON Schema carries the same constraints", () => {
 
     expect(binding.oneOf).toHaveLength(2);
     expect(workflow.additionalProperties).toBe(false);
-    expect(workflow.required).toEqual(["kind", "workflowId", "executionInstanceId"]);
+    expect(workflow.required).toEqual(["kind", "workflowId", "workflowRevision", "executionInstanceId"]);
     expect(standalone.additionalProperties).toBe(false);
     expect(standalone.required).toEqual(["kind"]);
     expect(standalone.properties.workflowId).toBeUndefined();

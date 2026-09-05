@@ -73,6 +73,7 @@ describe("workflow loader and state integration", () => {
       newInstanceSuffix: () => "one",
     }));
     const seed = unwrap(initializeWorkflowState(loaded.definition, {
+      workflowRevision: loaded.revision,
       linkedAgentExecutionIds: ["agent-1" as AgentExecutionId],
       linkedSnapshotIds: ["snapshot-1" as SnapshotId],
     }, { roleId: "reviewer" as RoleId, availableCapabilityRefs: [], availableArtifactRefs: [] }));
@@ -99,15 +100,15 @@ describe("workflow loader and state integration", () => {
       { toStageId: selected.toStageId, transitionKind: selected.transitionKind, expectedStateVersion: selected.stateVersion },
       { roleId: "reviewer" as RoleId, availableCapabilityRefs: [], availableArtifactRefs: [] },
     ));
-    const updated = unwrap(await stateStore.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, applied));
+    const updated = unwrap(await stateStore.compareAndSwap(created.workflowId, loaded.revision, created.executionInstanceId, 0 as never, applied));
     expect(updated.stateVersion).toBe(1);
     expect(updated.currentStageId).toBe("done");
     expect(updated.linkedAgentExecutionIds).toEqual(["agent-1"]);
-    const fetched = unwrap(await stateStore.get(created.workflowId, created.executionInstanceId));
+    const fetched = unwrap(await stateStore.get(created.workflowId, loaded.revision, created.executionInstanceId));
     expect(fetched).toEqual(updated);
 
     const beforeStaleBytes = await readFile(path, "utf8");
-    const stale = await stateStore.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, applied);
+    const stale = await stateStore.compareAndSwap(created.workflowId, loaded.revision, created.executionInstanceId, 0 as never, applied);
     expect(stale.ok).toBe(false);
     if (!stale.ok) expect(stale.failure.code).toBe("conflict");
     const afterStaleBytes = await readFile(path, "utf8");

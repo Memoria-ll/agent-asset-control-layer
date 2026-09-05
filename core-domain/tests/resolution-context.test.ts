@@ -52,7 +52,7 @@ describe("resolution context", () => {
     const request = parseResolveRequest({
       context: {
         executionMode: "advisory_preparation",
-        workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+        workflow: { kind: "selected", workflowId: "review-flow", workflowRevision: "sha256:workflow", stageId: "review" },
       },
     });
 
@@ -121,8 +121,8 @@ describe("execution context validation", () => {
     ["an unknown execution mode", { executionMode: "batch", workflow: { kind: "none" } }, ["context", "executionMode"], "invalid_value"],
     ["a missing workflow selection", { executionMode: "advisory_preparation" }, ["context", "workflow"], "invalid_value"],
     ["an unknown workflow kind", { executionMode: "advisory_preparation", workflow: { kind: "resumed" } }, ["context", "workflow", "kind"], "invalid_value"],
-    ["a non-string selected workflow id", { executionMode: "advisory_preparation", workflow: { kind: "selected", workflowId: 42, stageId: "review" } }, ["context", "workflow", "workflowId"], "invalid_value"],
-    ["an empty selected stage id", { executionMode: "advisory_preparation", workflow: { kind: "selected", workflowId: "review-flow", stageId: "" } }, ["context", "workflow", "stageId"], "empty_identifier"],
+    ["a non-string selected workflow id", { executionMode: "advisory_preparation", workflow: { kind: "selected", workflowId: 42, workflowRevision: "sha256:workflow", stageId: "review" } }, ["context", "workflow", "workflowId"], "invalid_value"],
+    ["an empty selected stage id", { executionMode: "advisory_preparation", workflow: { kind: "selected", workflowId: "review-flow", workflowRevision: "sha256:workflow", stageId: "" } }, ["context", "workflow", "stageId"], "empty_identifier"],
     ["a standalone selection without a skill", { executionMode: "advisory_preparation", workflow: { kind: "standalone" } }, ["context", "workflow", "skillId"], "invalid_value"],
     ["an unknown workflow selection key", { executionMode: "advisory_preparation", workflow: { kind: "none", stageId: "review" } }, ["context", "workflow", "stageId"], "unknown_key"],
     // The union carries these inside `workflow`, so a top-level pair is a shape
@@ -160,7 +160,7 @@ describe("execution context validation", () => {
     const request = parseResolveRequest({
       context: {
         executionMode: "development_execution",
-        workflow: { kind: "selected", workflowId: "review-flow", stageId: "review" },
+        workflow: { kind: "selected", workflowId: "review-flow", workflowRevision: "sha256:workflow", stageId: "review" },
       },
     });
     const result = toValidatedResolutionContext(request.context);

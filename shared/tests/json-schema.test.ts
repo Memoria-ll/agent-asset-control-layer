@@ -80,6 +80,7 @@ describe("contract JSON Schemas", () => {
     const schemas = contractJsonSchemas() as any;
     expect(schemas.WorkflowStateDto.required).toEqual([
       "workflowId",
+      "workflowRevision",
       "executionInstanceId",
       "stateVersion",
       "currentStageId",
@@ -105,6 +106,18 @@ describe("contract JSON Schemas", () => {
     expect(blocked.required).toContain("blockedReasons");
     expect(blocked.properties.blockedReasons.minItems).toBe(1);
     expect(unblocked.properties.blockedReasons).toBeUndefined();
+  });
+
+  it("publishes each authorization denial with matching guidance", () => {
+    const schema = (contractJsonSchemas() as any).ExecutionAuthorizationResult;
+    const denials = schema.oneOf.filter((arm: any) => arm.properties.decision.const === "denied");
+
+    expect(denials).toHaveLength(6);
+    const selectionRequired = denials.find(
+      (arm: any) => arm.properties.reason.const === "workflow_selection_required",
+    );
+    expect(selectionRequired.properties.guidance.properties.kind.const).toBe("select_workflow");
+    expect(selectionRequired.properties.guidance.properties.nextOperation.const).toBe("workflow_start");
   });
 
   it("publishes the Project boundary and nested failure strictness", () => {

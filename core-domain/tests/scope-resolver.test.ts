@@ -148,7 +148,7 @@ const resolve = (
     return {
       executionMode: "advisory_preparation" as const,
       workflow: workflowId !== undefined && stageId !== undefined
-        ? { kind: "selected" as const, workflowId, stageId }
+        ? { kind: "selected" as const, workflowId, workflowRevision: "sha256:workflow" as const, stageId }
         : { kind: "none" as const },
       ...axesWithoutWorkflow,
     };

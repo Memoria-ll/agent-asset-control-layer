@@ -1,6 +1,7 @@
 import type {
   AgentExecutionDtoInput,
   AgentExecutionId,
+  AssetRevision,
   ExecutionInstanceId,
   ModelId,
   ProjectId,
@@ -14,6 +15,7 @@ import type {
   Timestamp,
   WorkflowId,
   WorkflowBindingInput,
+  ExecutionMode,
 } from "@aacl/shared";
 import { tryParseAgentExecutionDto } from "@aacl/shared";
 import { coreFailure, type AssetResult } from "./failures.ts";
@@ -34,15 +36,18 @@ type AgentExecutionRecordBase = {
   readonly providerId?: ProviderId;
   readonly runtimeId?: RuntimeId;
   readonly modelId?: ModelId;
+  readonly executionMode: ExecutionMode;
 };
 
 export type AgentExecutionRecord =
   | (AgentExecutionRecordBase & {
       readonly workflowId: WorkflowId;
+      readonly workflowRevision: AssetRevision;
       readonly executionInstanceId: ExecutionInstanceId;
     })
   | (AgentExecutionRecordBase & {
       readonly workflowId?: never;
+      readonly workflowRevision?: never;
       readonly executionInstanceId?: never;
     });
 
@@ -133,11 +138,12 @@ const toWorkflowBindingInput = (
   // Read through a widened view rather than narrowing the union: handling both
   // complete cases first leaves `never` behind, and the remaining arms then cannot
   // read either field at all.
-  const { workflowId, executionInstanceId } = record as AgentExecutionRecordBase & {
+  const { workflowId, workflowRevision, executionInstanceId } = record as AgentExecutionRecordBase & {
     readonly workflowId?: WorkflowId;
+    readonly workflowRevision?: AssetRevision;
     readonly executionInstanceId?: ExecutionInstanceId;
   };
-  if (workflowId === undefined && executionInstanceId === undefined) {
+  if (workflowId === undefined && workflowRevision === undefined && executionInstanceId === undefined) {
     return { ok: true, value: { kind: "standalone" } };
   }
   if (workflowId === undefined) {
@@ -151,6 +157,16 @@ const toWorkflowBindingInput = (
           "missing_field",
           "A workflow-bound agent execution requires workflowId.",
         )],
+      ),
+    };
+  }
+  if (workflowRevision === undefined) {
+    return {
+      ok: false,
+      failure: coreFailure(
+        "invalid_request",
+        "The agent execution workflow binding is incomplete.",
+        [detail(["record", "workflowRevision"], "missing_field", "A workflow-bound agent execution requires workflowRevision.")],
       ),
     };
   }
@@ -168,7 +184,7 @@ const toWorkflowBindingInput = (
       ),
     };
   }
-  return { ok: true, value: { kind: "workflow", workflowId, executionInstanceId } };
+  return { ok: true, value: { kind: "workflow", workflowId, workflowRevision, executionInstanceId } };
 };
 
 /** Project an execution into the DTO input consumed by #12 and #20. */
@@ -185,9 +201,13 @@ export const toAgentExecutionDto = (
   }
   const binding = toWorkflowBindingInput(record);
   if (!binding.ok) return binding;
+  if (record.executionMode === undefined) {
+    return { ok: false, failure: coreFailure("invalid_request", "The agent execution is missing executionMode.", [detail(["record", "executionMode"], "missing_field", "The agent execution is missing executionMode.")]) };
+  }
 
   const value: AgentExecutionDtoInput = {
     agentExecutionId: record.agentExecutionId,
+    executionMode: record.executionMode,
     startedAt: record.startedAt,
     workflowBinding: binding.value,
     ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),

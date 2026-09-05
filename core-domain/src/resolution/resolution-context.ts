@@ -10,6 +10,7 @@ import type {
   StageId,
   TaskTypeId,
   WorkflowId,
+  AssetRevision,
   ResolutionContextDto,
   ResolutionContextInput,
   WorkflowSelection,
@@ -101,7 +102,7 @@ const isContextAxis = (key: string): key is ResolutionAxis => isAxis(key) && AXI
 const WORKFLOW_SELECTION_FIELDS: Record<WorkflowSelection["kind"], readonly string[]> = {
   none: [],
   standalone: ["skillId"],
-  selected: ["workflowId", "stageId"],
+  selected: ["workflowId", "workflowRevision", "stageId"],
 };
 
 const isWorkflowKind = (value: unknown): value is WorkflowSelection["kind"] =>
@@ -146,6 +147,7 @@ const validateWorkflowSelection = (
     case "selected": return {
       kind: "selected",
       workflowId: fields.get("workflowId")! as WorkflowId,
+      workflowRevision: fields.get("workflowRevision")! as AssetRevision,
       stageId: fields.get("stageId")! as StageId,
     };
   }

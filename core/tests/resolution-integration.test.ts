@@ -38,7 +38,7 @@ const assetFromDocument = (source: string): CanonicalAsset =>
 const context = (workflowId: string, stageId: string, roleId: string) => parseResolveRequest({
   context: {
     executionMode: "advisory_preparation",
-    workflow: { kind: "selected", workflowId, stageId },
+    workflow: { kind: "selected", workflowId, workflowRevision: "sha256:workflow" as const, stageId },
     roleId,
   },
 }).context;

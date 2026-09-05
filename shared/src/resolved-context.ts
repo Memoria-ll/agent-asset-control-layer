@@ -50,6 +50,7 @@ const workflowStandalone = z.strictObject({ kind: z.literal("standalone"), skill
 const workflowSelected = z.strictObject({
   kind: z.literal("selected"),
   workflowId: WorkflowId,
+  workflowRevision: AssetRevision,
   stageId: StageId,
 });
 

@@ -8,6 +8,8 @@ import type {
 import {
   parseAgentExecutionDto,
   parseResolveRequest,
+  parseExecutionAuthorizationRequest,
+  parseExecutionAuthorizationResult,
   tryParseResolveRequest,
 } from "../src/index.ts";
 
@@ -32,6 +34,30 @@ describe("strict boundary objects", () => {
       }),
     ]);
   });
+
+  it("requires workflow start provenance only for workflow_start", () => {
+    expect(() => parseExecutionAuthorizationRequest({
+      operation: "workflow_start",
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+    })).toThrow();
+    expect(() => parseExecutionAuthorizationRequest({
+      operation: "research",
+      context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
+      workflowStart: {
+        startFrom: { kind: "advisory_none" },
+        target: { workflowId: "workflow-1", workflowRevision: "sha256:workflow-1" },
+      },
+    })).toThrow();
+  });
+
+  it("keeps authorization denial reasons aligned with their guidance", () => {
+    expect(() => parseExecutionAuthorizationResult({
+      decision: "denied",
+      operation: "implementation",
+      reason: "workflow_selection_required",
+      guidance: { kind: "use_advisory_mode", requiredMode: "advisory_preparation" },
+    })).toThrow();
+  });
 });
 
 /**
@@ -51,6 +77,7 @@ const composedContext: ResolutionContextInput = {
 const composedWorkflowBinding: WorkflowBindingInput = {
   kind: "workflow",
   workflowId: "workflow-1",
+  workflowRevision: "sha256:workflow-1",
   executionInstanceId: "instance-1",
 };
 
@@ -72,6 +99,7 @@ describe("input aliases are composable from plain strings", () => {
     const execution = parseAgentExecutionDto({
       agentExecutionId: "execution-1",
       workflowBinding: composedWorkflowBinding,
+      executionMode: "development_execution",
       startedAt: "2026-08-30T01:02:03+09:00",
     });
     expect(execution.workflowBinding).toEqual(composedWorkflowBinding);

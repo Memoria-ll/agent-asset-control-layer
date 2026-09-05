@@ -5,6 +5,7 @@ import {
 import type {
   AgentExecutionId,
   AssetId,
+  AssetRevision,
   RoleId,
   SnapshotId,
   StageId,
@@ -163,8 +164,11 @@ const parseDefinitionPayload = (payload: string): AssetResult<WorkflowDefinition
   return { ok: true, value: parsed.value };
 };
 
-export type ResolvedWorkflowDefinition = Omit<WorkflowDefinitionDto, "workflowId"> & {
+export type AuthoredWorkflowDefinition = Omit<WorkflowDefinitionDto, "workflowId"> & {
   readonly workflowId: WorkflowId;
+};
+export type ResolvedWorkflowDefinition = AuthoredWorkflowDefinition & {
+  readonly workflowRevision: AssetRevision;
 };
 
 const asWorkflowId = (assetId: AssetId): WorkflowId => assetId as string as WorkflowId;
@@ -190,9 +194,9 @@ const validateRequirementArrays = (
 };
 
 const validateDefinitionSemantics = (
-  definition: ResolvedWorkflowDefinition,
+  definition: AuthoredWorkflowDefinition,
   catalog: MetadataCatalog,
-): AssetResult<ResolvedWorkflowDefinition> => {
+): AssetResult<AuthoredWorkflowDefinition> => {
   const stageMap = new Map<StageId, WorkflowStageDto>();
   const details: Detail[] = [];
 
@@ -487,7 +491,7 @@ const findBadCycle = (
 export const parseWorkflowDefinitionAsset = (
   asset: CanonicalAsset,
   catalog: MetadataCatalog,
-): AssetResult<ResolvedWorkflowDefinition> => {
+): AssetResult<AuthoredWorkflowDefinition> => {
   if (asset.type !== "workflow") {
     return workflowFailure("The asset is not a workflow definition.", [detail(
       ["document", "frontmatter", "type"],
@@ -509,7 +513,7 @@ export const parseWorkflowDefinitionAsset = (
     )]);
   }
 
-  const resolved: ResolvedWorkflowDefinition = {
+  const resolved: AuthoredWorkflowDefinition = {
     workflowId: parsed.value.workflowId ?? asWorkflowId(asset.id),
     entryRoleId: parsed.value.entryRoleId,
     entryStageId: parsed.value.entryStageId,
@@ -522,12 +526,13 @@ export const parseWorkflowDefinitionAsset = (
 
 /** Validate graph, catalog references, and workflow cycles. */
 export const validateWorkflowDefinition = (
-  definition: ResolvedWorkflowDefinition,
+  definition: AuthoredWorkflowDefinition,
   catalog: MetadataCatalog,
-): AssetResult<ResolvedWorkflowDefinition> => validateDefinitionSemantics(definition, catalog);
+): AssetResult<AuthoredWorkflowDefinition> => validateDefinitionSemantics(definition, catalog);
 
 export type WorkflowStateSeed = {
   readonly workflowId: WorkflowId;
+  readonly workflowRevision: AssetRevision;
   readonly currentStageId: StageId;
   readonly entryRoleId: RoleId;
   readonly currentRoleId: RoleId;
@@ -536,6 +541,7 @@ export type WorkflowStateSeed = {
 };
 
 export type WorkflowStateLinks = {
+  readonly workflowRevision: AssetRevision;
   readonly linkedAgentExecutionIds: readonly AgentExecutionId[];
   readonly linkedSnapshotIds: readonly SnapshotId[];
 };
@@ -550,7 +556,7 @@ export type WorkflowStateLinks = {
  * with none of them, while the identical stage reached by an edge stays blocked.
  */
 export const initializeWorkflowState = (
-  definition: ResolvedWorkflowDefinition,
+  definition: AuthoredWorkflowDefinition,
   links: WorkflowStateLinks,
   input: WorkflowEvaluationInput,
 ): AssetResult<WorkflowStateSeed> => {
@@ -570,6 +576,7 @@ export const initializeWorkflowState = (
     ok: true,
     value: {
       workflowId: definition.workflowId,
+      workflowRevision: links.workflowRevision,
       currentStageId: definition.entryStageId,
       entryRoleId: definition.entryRoleId,
       currentRoleId: entryStage.requiredRoleId ?? definition.entryRoleId,
@@ -588,6 +595,7 @@ export type WorkflowEvaluationInput = {
 
 export type WorkflowStateMutation = {
   readonly workflowId: WorkflowId;
+  readonly workflowRevision: AssetRevision;
   readonly executionInstanceId: WorkflowStateDto["executionInstanceId"];
   readonly stateVersion: WorkflowStateVersion;
   readonly currentStageId: StageId;
@@ -608,7 +616,7 @@ const stateMismatch = (): AssetResult<never> => workflowFailure(
   [detail(
     ["workflowState"],
     "state_definition_mismatch",
-    "The workflow state workflowId or currentStageId does not match the definition.",
+    "The workflow state workflowId, workflowRevision, or currentStageId does not match the definition.",
   )],
 );
 
@@ -620,7 +628,7 @@ const stateMismatch = (): AssetResult<never> => workflowFailure(
  * a wide definition then occupies the single Core process for seconds. Every stage lookup
  * on the evaluation path goes through this map.
  */
-const stageIndex = (definition: ResolvedWorkflowDefinition): Map<StageId, WorkflowStageDto> =>
+const stageIndex = (definition: AuthoredWorkflowDefinition): Map<StageId, WorkflowStageDto> =>
   new Map(definition.stages.map((stage) => [stage.stageId, stage]));
 
 /**
@@ -639,6 +647,7 @@ const getCurrentStage = (
   stages: Map<StageId, WorkflowStageDto>,
 ): WorkflowStageDto | undefined => {
   if (state.workflowId !== definition.workflowId) return undefined;
+  if (state.workflowRevision !== definition.workflowRevision) return undefined;
   if (state.entryRoleId !== definition.entryRoleId) return undefined;
   const stage = stages.get(state.currentStageId);
   if (stage === undefined) return undefined;
@@ -835,6 +844,7 @@ export const applyWorkflowTransition = (
     ok: true,
     value: {
       workflowId: state.workflowId,
+      workflowRevision: state.workflowRevision,
       executionInstanceId: state.executionInstanceId,
       stateVersion: (state.stateVersion + 1) as WorkflowStateVersion,
       currentStageId: target.stageId,

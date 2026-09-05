@@ -1,6 +1,7 @@
 import * as z from "zod/mini";
 import {
   AgentExecutionId,
+  AssetRevision,
   ExecutionInstanceId,
   ModelId,
   ProjectId,
@@ -13,6 +14,7 @@ import {
   TaskTypeId,
   WorkflowId,
 } from "./identifiers.ts";
+import { ExecutionMode } from "./resolved-context.ts";
 import { Timestamp } from "./primitives.ts";
 import { tryParseWith, type ParseOutcome } from "./errors.ts";
 
@@ -41,6 +43,7 @@ const workflowBindingArms = [
   z.strictObject({
     kind: z.literal("workflow"),
     workflowId: WorkflowId,
+    workflowRevision: AssetRevision,
     executionInstanceId: ExecutionInstanceId,
   }),
   z.strictObject({ kind: z.literal("standalone") }),
@@ -58,6 +61,7 @@ export type WorkflowBindingInput = z.input<typeof WorkflowBinding>;
  */
 export const AgentExecutionDto = z.strictObject({
   agentExecutionId: AgentExecutionId,
+  executionMode: ExecutionMode,
   sessionId: z.optional(SessionId),
   projectId: z.optional(ProjectId),
   workflowBinding: WorkflowBinding,

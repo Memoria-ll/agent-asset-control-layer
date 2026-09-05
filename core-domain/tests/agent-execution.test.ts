@@ -16,8 +16,10 @@ const parsedExecution = parseAgentExecutionDto({
   workflowBinding: {
     kind: "workflow",
     workflowId: "workflow-1",
+    workflowRevision: "sha256:workflow-1",
     executionInstanceId: "instance-1",
   },
+  executionMode: "development_execution",
   stageId: "stage-1",
   taskTypeId: "code-review",
   roleId: "reviewer",
@@ -56,6 +58,8 @@ const executionRecord: AgentExecutionRecord = {
   agentExecutionId: parsedExecution.agentExecutionId,
   startedAt: parsedExecution.startedAt,
   sessionId, projectId, workflowId, executionInstanceId, stageId, taskTypeId, roleId,
+  workflowRevision: "sha256:workflow-1" as never,
+  executionMode: "development_execution",
   providerId, runtimeId, modelId, endedAt, snapshotId,
 };
 
@@ -105,7 +109,7 @@ describe("agent execution domain", () => {
   });
 
   it("projects a standalone record with a standalone workflow binding", () => {
-    const { workflowId: _workflowId, executionInstanceId: _executionInstanceId, ...standaloneRecord } = executionRecord;
+    const { workflowId: _workflowId, workflowRevision: _workflowRevision, executionInstanceId: _executionInstanceId, ...standaloneRecord } = executionRecord;
     const result = toAgentExecutionDto(standaloneRecord as AgentExecutionRecord);
 
     expect(result.ok).toBe(true);
@@ -118,7 +122,7 @@ describe("agent execution domain", () => {
     const result = toAgentExecutionDto({
       ...executionRecord,
       executionInstanceId: undefined,
-    } as AgentExecutionRecord);
+    } as unknown as AgentExecutionRecord);
 
     expect(result).toEqual({
       ok: false,
@@ -138,7 +142,7 @@ describe("agent execution domain", () => {
     const result = toAgentExecutionDto({
       ...executionRecord,
       workflowId: undefined,
-    } as AgentExecutionRecord);
+    } as unknown as AgentExecutionRecord);
 
     expect(result).toEqual({
       ok: false,

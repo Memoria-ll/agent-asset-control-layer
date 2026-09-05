@@ -26,6 +26,7 @@ const unwrap = <Value>(result: AssetResult<Value>): Value => {
 
 const seed = (workflowId = "review-flow" as WorkflowId): WorkflowStateSeed => ({
   workflowId,
+  workflowRevision: "sha256:workflow" as never,
   currentStageId: "start" as StageId,
   entryRoleId: "reviewer" as RoleId,
   currentRoleId: "reviewer" as RoleId,
@@ -35,6 +36,7 @@ const seed = (workflowId = "review-flow" as WorkflowId): WorkflowStateSeed => ({
 
 const mutation = (state: { readonly workflowId: WorkflowId; readonly executionInstanceId: ExecutionInstanceId; readonly stateVersion: number }, agentId: string, version = state.stateVersion + 1): WorkflowStateMutation => ({
   workflowId: state.workflowId,
+  workflowRevision: "sha256:workflow" as never,
   executionInstanceId: state.executionInstanceId,
   stateVersion: version as WorkflowStateVersion,
   currentStageId: "done" as StageId,
@@ -65,11 +67,13 @@ describe("filesystem workflow state store", () => {
 
     await chmod(target, 0o640);
     const before = await readFile(target);
-    const updated = unwrap(await store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "agent-2")));
+    const updated = unwrap(await store.compareAndSwap(created.workflowId, "sha256:workflow" as never, created.executionInstanceId, 0 as never, mutation(created, "agent-2")));
     expect(updated.stateVersion).toBe(1);
     expect(updated.updatedAt).toBe(times[1]);
     expect((await stat(target)).mode & 0o777).toBe(0o640);
-    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: updated });
+    expect(await store.get(created.workflowId, "sha256:workflow" as never, created.executionInstanceId)).toMatchObject({ ok: true, value: updated });
+    const wrongRevision = await store.get(created.workflowId, "sha256:other" as never, created.executionInstanceId);
+    expect(wrongRevision).toMatchObject({ ok: false, failure: { code: "conflict" } });
     expect(await readFile(target)).not.toBe(before);
     expect(nowCalls).toBe(2);
   });
@@ -86,7 +90,7 @@ describe("filesystem workflow state store", () => {
     });
     const created = unwrap(await second.create(seed("second-flow" as WorkflowId)));
     expect(created.executionInstanceId).toBe("instance-new");
-    expect(unwrap(await first.get(original.workflowId, original.executionInstanceId)).workflowId).toBe("review-flow");
+    expect(unwrap(await first.get(original.workflowId, "sha256:workflow" as never, original.executionInstanceId)).workflowId).toBe("review-flow");
     expect((await readdir(join(directory, "workflows"))).sort()).toEqual(["instance-existing.json", "instance-new.json"]);
   });
 
@@ -95,12 +99,12 @@ describe("filesystem workflow state store", () => {
     const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "one" });
     const created = unwrap(await store.create(seed()));
     const results = await Promise.all([
-      store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "winner-a")),
-      store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "winner-b")),
+      store.compareAndSwap(created.workflowId, "sha256:workflow" as never, created.executionInstanceId, 0 as never, mutation(created, "winner-a")),
+      store.compareAndSwap(created.workflowId, "sha256:workflow" as never, created.executionInstanceId, 0 as never, mutation(created, "winner-b")),
     ]);
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(results.filter((result) => !result.ok && result.failure.code === "conflict")).toHaveLength(1);
-    const final = unwrap(await store.get(created.workflowId, created.executionInstanceId));
+    const final = unwrap(await store.get(created.workflowId, "sha256:workflow" as never, created.executionInstanceId));
     expect(final.stateVersion).toBe(1);
     expect(["winner-a", "winner-b"]).toContain(final.linkedAgentExecutionIds[0]);
   });
@@ -116,10 +120,10 @@ describe("filesystem workflow state store", () => {
       rename: async (from, to) => { renameCalls++; await (await import("node:fs/promises")).rename(from, to); },
     });
     const created = unwrap(await store.create(seed()));
-    const stale = await store.compareAndSwap(created.workflowId, created.executionInstanceId, 1 as never, mutation(created, "stale", 2));
+    const stale = await store.compareAndSwap(created.workflowId, "sha256:workflow" as never, created.executionInstanceId, 1 as never, mutation(created, "stale", 2));
     expect(stale.ok).toBe(false);
     if (!stale.ok) expect(stale.failure.details?.[0]?.code).toBe("state_version_conflict");
-    const invalid = await store.compareAndSwap(created.workflowId, created.executionInstanceId, 0 as never, mutation(created, "invalid", 3));
+    const invalid = await store.compareAndSwap(created.workflowId, "sha256:workflow" as never, created.executionInstanceId, 0 as never, mutation(created, "invalid", 3));
     expect(invalid.ok).toBe(false);
     expect(nowCalls).toBe(1);
     expect(renameCalls).toBe(1);
@@ -129,22 +133,22 @@ describe("filesystem workflow state store", () => {
     const directory = await temporaryDirectory();
     const store = await createStore({ stateDirectory: directory, now: () => "2026-09-01T10:00:00Z" as Timestamp, newInstanceSuffix: () => "one" });
     const created = unwrap(await store.create(seed()));
-    const wrongWorkflow = await store.get("other-flow" as WorkflowId, created.executionInstanceId);
+    const wrongWorkflow = await store.get("other-flow" as WorkflowId, "sha256:workflow" as never, created.executionInstanceId);
     expect(wrongWorkflow.ok).toBe(false);
     if (!wrongWorkflow.ok) expect(wrongWorkflow.failure.details?.[0]?.code).toBe("instance_workflow_mismatch");
-    const escaped = await store.get("review-flow" as WorkflowId, "../escape" as ExecutionInstanceId);
+    const escaped = await store.get("review-flow" as WorkflowId, "sha256:workflow" as never, "../escape" as ExecutionInstanceId);
     expect(escaped.ok).toBe(false);
     if (!escaped.ok) expect(escaped.failure.code).toBe("invalid_request");
 
     const target = join(directory, "workflows", "instance-two.json");
     await symlink("instance-one.json", target);
-    const link = await store.get("review-flow" as WorkflowId, "instance-two" as ExecutionInstanceId);
+    const link = await store.get("review-flow" as WorkflowId, "sha256:workflow" as never, "instance-two" as ExecutionInstanceId);
     expect(link.ok).toBe(false);
     if (!link.ok) expect(link.failure.details?.[0]?.code).toBe("state_file_not_a_file");
 
     await rm(target);
     await (await import("node:fs/promises")).mkdir(target);
-    const directoryResult = await store.get("review-flow" as WorkflowId, "instance-two" as ExecutionInstanceId);
+    const directoryResult = await store.get("review-flow" as WorkflowId, "sha256:workflow" as never, "instance-two" as ExecutionInstanceId);
     expect(directoryResult.ok).toBe(false);
     if (!directoryResult.ok) expect(directoryResult.failure.details?.[0]?.code).toBe("state_file_not_a_file");
   });
@@ -160,7 +164,7 @@ describe("filesystem workflow state store", () => {
 
     expect(created.executionInstanceId).toBe("instance-9f2c");
     expect(await readdir(join(directory, "workflows"))).toEqual(["instance-9f2c.json"]);
-    expect(await store.get(created.workflowId, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
+    expect(await store.get(created.workflowId, "sha256:workflow" as never, created.executionInstanceId)).toMatchObject({ ok: true, value: created });
   });
 
   // An identifier reaching `get` comes from the caller, so every filename rule still guards that
@@ -187,7 +191,7 @@ describe("filesystem workflow state store", () => {
       newInstanceSuffix: () => "one",
     });
 
-    const read = await store.get("review-flow" as WorkflowId, value as ExecutionInstanceId);
+    const read = await store.get("review-flow" as WorkflowId, "sha256:workflow" as never, value as ExecutionInstanceId);
     expect(read.ok).toBe(false);
     if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_execution_instance_id");
   });
@@ -211,7 +215,7 @@ describe("filesystem workflow state store", () => {
     corrupted[at] = 0x80;
     await writeFile(target, corrupted);
 
-    const read = await store.get(created.workflowId, created.executionInstanceId);
+    const read = await store.get(created.workflowId, "sha256:workflow" as never, created.executionInstanceId);
     expect(read.ok).toBe(false);
     if (!read.ok) expect(read.failure.details?.[0]?.code).toBe("invalid_utf8");
   });
@@ -234,7 +238,7 @@ describe("filesystem workflow state store", () => {
     }
 
     // The write chain is per directory, so a stuck create would strand every later operation.
-    const third = await store.get(first.workflowId, first.executionInstanceId);
+    const third = await store.get(first.workflowId, "sha256:workflow" as never, first.executionInstanceId);
     expect(third.ok).toBe(true);
   }, 5000);
 
