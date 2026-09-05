@@ -28,6 +28,7 @@ import type {
 } from "./resolution/resolution-types.ts";
 import { codeUnitCompare } from "./ordering.ts";
 import { toResolutionConflictDetails } from "./resolution/result-assembly.ts";
+import { toAssetCandidate } from "./resolution/asset-candidate-projection.ts";
 
 export const asBindingId = (assetId: AssetId): BindingId => assetId as string as BindingId;
 export const bindingAssetId = (bindingId: BindingId): AssetId => bindingId as string as AssetId;
@@ -276,9 +277,17 @@ const targetReason = (binding: CanonicalBinding, catalog: MetadataCatalog): Bind
     case "runtime-model": {
       const runtime = catalog.runtimes.get(target.runtimeId);
       const model = catalog.models.get(target.modelId);
-      if (runtime === undefined) return [{ kind: "target_missing", targetId: target.runtimeId }];
-      if (model === undefined) return [{ kind: "target_missing", targetId: target.modelId }];
-      return runtime.providerId === model.providerId ? [] : [{ kind: "target_provider_mismatch", targetId: target.modelId, providerId: runtime.providerId }];
+      // Both halves are independently actionable, so both are reported: stopping
+      // at the first hides the second until the author fixes one and asks again.
+      const missing: BindingReasonDto[] = [
+        ...(runtime === undefined ? [{ kind: "target_missing", targetId: target.runtimeId } as const] : []),
+        ...(model === undefined ? [{ kind: "target_missing", targetId: target.modelId } as const] : []),
+      ];
+      if (missing.length > 0) return missing;
+      // Provider compatibility is only a question once both halves exist.
+      return runtime!.providerId === model!.providerId
+        ? []
+        : [{ kind: "target_provider_mismatch", targetId: target.modelId, providerId: runtime!.providerId }];
     }
   }
 };
@@ -303,14 +312,34 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   // from the evaluation — so a pair that names two different assets produces a
   // verdict about neither. This is a published entry point, so the pairing is
   // checked here rather than trusted to the one caller that exists today.
-  const identityMismatch = input.entries.find(({ binding, evaluation }) =>
-    evaluation.candidate.assetType !== "binding"
-    || String(evaluation.candidate.assetId) !== String(binding.bindingId));
+  //
+  // The id alone does not settle it: a same-ID Project overlay puts two revisions
+  // of one id in the same call, and swapping their evaluations and sources
+  // together keeps every id and layer matching. The operation and the tier come
+  // from the asset, so they have to be this revision's.
+  //
+  // Not the whole rule: the projection intersects `scope.project` with the
+  // project that owns the file, which only the producer knows, so rebuilding the
+  // selectors here rejects legitimate Project overlays. Two revisions that agree
+  // on operation and tier and differ only in metadata are therefore still
+  // interchangeable — closing that needs the revision hash, which this package
+  // cannot compute.
+  const identityMismatch = input.entries.find(({ binding, evaluation }) => {
+    if (evaluation.candidate.assetType !== "binding") return true;
+    if (String(evaluation.candidate.assetId) !== String(binding.bindingId)) return true;
+    const expected = toAssetCandidate(binding.asset, {
+      revision: evaluation.candidate.revision,
+      source: evaluation.candidate.source,
+    });
+    if (!expected.ok) return true;
+    return expected.value.loadingTier !== evaluation.candidate.loadingTier
+      || expected.value.rule.operation.kind !== evaluation.candidate.rule.operation.kind;
+  });
   if (identityMismatch !== undefined) {
     return invalidBinding([detail(
-      ["entries", String(identityMismatch.binding.bindingId), "evaluation", "candidate", "assetId"],
+      ["entries", String(identityMismatch.binding.bindingId), "evaluation", "candidate"],
       "binding_candidate_mismatch",
-      "The resolution candidate must be the Binding's own asset.",
+      "The resolution candidate must be derived from the Binding's own asset revision.",
     )]);
   }
   const sourceMismatch = input.entries.find(({ evaluation, source }) => evaluation.candidate.source.layer !== source.layer);

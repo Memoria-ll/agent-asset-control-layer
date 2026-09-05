@@ -374,6 +374,46 @@ describe("binding resolution", () => {
     ]));
   });
 
+  it("reports both halves of a runtime-model target the catalog is missing", () => {
+    const both = binding(
+      "reviewer-both-missing",
+      "metadata.target-kind: runtime-model\nmetadata.runtime-id: missing-runtime\nmetadata.model-id: missing-model\n",
+      "scope.role: [reviewer]\n",
+    );
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([both]),
+      catalog,
+    }));
+
+    expect(result.candidates[0]?.reasons).toEqual(expect.arrayContaining([
+      { kind: "target_missing", targetId: "missing-runtime" },
+      { kind: "target_missing", targetId: "missing-model" },
+    ]));
+  });
+
+  it("rejects an entry paired with another revision of the same Binding id", () => {
+    const base = binding("same-id", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
+    const overlay = binding("same-id", "metadata.target-kind: model\nmetadata.model-id: other-model\n", "scope.role: [reviewer]\n", "override");
+    const entries = entriesFor([base, overlay], [
+      { layer: "global", sourceId: "global-source" },
+      { layer: "project", sourceId: "project-source" },
+    ]);
+    // Both halves swapped together, so every id and layer still lines up.
+    const crossed = [
+      { ...entries[0]!, evaluation: entries[1]!.evaluation, source: entries[1]!.source },
+      { ...entries[1]!, evaluation: entries[0]!.evaluation, source: entries[0]!.source },
+    ];
+
+    const result = resolveBindings({ entries: crossed, catalog });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "binding_candidate_mismatch" }),
+      ]));
+    }
+  });
+
   it("rejects an entry whose evaluation belongs to another asset", () => {
     const first = binding("reviewer-first", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");
     const second = binding("reviewer-second", "metadata.target-kind: model\nmetadata.model-id: gpt-5\n", "scope.role: [reviewer]\n");

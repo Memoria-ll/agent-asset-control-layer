@@ -202,6 +202,19 @@ describe("Binding shared contract", () => {
     })).toThrow();
   });
 
+  it("accepts exactly one activation reason on a fallback candidate", () => {
+    const activation = { kind: "fallback_primary_unavailable" as const, primaryBindingId: "primary-1" };
+    const fallback = {
+      status: "fallback" as const,
+      definition: { bindingId: "binding-1", target, fallbackFor: "primary-1", description: "" },
+      source: { layer: "global" as const },
+      revision: "revision-1",
+      loadingTier: "core" as const,
+    };
+    expect(parseBindingCandidateDto({ ...fallback, reasons: [activation] }).reasons).toHaveLength(1);
+    expect(() => parseBindingCandidateDto({ ...fallback, reasons: [activation, activation] })).toThrow();
+  });
+
   it("accepts an overlay record only from a Project source", () => {
     const overlay = {
       operation: "override" as const,

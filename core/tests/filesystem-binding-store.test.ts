@@ -47,6 +47,20 @@ operation: disable
 disable
 `));
 
+const exclusiveBinding = (id: string): CanonicalBinding => unwrap(parseBindingDocument(`---
+schema-version: 3
+id: ${id}
+type: binding
+tier: core
+operation: add
+merge-mode: exclusive
+merge-group: reviewer
+metadata.target-kind: model
+metadata.model-id: gpt-5
+---
+exclusive
+`));
+
 const rule = (id: string): string => `---
 schema-version: 3
 id: ${id}
@@ -92,6 +106,24 @@ describe("filesystem Binding store", () => {
     }
     // Nothing was written: the check runs before the store is touched.
     await expect(readdir(join(directory, "bindings"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses to persist a merge mode the Binding contract forbids", async () => {
+    const { store, directory } = await makeStore();
+
+    const saved = await saveBinding(store, {
+      rootId: "global",
+      relativePath: "exclusive.md",
+      asset: exclusiveBinding("exclusive-binding").asset,
+    });
+
+    expect(saved.ok).toBe(false);
+    if (!saved.ok) {
+      expect(saved.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "merge_mode_not_allowed" }),
+      ]));
+    }
+    await expect(readdir(directory)).resolves.toEqual([]);
   });
 
   it("saves, reloads, and preserves the stored revision and source", async () => {

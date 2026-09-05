@@ -228,7 +228,9 @@ export const BindingCandidateDto = z.discriminatedUnion("status", [
   z.strictObject({
     status: z.literal("fallback"),
     definition: BindingFallbackDefinitionDto,
-    reasons: z.array(fallbackBindingReasons).check(z.minLength(1)),
+    // Exactly one, like the eligible arm: a fallback candidate is one revision
+    // standing in for one primary, so it activates for one reason.
+    reasons: z.array(fallbackBindingReasons).check(z.minLength(1)).check(z.maxLength(1)),
     ...bindingCandidateBase,
   }),
   z.strictObject({
