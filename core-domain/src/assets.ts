@@ -1,7 +1,14 @@
 import { ASSET_TYPES, LOADING_TIERS } from "@aacl/shared";
 import type { AssetId, AssetType, LoadingTier } from "@aacl/shared";
+import type {
+  CapabilityDependency,
+  CapabilityFeatureId,
+  CapabilityId,
+  CapabilityReference,
+} from "./capabilities/dependencies.ts";
 import { coreFailure, type AssetResult } from "./failures.ts";
 import { codeUnitCompare } from "./ordering.ts";
+import { isLowerKebabToken } from "./tokens.ts";
 
 const ASSET_SCOPE_AXES = [
   "project",
@@ -31,6 +38,7 @@ export type CanonicalAsset = {
   readonly metadata: Readonly<Record<string, AssetFieldValue>>;
   readonly scope: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
   readonly requires: readonly AssetId[];
+  readonly capabilityDependencies?: readonly CapabilityDependency[];
   readonly lifecycle?: string;
   readonly body: string;
 };
@@ -57,12 +65,6 @@ const detail = (
 ): Detail => ({ path: [...path], code, message });
 
 const trimAscii = (value: string): string => value.replace(/^[ \t]+|[ \t]+$/g, "");
-
-const isLowerKebabToken = (value: string): boolean =>
-  value.length > 0 &&
-  value.length <= 64 &&
-  /^[a-z](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(value) &&
-  !value.includes("--");
 
 const isAssetScopeAxis = (value: string): value is AssetScopeAxis =>
   ASSET_SCOPE_AXES.includes(value as AssetScopeAxis);
@@ -204,10 +206,25 @@ export const parseAssetDocument = (source: string): AssetResult<ParsedAssetDocum
 const isStringList = (value: AssetFieldValue): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
 const hasDuplicates = (values: readonly string[]): boolean => new Set(values).size !== values.length;
 
 const sortedValues = <Value extends string>(values: readonly Value[]): readonly Value[] =>
   [...values].sort(codeUnitCompare);
+
+const capabilityReference = (
+  capabilityId: string,
+  requiredFeatures: readonly string[] | undefined,
+): CapabilityReference => {
+  return requiredFeatures === undefined
+    ? { capabilityId: capabilityId as CapabilityId }
+    : {
+        capabilityId: capabilityId as CapabilityId,
+        features: sortedValues(requiredFeatures) as readonly CapabilityFeatureId[],
+      };
+};
 
 const validateList = (
   value: AssetFieldValue,
@@ -265,6 +282,10 @@ export const validateAsset = (
   let tier: LoadingTier | undefined;
   let lifecycle: string | undefined;
   let requires: readonly AssetId[] = [];
+  const capabilityIdsByStrength = new Map<"required" | "optional" | "preferred", readonly string[]>();
+  const capabilityFallbacks = new Map<string, string>();
+  const capabilityFeatures = new Map<string, readonly string[]>();
+  const capabilityFallbackFeatures = new Map<string, readonly string[]>();
   const metadata: Record<string, AssetFieldValue> = {};
   const scope: Partial<Record<AssetScopeAxis, readonly string[]>> = {};
   let unsupportedSchemaVersion = false;
@@ -326,6 +347,64 @@ export const validateAsset = (
       }
       continue;
     }
+    if (key === "capability.required" || key === "capability.optional" || key === "capability.preferred") {
+      const values = validateList(value, key, details);
+      if (values !== undefined) {
+        for (const capabilityId of values) {
+          if (!isLowerKebabToken(capabilityId)) {
+            details.push(detail(["document", "frontmatter", key], "invalid_capability_id", `Capability id "${capabilityId}" is invalid.`));
+          }
+        }
+        capabilityIdsByStrength.set(key.slice("capability.".length) as "required" | "optional" | "preferred", sortedValues(values));
+      }
+      continue;
+    }
+    if (key.startsWith("capability.fallback.")) {
+      const primaryId = key.slice("capability.fallback.".length);
+      const fallbackId = validateScalar(value, key, details);
+      if (!isLowerKebabToken(primaryId)) {
+        details.push(detail(["document", "frontmatter", key], "invalid_capability_id", `Capability id "${primaryId}" is invalid.`));
+      }
+      if (fallbackId !== undefined) {
+        if (!isLowerKebabToken(fallbackId)) {
+          details.push(detail(["document", "frontmatter", key], "invalid_capability_id", `Capability id "${fallbackId}" is invalid.`));
+        }
+        capabilityFallbacks.set(primaryId, fallbackId);
+      }
+      continue;
+    }
+    if (key.startsWith("capability.features.")) {
+      const capabilityId = key.slice("capability.features.".length);
+      const values = validateList(value, key, details);
+      if (!isLowerKebabToken(capabilityId)) {
+        details.push(detail(["document", "frontmatter", key], "invalid_capability_id", `Capability id "${capabilityId}" is invalid.`));
+      }
+      if (values !== undefined) {
+        for (const featureId of values) {
+          if (!isLowerKebabToken(featureId)) {
+            details.push(detail(["document", "frontmatter", key], "invalid_capability_feature_id", `Capability feature id "${featureId}" is invalid.`));
+          }
+        }
+        capabilityFeatures.set(capabilityId, sortedValues(values));
+      }
+      continue;
+    }
+    if (key.startsWith("capability.fallback-features.")) {
+      const primaryId = key.slice("capability.fallback-features.".length);
+      const values = validateList(value, key, details);
+      if (!isLowerKebabToken(primaryId)) {
+        details.push(detail(["document", "frontmatter", key], "invalid_capability_id", `Capability id "${primaryId}" is invalid.`));
+      }
+      if (values !== undefined) {
+        for (const featureId of values) {
+          if (!isLowerKebabToken(featureId)) {
+            details.push(detail(["document", "frontmatter", key], "invalid_capability_feature_id", `Capability feature id "${featureId}" is invalid.`));
+          }
+        }
+        capabilityFallbackFeatures.set(primaryId, sortedValues(values));
+      }
+      continue;
+    }
     if (key.startsWith("scope.")) {
       const axis = key.slice("scope.".length);
       if (!isAssetScopeAxis(axis)) {
@@ -360,6 +439,58 @@ export const validateAsset = (
 
   if (typeof parsed.body !== "string") details.push(detail(["document"], "invalid_value", "Asset body must be a string."));
 
+  const primaryStrengthById = new Map<string, "required" | "optional" | "preferred">();
+  for (const [strength, capabilityIds] of capabilityIdsByStrength) {
+    for (const capabilityId of capabilityIds) {
+      const previous = primaryStrengthById.get(capabilityId);
+      if (previous !== undefined) {
+        details.push(detail(
+          ["document", "frontmatter", `capability.${strength}`],
+          "duplicate_capability_dependency",
+          `Capability "${capabilityId}" is already declared as ${previous}.`,
+        ));
+      } else {
+        primaryStrengthById.set(capabilityId, strength);
+      }
+    }
+  }
+  for (const [primaryId, fallbackId] of capabilityFallbacks) {
+    if (!primaryStrengthById.has(primaryId)) {
+      details.push(detail(
+        ["document", "frontmatter", `capability.fallback.${primaryId}`],
+        "unknown_fallback_primary",
+        `Fallback primary capability "${primaryId}" is not declared.`,
+      ));
+    }
+    const primaryFeatures = capabilityFeatures.get(primaryId) ?? [];
+    const fallbackFeatures = capabilityFallbackFeatures.get(primaryId) ?? [];
+    if (primaryId === fallbackId && primaryFeatures.every((featureId) => fallbackFeatures.includes(featureId))) {
+      details.push(detail(
+        ["document", "frontmatter", `capability.fallback.${primaryId}`],
+        "redundant_fallback",
+        "A fallback on the same capability must require a weaker or disjoint feature set.",
+      ));
+    }
+  }
+  for (const capabilityId of capabilityFeatures.keys()) {
+    if (!primaryStrengthById.has(capabilityId)) {
+      details.push(detail(
+        ["document", "frontmatter", `capability.features.${capabilityId}`],
+        "unknown_capability_reference",
+        `Capability features refer to undeclared capability "${capabilityId}".`,
+      ));
+    }
+  }
+  for (const primaryId of capabilityFallbackFeatures.keys()) {
+    if (!capabilityFallbacks.has(primaryId)) {
+      details.push(detail(
+        ["document", "frontmatter", `capability.fallback-features.${primaryId}`],
+        "unknown_fallback_primary",
+        `Fallback features refer to undeclared fallback primary "${primaryId}".`,
+      ));
+    }
+  }
+
   if (details.length > 0) {
     return failure(
       unsupportedSchemaVersion ? "incompatible_contract" : "invalid_request",
@@ -374,6 +505,20 @@ export const validateAsset = (
     ]);
   }
 
+  const capabilityDependencies: CapabilityDependency[] = [];
+  for (const strength of ["required", "optional", "preferred"] as const) {
+    for (const capabilityId of capabilityIdsByStrength.get(strength) ?? []) {
+      capabilityDependencies.push({ strength, capability: capabilityReference(capabilityId, capabilityFeatures.get(capabilityId)) });
+    }
+  }
+  for (const [primaryId, fallbackId] of [...capabilityFallbacks].sort(([left], [right]) => codeUnitCompare(left, right))) {
+    capabilityDependencies.push({
+      strength: "fallback",
+      capability: capabilityReference(fallbackId, capabilityFallbackFeatures.get(primaryId)),
+      fallbackFor: capabilityReference(primaryId, capabilityFeatures.get(primaryId)),
+    });
+  }
+
   const model: {
     schemaVersion: 1;
     id: AssetId;
@@ -382,6 +527,7 @@ export const validateAsset = (
     metadata: Readonly<Record<string, AssetFieldValue>>;
     scope: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
     requires: readonly AssetId[];
+    capabilityDependencies?: readonly CapabilityDependency[];
     lifecycle?: string;
     body: string;
   } = {
@@ -394,6 +540,7 @@ export const validateAsset = (
     requires,
     body: parsed.body,
   };
+  if (capabilityDependencies.length > 0) model.capabilityDependencies = capabilityDependencies;
   if (lifecycle !== undefined) model.lifecycle = lifecycle;
   return { ok: true, value: model };
 };
@@ -466,6 +613,96 @@ export const serializeCanonicalAsset = (
     }
   }
   if (asset.requires.length > 0 && !append("requires", asset.requires).ok) return serializationFailure("The requires list cannot be serialized.", "invalid_list");
+
+  if (asset.capabilityDependencies !== undefined) {
+    if (!Array.isArray(asset.capabilityDependencies) || asset.capabilityDependencies.length === 0) {
+      return serializationFailure("The canonical asset capability dependencies are invalid.", "invalid_capability_dependencies");
+    }
+    const idsByStrength = new Map<"required" | "optional" | "preferred", string[]>();
+    const fallbacks = new Map<string, string>();
+    const primaryFeatures = new Map<string, readonly string[]>();
+    const fallbackFeatures = new Map<string, readonly string[]>();
+    const fallbackPrimaryFeatures = new Map<string, readonly string[]>();
+    const validReference = (reference: unknown): reference is CapabilityReference => {
+      if (!isRecord(reference) || typeof reference.capabilityId !== "string" || !isLowerKebabToken(reference.capabilityId)) return false;
+      if (Object.keys(reference).some((key) => key !== "capabilityId" && key !== "features")) return false;
+      if (!Object.hasOwn(reference, "features") || reference.features === undefined) return true;
+      if (!Array.isArray(reference.features) || !reference.features.every((featureId): featureId is string => typeof featureId === "string") ||
+          !isSortedAndUnique(reference.features) || reference.features.some((featureId) => !isLowerKebabToken(featureId))) return false;
+      return true;
+    };
+    const primaryIds = new Set<string>();
+    for (const dependencyValue of asset.capabilityDependencies as readonly unknown[]) {
+      if (!isRecord(dependencyValue)) {
+        return serializationFailure("A capability dependency is invalid.", "invalid_capability_dependency");
+      }
+      const strength = dependencyValue.strength;
+      if (strength !== "required" && strength !== "optional" && strength !== "preferred" && strength !== "fallback") {
+        return serializationFailure("A capability dependency strength is invalid.", "invalid_capability_strength");
+      }
+      if (!validReference(dependencyValue.capability)) {
+        return serializationFailure("A capability reference is invalid.", "invalid_capability_reference");
+      }
+      const capability = dependencyValue.capability;
+      if (strength === "fallback") {
+        if (Object.keys(dependencyValue).some((key) => key !== "strength" && key !== "capability" && key !== "fallbackFor")) {
+          return serializationFailure("A capability fallback contains an unknown field.", "invalid_capability_fallback");
+        }
+        if (!validReference(dependencyValue.fallbackFor) || fallbacks.has(dependencyValue.fallbackFor.capabilityId)) {
+          return serializationFailure("A capability fallback is invalid.", "invalid_capability_fallback");
+        }
+        const fallbackFor = dependencyValue.fallbackFor;
+        fallbacks.set(fallbackFor.capabilityId, capability.capabilityId);
+        if (capability.features !== undefined) fallbackFeatures.set(fallbackFor.capabilityId, capability.features);
+        if (fallbackFor.features !== undefined) fallbackPrimaryFeatures.set(fallbackFor.capabilityId, fallbackFor.features);
+      } else {
+        if (Object.keys(dependencyValue).some((key) => key !== "strength" && key !== "capability")) {
+          return serializationFailure("A capability dependency contains an unknown field.", "invalid_capability_dependency");
+        }
+        if (Object.hasOwn(dependencyValue, "fallbackFor")) {
+          return serializationFailure("Only a fallback dependency may identify a fallback primary.", "unexpected_fallback_for");
+        }
+        if (primaryIds.has(capability.capabilityId)) {
+          return serializationFailure("A capability dependency is duplicated.", "duplicate_capability_dependency");
+        }
+        primaryIds.add(capability.capabilityId);
+        if (capability.features !== undefined) primaryFeatures.set(capability.capabilityId, capability.features);
+        const ids = idsByStrength.get(strength) ?? [];
+        ids.push(capability.capabilityId);
+        idsByStrength.set(strength, ids);
+      }
+    }
+    for (const primaryId of fallbacks.keys()) {
+      if (!primaryIds.has(primaryId)) return serializationFailure("A capability fallback has no primary dependency.", "unknown_fallback_primary");
+      const expected = primaryFeatures.get(primaryId) ?? [];
+      const actual = fallbackPrimaryFeatures.get(primaryId) ?? [];
+      if (expected.length !== actual.length || expected.some((featureId, index) => featureId !== actual[index])) {
+        return serializationFailure("A capability fallback does not identify its primary reference.", "invalid_capability_fallback");
+      }
+    }
+    for (const [primaryId, fallbackId] of fallbacks) {
+      const requiredPrimaryFeatures = primaryFeatures.get(primaryId) ?? [];
+      const requiredFallbackFeatures = fallbackFeatures.get(primaryId) ?? [];
+      if (primaryId === fallbackId && requiredPrimaryFeatures.every((featureId) => requiredFallbackFeatures.includes(featureId))) {
+        return serializationFailure("A capability fallback is redundant.", "redundant_fallback");
+      }
+    }
+    for (const strength of ["required", "optional", "preferred"] as const) {
+      const ids = idsByStrength.get(strength);
+      if (ids !== undefined && !append(`capability.${strength}`, sortedValues(ids)).ok) {
+        return serializationFailure(`The ${strength} capability dependencies cannot be serialized.`);
+      }
+    }
+    for (const [primaryId, fallbackId] of [...fallbacks].sort(([left], [right]) => codeUnitCompare(left, right))) {
+      if (!append(`capability.fallback.${primaryId}`, fallbackId).ok) return serializationFailure("A capability fallback cannot be serialized.");
+    }
+    for (const [capabilityId, requiredFeatures] of [...primaryFeatures].sort(([left], [right]) => codeUnitCompare(left, right))) {
+      if (!append(`capability.features.${capabilityId}`, requiredFeatures).ok) return serializationFailure("Capability features cannot be serialized.");
+    }
+    for (const [primaryId, requiredFeatures] of [...fallbackFeatures].sort(([left], [right]) => codeUnitCompare(left, right))) {
+      if (!append(`capability.fallback-features.${primaryId}`, requiredFeatures).ok) return serializationFailure("Capability fallback features cannot be serialized.");
+    }
+  }
 
   if (asset.metadata === null || typeof asset.metadata !== "object") return serializationFailure("The canonical asset metadata is invalid.");
   for (const name of Object.keys(asset.metadata).sort(codeUnitCompare)) {

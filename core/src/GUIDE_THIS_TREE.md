@@ -11,7 +11,7 @@
 - Workflow State と Agent Execution の link を別 document に永続化する場合、片側の atomic rename を全体の transaction と扱わず、transaction または idempotency を設計する。
 - Marker を読む全経路で `.aacl` を real directory、Marker を regular file として扱う。POSIX では nonblocking / no-follow で open し、全 platform で前後の `lstat` と descriptor identity を照合する。
 - cross-process lock は恒久 regular lock file への OS-native exclusive FD lock で保持する。lock path を unlink / rename せず、descriptor と path の identity を検証する。
-- asset の `list` は手作業の filesystem path を読み、`save` は portable path だけを受理する。list 結果の `relativePath` を無条件に save へ渡さない。
+- asset の `list` は手作業の filesystem path を読み、`save` は portable path だけを受理する。list 結果の `relativePath` を save へ渡す前に `isSavableAssetPath` で判定し、書けない path はその場で失敗させる。`save` に投げて返る `path_outside_root` は「管理 root の外を指した」と読めるため、この失敗の説明にならない。
 - server の `error` handler は `listen()` と同じ同期 turn で登録する。
 - `index.ts` は import-safe な composition root とし、listen などの起動副作用は `main.ts` だけに置く。
 - `main.ts` は SIGINT / SIGTERM handler を `startCore()` の await 前に登録する。起動中の停止要求は startup cleanup と listen 済み Core の close が終わるまで保持し、要求後は `core.listening` と startup failure event を記録しない。
