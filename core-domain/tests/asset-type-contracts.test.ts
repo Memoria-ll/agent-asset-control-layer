@@ -54,6 +54,7 @@ const expectOk = <Value>(result: { readonly ok: boolean; readonly value?: Value;
 const assetDocument = (id: string, type: AssetType, fields = ""): string => `---
 id: ${id}
 type: ${type}
+schema-version: 2
 tier: core
 ${fields}---
 `;

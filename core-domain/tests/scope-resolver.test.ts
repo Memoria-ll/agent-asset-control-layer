@@ -85,6 +85,7 @@ const capabilityContext = (
 const assetDocument = (id: string, fields = "", type: AssetType = "rule"): string => `---
 id: ${id}
 type: ${type}
+schema-version: 2
 tier: core
 ${fields}---
 `;

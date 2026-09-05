@@ -61,11 +61,11 @@ const storeFor = (
 ): AssetStore => unwrap(createFilesystemAssetStore(roots, options));
 
 const minimalDocument = (id: string, type = "rule", body = "body"): string =>
-  "---\nid: " + id + "\ntype: " + type + "\ntier: core\n---\n" + body;
+  "---\nid: " + id + "\ntype: " + type + "\nschema-version: 2\ntier: core\n---\n" + body;
 
 const goldenDocument = [
   "---",
-  "schema-version: 1",
+  "schema-version: 2",
   "id: review-checklist",
   "type: rule",
   "tier: core",
@@ -105,7 +105,7 @@ describe("filesystem asset store", () => {
   it("keeps valid assets when another headed file is malformed", async () => {
     const root = await temporaryDirectory();
     await writeAsset(root, "valid.md", minimalDocument("valid-asset"));
-    await writeRaw(root, "broken.md", "---\nid: broken\n---\nbody");
+    await writeRaw(root, "broken.md", "---\nschema-version: 2\nid: broken\n---\nbody");
     const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
 
     const result = await store.list();
@@ -195,7 +195,7 @@ describe("filesystem asset store", () => {
     const result = await store.list();
 
     expect(result.failures).toHaveLength(0);
-    expect(result.assets[0]?.revision).toBe("sha256:884a4c01a9ea2fcc261b8f4de27e67eac0c8bda9a9416cfdbc66912b86e10e96");
+    expect(result.assets[0]?.revision).toBe("sha256:6b86d6697350aae674ce00aeaf7071fd8496dccbe9220ee84e30661171277a9e");
   });
 
   it("changes revision when only the declared type changes", async () => {
@@ -230,9 +230,9 @@ describe("filesystem asset store", () => {
     expect(first.ok && second.ok ? first.value.revision : "").not.toBe(second.ok ? second.value.revision : "");
   });
 
-  it("adds schema-version and round-trips a schema-version-less asset", async () => {
+  it("saves and round-trips a schema-version-2 asset with directives", async () => {
     const root = await temporaryDirectory();
-    const input = "---\nid: round-trip\ntype: rule\ntier: core\nscope.project: [project-two, project-one]\nrequires: [safety-rule, naming-convention]\n---\nbody";
+    const input = "---\nid: round-trip\ntype: rule\nschema-version: 2\ntier: core\nmandatory: true\npriority: 0\nmerge-mode: exclusive\nmerge-group: review\nscope.project: [project-two, project-one]\nrequires: [safety-rule, naming-convention]\n---\nbody";
     const canonical = assetFromDocument(input);
     const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
 
@@ -241,10 +241,49 @@ describe("filesystem asset store", () => {
     const listed = await store.get(canonical.asset.id);
 
     expect(saved.ok).toBe(true);
-    expect(storedText).toContain("schema-version: 1\n");
-    expect(storedText.split("\n")).toHaveLength(input.split("\n").length + 1);
+    expect(storedText).toContain("schema-version: 2\n");
+    expect(storedText.split("\n")).toHaveLength(input.split("\n").length);
     expect(listed.matches[0]?.asset).toEqual(canonical.asset);
+    expect(listed.matches[0]?.asset.mandatory).toBe(true);
+    expect(listed.matches[0]?.asset.priority).toBe(0);
+    expect(listed.matches[0]?.asset.mergeMode).toBe("exclusive");
+    expect(listed.matches[0]?.asset.mergeGroup).toBe("review");
     expect(listed.matches[0]?.revision).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("reports versionless and schema-version-1 raw assets as list and get failures", async () => {
+    const root = await temporaryDirectory();
+    await writeRaw(root, "versionless.md", [
+      "---",
+      "id: versionless",
+      "type: rule",
+      "tier: core",
+      "---",
+      "body",
+    ].join("\n"));
+    await writeRaw(root, "legacy.md", [
+      "---",
+      "schema-version: 1",
+      "id: legacy",
+      "type: rule",
+      "tier: core",
+      "---",
+      "body",
+    ].join("\n"));
+    const store = storeFor([{ rootId: "global", kind: "global", directory: root }]);
+
+    const listed = await store.list();
+    expect(listed.assets).toHaveLength(0);
+    expect(listed.failures).toHaveLength(2);
+    expect(listed.failures.map((item) => item.failure.details?.[0]?.code).sort()).toEqual([
+      "unsupported_schema_version",
+      "unsupported_schema_version",
+    ]);
+
+    const lookedUp = await store.get("versionless" as Parameters<AssetStore["get"]>[0]);
+    expect(lookedUp.matches).toHaveLength(0);
+    expect(lookedUp.failures).toHaveLength(2);
+    expect(lookedUp.failures.every((item) => item.failure.code === "incompatible_contract")).toBe(true);
   });
 
   it("rejects an externally edited target when expectedRevision is stale", async () => {

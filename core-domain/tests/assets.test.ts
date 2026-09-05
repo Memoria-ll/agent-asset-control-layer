@@ -11,11 +11,15 @@ import {
 } from "../src/index.ts";
 
 const fullDocument = `---
-schema-version: 1
+schema-version: 2
 id: review-checklist
 type: rule
 tier: core
 lifecycle: active
+mandatory: true
+priority: 0
+merge-mode: exclusive
+merge-group: review-checklist
 scope.project: [project-two, project-one]
 scope.workflow: [review-flow]
 scope.stage: [review]
@@ -34,11 +38,15 @@ metadata.tags: [Doe, John]
 - inspect`;
 
 const goldenDocument = `---
-schema-version: 1
+schema-version: 2
 id: review-checklist
 type: rule
 tier: core
 lifecycle: active
+mandatory: true
+priority: 0
+merge-mode: exclusive
+merge-group: review-checklist
 scope.project: [project-one, project-two]
 scope.workflow: [review-flow]
 scope.stage: [review]
@@ -77,6 +85,12 @@ const failureCodes = (result: AssetResult<unknown>) => {
   return result.failure.details?.map((item) => item.code) ?? [];
 };
 
+const failurePath = (result: AssetResult<unknown>) => {
+  expect(result.ok).toBe(false);
+  if (result.ok) return undefined;
+  return result.failure.details?.[0]?.path;
+};
+
 describe("canonical asset domain", () => {
   it("serializes the full-field document to the canonical golden", () => {
     const asset = parseAndValidate(fullDocument);
@@ -85,10 +99,55 @@ describe("canonical asset domain", () => {
     expect(serialized).toEqual({ ok: true, value: goldenDocument });
   });
 
+  it("keeps omitted directives absent from the model and serialized document", () => {
+    const asset = parseAndValidate(`---
+schema-version: 2
+id: omitted-directives
+type: rule
+tier: core
+---
+body`);
+
+    for (const field of ["mandatory", "priority", "mergeMode", "mergeGroup"]) {
+      expect(Object.hasOwn(asset, field), field).toBe(false);
+    }
+    const serialized = serializeCanonicalAsset(asset);
+    expect(serialized.ok).toBe(true);
+    if (!serialized.ok) return;
+    expect(serialized.value).not.toMatch(/^(mandatory|priority|merge-mode|merge-group):/m);
+    expect(parseAndValidate(serialized.value)).toEqual(asset);
+  });
+
+  it("distinguishes explicit directive values from omitted values through round-trip", () => {
+    const asset = parseAndValidate(`---
+schema-version: 2
+id: explicit-directives
+type: rule
+tier: core
+mandatory: false
+priority: 0
+merge-mode: additive
+---
+body`);
+
+    expect(asset.mandatory).toBe(false);
+    expect(asset.priority).toBe(0);
+    expect(asset.mergeMode).toBe("additive");
+    expect(Object.hasOwn(asset, "mandatory")).toBe(true);
+    expect(Object.hasOwn(asset, "priority")).toBe(true);
+    expect(Object.hasOwn(asset, "mergeMode")).toBe(true);
+    const serialized = serializeCanonicalAsset(asset);
+    expect(serialized.ok).toBe(true);
+    if (!serialized.ok) return;
+    expect(serialized.value).toContain("mandatory: false\npriority: 0\nmerge-mode: additive\n");
+    expect(parseAndValidate(serialized.value)).toEqual(asset);
+  });
+
   it("normalizes scope and requires in the model while preserving metadata list order", () => {
     const document = `---
 id: normalized-asset
 type: skill
+schema-version: 2
 tier: discoverable
 scope.role: [z-role, a-role]
 scope.model: [z-model, a-model]
@@ -116,6 +175,7 @@ body`;
     const asset = parseAndValidate(`---
 id: comma-values
 type: rule
+schema-version: 2
 tier: core
 metadata.tags: [Doe, John]
 metadata.author: Doe, John
@@ -130,6 +190,7 @@ metadata.author: Doe, John
     const withoutTerminal = parseAndValidate(`---
 id: literal-body
 type: knowledge
+schema-version: 2
 tier: on-demand
 metadata.author: colon: # quote " value
 ---
@@ -139,6 +200,7 @@ tail`);
     const withTerminal = parseAndValidate(`---
 id: literal-body
 type: knowledge
+schema-version: 2
 tier: on-demand
 metadata.author: colon: # quote " value
 ---
@@ -158,6 +220,7 @@ tail
         const asset = parseAndValidate(`---
 id: all-members-${type.replace(/-/g, "")}-${tier.replace(/-/g, "")}
 type: ${type}
+schema-version: 2
 tier: ${tier}
 ---
 `);
@@ -171,6 +234,7 @@ tier: ${tier}
     const malformedList = parseAssetDocument(`---
 id: malformed-list
 type: rule
+schema-version: 2
 tier: core
 requires: [a,,b]
 ---
@@ -180,6 +244,7 @@ requires: [a,,b]
     const invalidType = validateAsset(parseDocument(`---
 id: invalid-type
 type: unknown
+schema-version: 2
 tier: core
 ---
 `));
@@ -188,12 +253,14 @@ tier: core
     const invalidIdResult = validateAsset(parseDocument(`---
 id: Invalid_ID
 type: rule
+schema-version: 2
 tier: core
 ---
 `));
     expect(failureCodes(invalidIdResult)).toContain("invalid_asset_id");
 
     const missing = validateAsset(parseDocument(`---
+schema-version: 2
 type: rule
 ---
 `));
@@ -202,6 +269,7 @@ type: rule
     const empty = validateAsset(parseDocument(`---
 id: empty-list
 type: rule
+schema-version: 2
 tier: core
 scope.role: []
 ---
@@ -211,6 +279,7 @@ scope.role: []
     const duplicate = validateAsset(parseDocument(`---
 id: duplicate-list
 type: rule
+schema-version: 2
 tier: core
 requires: [same-id, same-id]
 ---
@@ -220,14 +289,26 @@ requires: [same-id, same-id]
     const unknown = validateAsset(parseDocument(`---
 id: unknown-key
 type: rule
+schema-version: 2
 tier: core
 priority: high
 ---
+    `));
+    expect(failureCodes(unknown)).toEqual(["invalid_value"]);
+
+    const unknownKey = validateAsset(parseDocument(`---
+schema-version: 2
+id: unknown-key
+type: rule
+tier: core
+overrides: [other-asset]
+---
 `));
-    expect(failureCodes(unknown)).toEqual(["unknown_key"]);
+    expect(failureCodes(unknownKey)).toEqual(["unknown_key"]);
+    expect(failurePath(unknownKey)).toEqual(["document", "frontmatter", "overrides"]);
 
     const unsupported = validateAsset(parseDocument(`---
-schema-version: 2
+schema-version: 3
 id: future-schema
 type: rule
 tier: core
@@ -238,8 +319,89 @@ tier: core
     expect(failureCodes(unsupported)).toEqual(["unsupported_schema_version"]);
   });
 
+  it("rejects legacy and missing schema versions with incompatible contract details", () => {
+    for (const document of [
+      `---
+schema-version: 1
+id: legacy-schema
+type: rule
+tier: core
+---
+`,
+      `---
+id: missing-schema
+type: rule
+tier: core
+---
+`,
+    ]) {
+      const result = validateAsset(parseDocument(document));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.failure.code).toBe("incompatible_contract");
+      expect(failureCodes(result)).toEqual(["unsupported_schema_version"]);
+      expect(failurePath(result)).toEqual(["document", "frontmatter", "schema-version"]);
+    }
+  });
+
+  it("reports directive value errors with their frontmatter paths", () => {
+    const invalidValues = [
+      ["mandatory: [true]", "mandatory"],
+      ["mandatory: TRUE", "mandatory"],
+      ["priority: -1", "priority"],
+      ["priority: 01", "priority"],
+      ["priority: 1.5", "priority"],
+      ["priority: 9007199254740992", "priority"],
+      ["merge-mode: layered", "merge-mode"],
+      ["merge-group: [review]", "merge-group"],
+      ["merge-group: a:b", "merge-group"],
+    ] as const;
+
+    for (const [line, key] of invalidValues) {
+      const result = validateAsset(parseDocument(`---
+schema-version: 2
+id: invalid-directive
+type: rule
+tier: core
+${line}
+---
+`));
+      expect(failureCodes(result), line).toEqual(["invalid_value"]);
+      expect(failurePath(result), line).toEqual(["document", "frontmatter", key]);
+    }
+
+    const missingMergeGroup = validateAsset(parseDocument(`---
+schema-version: 2
+id: missing-merge-group
+type: rule
+tier: core
+merge-mode: exclusive
+---
+`));
+    expect(failureCodes(missingMergeGroup)).toEqual(["invalid_merge_group"]);
+    expect(failurePath(missingMergeGroup)).toEqual(["document", "frontmatter", "merge-group"]);
+  });
+
+  it("runtime-validates directives before serializing", () => {
+    const base = parseAndValidate(`---
+schema-version: 2
+id: runtime-directive
+type: rule
+tier: core
+---
+body`);
+    const invalidPriority = serializeCanonicalAsset({ ...base, priority: -1 });
+    expect(invalidPriority.ok).toBe(false);
+    if (!invalidPriority.ok) expect(invalidPriority.failure.code).toBe("invalid_request");
+    const invalidMandatory = serializeCanonicalAsset({ ...base, mandatory: "true" as unknown as boolean });
+    expect(invalidMandatory.ok).toBe(false);
+    if (!invalidMandatory.ok) expect(invalidMandatory.failure.code).toBe("invalid_request");
+    const missingMergeGroup = serializeCanonicalAsset({ ...base, mergeMode: "exclusive" });
+    expect(failureCodes(missingMergeGroup)).toEqual(["invalid_merge_group"]);
+  });
+
   it("rejects duplicate keys and aggregates independent syntax details in source order", () => {
     const result = parseAssetDocument(`---
+schema-version: 2
 id:
 bad line
 type: rule
@@ -264,9 +426,9 @@ id: later-id
 
   it("round-trips deterministic boundary values and rejects unrepresentable values", () => {
     const documents = [
-      `---\nid: property-empty\ntype: rule\ntier: core\nmetadata.author: comma, scalar\n---\n`,
-      `\uFEFF---\r\nid: property-one\r\ntype: skill\r\ntier: discoverable\r\nrequires: [one-requirement]\r\nmetadata.tags: [one-tag]\r\n---\r\nbody`,
-      `---\nid: property-many\ntype: knowledge\ntier: on-demand\nscope.project: [project-b, project-a]\nrequires: [requirement-b, requirement-a]\nmetadata.tags: [first, second]\n---\nbody\n`,
+      `---\nid: property-empty\ntype: rule\nschema-version: 2\ntier: core\nmetadata.author: comma, scalar\n---\n`,
+      `\uFEFF---\r\nid: property-one\r\ntype: skill\r\nschema-version: 2\r\ntier: discoverable\r\nrequires: [one-requirement]\r\nmetadata.tags: [one-tag]\r\n---\r\nbody`,
+      `---\nid: property-many\ntype: knowledge\nschema-version: 2\ntier: on-demand\nscope.project: [project-b, project-a]\nrequires: [requirement-b, requirement-a]\nmetadata.tags: [first, second]\n---\nbody\n`,
     ];
 
     for (const document of documents) {
@@ -274,7 +436,7 @@ id: later-id
       const serialized = serializeCanonicalAsset(asset);
       expect(serialized.ok).toBe(true);
       if (!serialized.ok) continue;
-      expect(serialized.value).toContain("schema-version: 1\n");
+      expect(serialized.value).toContain("schema-version: 2\n");
       const reparsed = parseAndValidate(serialized.value);
       expect(reparsed).toEqual(asset);
     }

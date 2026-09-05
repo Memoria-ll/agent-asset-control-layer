@@ -24,7 +24,7 @@ export type ParsedAssetDocument = {
 };
 
 export type CanonicalAsset = {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly id: AssetId;
   readonly type: AssetType;
   readonly tier: LoadingTier;
@@ -32,6 +32,10 @@ export type CanonicalAsset = {
   readonly scope: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
   readonly requires: readonly AssetId[];
   readonly lifecycle?: string;
+  readonly mandatory?: boolean;
+  readonly priority?: number;
+  readonly mergeMode?: "additive" | "exclusive";
+  readonly mergeGroup?: string;
   readonly body: string;
 };
 
@@ -259,11 +263,15 @@ export const validateAsset = (
 
   const fields = parsed.fields;
   const details: Detail[] = [];
-  let schemaVersion = 1 as 1;
+  let schemaVersion = 2 as 2;
   let id: AssetId | undefined;
   let type: AssetType | undefined;
   let tier: LoadingTier | undefined;
   let lifecycle: string | undefined;
+  let mandatory: boolean | undefined;
+  let priority: number | undefined;
+  let mergeMode: "additive" | "exclusive" | undefined;
+  let mergeGroup: string | undefined;
   let requires: readonly AssetId[] = [];
   const metadata: Record<string, AssetFieldValue> = {};
   const scope: Partial<Record<AssetScopeAxis, readonly string[]>> = {};
@@ -275,7 +283,7 @@ export const validateAsset = (
       if (scalar === undefined) continue;
       if (!/^[1-9][0-9]*$/.test(scalar)) {
         details.push(detail(["document", "frontmatter", key], "invalid_value", `Schema version "${scalar}" is malformed.`));
-      } else if (scalar !== "1") {
+      } else if (scalar !== "2") {
         unsupportedSchemaVersion = true;
         details.push(detail(["document", "frontmatter", key], "unsupported_schema_version", `Schema version "${scalar}" is not supported.`));
       }
@@ -310,6 +318,45 @@ export const validateAsset = (
       if (scalar !== undefined) {
         if (isLowerKebabToken(scalar)) lifecycle = scalar;
         else details.push(detail(["document", "frontmatter", key], "invalid_value", `Lifecycle "${scalar}" is invalid.`));
+      }
+      continue;
+    }
+    if (key === "mandatory") {
+      const scalar = validateScalar(value, key, details);
+      if (scalar !== undefined) {
+        if (scalar === "true") mandatory = true;
+        else if (scalar === "false") mandatory = false;
+        else details.push(detail(["document", "frontmatter", key], "invalid_value", `Mandatory value "${scalar}" is invalid.`));
+      }
+      continue;
+    }
+    if (key === "priority") {
+      const scalar = validateScalar(value, key, details);
+      if (scalar !== undefined) {
+        if (!/^(?:0|[1-9][0-9]*)$/.test(scalar)) {
+          details.push(detail(["document", "frontmatter", key], "invalid_value", `Priority value "${scalar}" is invalid.`));
+        } else {
+          const parsedPriority = Number(scalar);
+          if (!Number.isSafeInteger(parsedPriority)) {
+            details.push(detail(["document", "frontmatter", key], "invalid_value", `Priority value "${scalar}" is invalid.`));
+          } else priority = parsedPriority;
+        }
+      }
+      continue;
+    }
+    if (key === "merge-mode") {
+      const scalar = validateScalar(value, key, details);
+      if (scalar !== undefined) {
+        if (scalar === "additive" || scalar === "exclusive") mergeMode = scalar;
+        else details.push(detail(["document", "frontmatter", key], "invalid_value", `Merge mode "${scalar}" is invalid.`));
+      }
+      continue;
+    }
+    if (key === "merge-group") {
+      const scalar = validateScalar(value, key, details);
+      if (scalar !== undefined) {
+        if (isLowerKebabToken(scalar)) mergeGroup = scalar;
+        else details.push(detail(["document", "frontmatter", key], "invalid_value", `Merge group "${scalar}" is invalid.`));
       }
       continue;
     }
@@ -357,6 +404,13 @@ export const validateAsset = (
   if (!Object.prototype.hasOwnProperty.call(fields, "id")) details.push(detail(["document", "frontmatter", "id"], "missing_field", 'Required field "id" is missing.'));
   if (!Object.prototype.hasOwnProperty.call(fields, "type")) details.push(detail(["document", "frontmatter", "type"], "missing_field", 'Required field "type" is missing.'));
   if (!Object.prototype.hasOwnProperty.call(fields, "tier")) details.push(detail(["document", "frontmatter", "tier"], "missing_field", 'Required field "tier" is missing.'));
+  if (!Object.prototype.hasOwnProperty.call(fields, "schema-version")) {
+    unsupportedSchemaVersion = true;
+    details.push(detail(["document", "frontmatter", "schema-version"], "unsupported_schema_version", "The asset schema version is required."));
+  }
+  if (mergeMode === "exclusive" && !Object.prototype.hasOwnProperty.call(fields, "merge-group")) {
+    details.push(detail(["document", "frontmatter", "merge-group"], "invalid_merge_group", "Exclusive merge mode requires a merge group."));
+  }
 
   if (typeof parsed.body !== "string") details.push(detail(["document"], "invalid_value", "Asset body must be a string."));
 
@@ -375,7 +429,7 @@ export const validateAsset = (
   }
 
   const model: {
-    schemaVersion: 1;
+    schemaVersion: 2;
     id: AssetId;
     type: AssetType;
     tier: LoadingTier;
@@ -383,6 +437,10 @@ export const validateAsset = (
     scope: Readonly<Partial<Record<AssetScopeAxis, readonly string[]>>>;
     requires: readonly AssetId[];
     lifecycle?: string;
+    mandatory?: boolean;
+    priority?: number;
+    mergeMode?: "additive" | "exclusive";
+    mergeGroup?: string;
     body: string;
   } = {
     schemaVersion,
@@ -395,6 +453,10 @@ export const validateAsset = (
     body: parsed.body,
   };
   if (lifecycle !== undefined) model.lifecycle = lifecycle;
+  if (mandatory !== undefined) model.mandatory = mandatory;
+  if (priority !== undefined) model.priority = priority;
+  if (mergeMode !== undefined) model.mergeMode = mergeMode;
+  if (mergeGroup !== undefined) model.mergeGroup = mergeGroup;
   return { ok: true, value: model };
 };
 
@@ -428,12 +490,17 @@ export const serializeCanonicalAsset = (
   asset: CanonicalAsset,
 ): AssetResult<string> => {
   if (asset === null || typeof asset !== "object") return serializationFailure("The canonical asset is invalid.");
-  if (asset.schemaVersion !== 1) return serializationFailure("Only asset schema version 1 can be serialized.");
+  if (asset.schemaVersion !== 2) return serializationFailure("Only asset schema version 2 can be serialized.");
   const idResult = asAssetId(asset.id);
   if (!idResult.ok) return serializationFailure("The canonical asset id is invalid.", "invalid_asset_id");
   if (!isAssetType(asset.type) || !isLoadingTier(asset.tier)) return serializationFailure("The canonical asset type or tier is invalid.");
   if (typeof asset.body !== "string" || asset.body.includes("\r")) return serializationFailure("The canonical asset body is invalid.");
   if (asset.lifecycle !== undefined && (typeof asset.lifecycle !== "string" || !isLowerKebabToken(asset.lifecycle))) return serializationFailure("The canonical asset lifecycle is invalid.");
+  if (asset.mandatory !== undefined && typeof asset.mandatory !== "boolean") return serializationFailure("The canonical asset mandatory directive is invalid.");
+  if (asset.priority !== undefined && (typeof asset.priority !== "number" || !Number.isSafeInteger(asset.priority) || asset.priority < 0)) return serializationFailure("The canonical asset priority directive is invalid.");
+  if (asset.mergeMode !== undefined && asset.mergeMode !== "additive" && asset.mergeMode !== "exclusive") return serializationFailure("The canonical asset merge mode directive is invalid.");
+  if (asset.mergeGroup !== undefined && (typeof asset.mergeGroup !== "string" || !isLowerKebabToken(asset.mergeGroup))) return serializationFailure("The canonical asset merge group directive is invalid.");
+  if (asset.mergeMode === "exclusive" && asset.mergeGroup === undefined) return serializationFailure("Exclusive merge mode requires a merge group.", "invalid_merge_group");
   if (asset.scope === null || typeof asset.scope !== "object") return serializationFailure("The canonical asset scope is invalid.");
   if (!Array.isArray(asset.requires) || !isSortedAndUnique(asset.requires)) return serializationFailure("The canonical asset requires list is not normalized.", "duplicate_value");
 
@@ -453,10 +520,14 @@ export const serializeCanonicalAsset = (
     return { ok: true, value: undefined };
   };
   lines.push("---");
-  if (!append("schema-version", "1").ok) return serializationFailure("The schema version cannot be serialized.");
+  if (!append("schema-version", "2").ok) return serializationFailure("The schema version cannot be serialized.");
   if (!append("id", asset.id).ok) return serializationFailure("The canonical asset id cannot be serialized.", "invalid_asset_id");
   if (!append("type", asset.type).ok || !append("tier", asset.tier).ok) return serializationFailure("The canonical asset type or tier cannot be serialized.");
   if (asset.lifecycle !== undefined && !append("lifecycle", asset.lifecycle).ok) return serializationFailure("The canonical asset lifecycle cannot be serialized.");
+  if (asset.mandatory !== undefined) lines.push(`mandatory: ${asset.mandatory}`);
+  if (asset.priority !== undefined) lines.push(`priority: ${asset.priority}`);
+  if (asset.mergeMode !== undefined) lines.push(`merge-mode: ${asset.mergeMode}`);
+  if (asset.mergeGroup !== undefined) lines.push(`merge-group: ${asset.mergeGroup}`);
 
   for (const axis of ASSET_SCOPE_AXES) {
     const values = asset.scope[axis];

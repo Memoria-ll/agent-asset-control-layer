@@ -38,6 +38,7 @@ const catalog = (): MetadataCatalog => {
   const role = projectRoleDefinition(canonicalAsset(`---
 id: reviewer
 type: role
+schema-version: 2
 tier: core
 metadata.display-name: Reviewer
 ---
@@ -45,6 +46,7 @@ metadata.display-name: Reviewer
   const taskType = projectTaskTypeDefinition(canonicalAsset(`---
 id: drafting
 type: task-type
+schema-version: 2
 tier: core
 metadata.display-name: Drafting
 ---
@@ -88,6 +90,7 @@ const basicDefinitionBody = {
 const workflowAsset = (body: unknown, id = "review-flow") => canonicalAsset(`---
 id: ${id}
 type: workflow
+schema-version: 2
 tier: core
 ---
 ${fence}aacl-workflow
@@ -141,6 +144,7 @@ describe("workflow definition domain", () => {
       canonicalAsset(`---
 id: review-flow
 type: workflow
+schema-version: 2
 tier: core
 ---
 body`),
@@ -152,6 +156,7 @@ body`),
       canonicalAsset(`---
 id: review-flow
 type: workflow
+schema-version: 2
 tier: core
 ---
 ${fence}aacl-workflow
@@ -168,6 +173,7 @@ ${fence}`),
       canonicalAsset(`---
 id: review-flow
 type: workflow
+schema-version: 2
 tier: core
 ---
 ${fence}aacl-workflow
@@ -183,6 +189,7 @@ ${fence}`),
       canonicalAsset(`---
 id: review-flow
 type: workflow
+schema-version: 2
 tier: core
 ---
 ${fence}markdown
@@ -198,6 +205,7 @@ ${fence}`),
       canonicalAsset(`---
 id: review-flow
 type: workflow
+schema-version: 2
 tier: core
 ---
 ${fence}markdown
@@ -211,6 +219,7 @@ ${JSON.stringify(basicDefinitionBody)}`),
       canonicalAsset(`---
 id: review-flow
 type: workflow
+schema-version: 2
 tier: core
 ---
   \`\`\`aacl-workflow
