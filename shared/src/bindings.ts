@@ -1,9 +1,9 @@
 import * as z from "zod/mini";
 import {
+  AssetId,
   AssetRevision,
   BindingId,
   ModelId,
-  ProjectId,
   ProviderId,
   RoleId,
   RuntimeId,
@@ -40,6 +40,7 @@ export const BINDING_REASON_KINDS = [
   "target_provider_mismatch",
   "capability_unavailable",
   "capability_not_allowed",
+  "requirement_unavailable",
   "fallback_not_needed",
   "fallback_primary_unavailable",
   "invalid_binding",
@@ -90,7 +91,7 @@ export type BindingTargetDto = z.infer<typeof BindingTargetDto>;
 export type BindingTargetDtoInput = z.input<typeof BindingTargetDto>;
 
 export const BindingScopeDto = z.strictObject({
-  projectId: z.optional(uniqueNonEmpty(ProjectId)),
+  projectId: z.optional(uniqueNonEmpty(ProjectMarkerId)),
   workflowId: z.optional(uniqueNonEmpty(WorkflowId)),
   stageId: z.optional(uniqueNonEmpty(StageId)),
   taskTypeId: z.optional(uniqueNonEmpty(TaskTypeId)),
@@ -184,6 +185,10 @@ const unavailableBindingReasonArms = [
   }),
   z.strictObject({ kind: z.literal("capability_unavailable"), capabilityId: NonEmptyString }),
   z.strictObject({ kind: z.literal("capability_not_allowed"), capabilityId: NonEmptyString }),
+  // One per unsatisfied `requires` entry, mirroring the capability arms. Why the
+  // requirement failed is a property of the whole resolution rather than of this
+  // Binding, so it travels in the response diagnostics instead.
+  z.strictObject({ kind: z.literal("requirement_unavailable"), requirementId: AssetId }),
   z.strictObject({ kind: z.literal("fallback_not_needed"), primaryBindingId: BindingId }),
   z.strictObject({ kind: z.literal("invalid_binding"), bindingId: BindingId }),
 ] as const;

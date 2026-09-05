@@ -40,7 +40,7 @@ describe("frozen contract enum values", () => {
     ["BINDING_TARGET_KINDS", BINDING_TARGET_KINDS, ["provider", "runtime", "model", "runtime-model"]],
     ["BINDING_SCOPE_AXES", BINDING_SCOPE_AXES, ["projectId", "workflowId", "stageId", "taskTypeId", "roleId", "providerId", "runtimeId", "modelId", "directory"]],
     ["BINDING_CANDIDATE_STATUSES", BINDING_CANDIDATE_STATUSES, ["eligible", "unavailable", "fallback"]],
-    ["BINDING_REASON_KINDS", BINDING_REASON_KINDS, ["eligible", "scope_mismatch", "binding_disabled", "binding_overridden", "target_missing", "target_provider_mismatch", "capability_unavailable", "capability_not_allowed", "fallback_not_needed", "fallback_primary_unavailable", "invalid_binding"]],
+    ["BINDING_REASON_KINDS", BINDING_REASON_KINDS, ["eligible", "scope_mismatch", "binding_disabled", "binding_overridden", "target_missing", "target_provider_mismatch", "capability_unavailable", "capability_not_allowed", "requirement_unavailable", "fallback_not_needed", "fallback_primary_unavailable", "invalid_binding"]],
     ["BINDING_SOURCE_LAYERS", BINDING_SOURCE_LAYERS, ["global", "personal", "project"]],
   ])("keeps %s stable", (_name, members, expected) => {
     expect(

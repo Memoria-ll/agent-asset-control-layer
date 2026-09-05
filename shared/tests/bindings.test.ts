@@ -22,6 +22,11 @@ describe("Binding shared contract", () => {
     expect(() => parseBindingTargetDto({ kind: "provider", providerId: "openai", modelId: "gpt-5" })).toThrow();
   });
 
+  it("accepts only Marker-shaped Project ids in a Binding scope", () => {
+    expect(parseBindingScopeDto({ projectId: ["project-1"] })).toEqual({ projectId: ["project-1"] });
+    expect(() => parseBindingScopeDto({ projectId: ["x"] })).toThrow();
+  });
+
   it("requires non-empty unique scope lists and preserves omitted keys", () => {
     expect(parseBindingScopeDto({ roleId: ["reviewer"] })).toEqual({ roleId: ["reviewer"] });
     expect(() => parseBindingScopeDto({ roleId: [] })).toThrow();

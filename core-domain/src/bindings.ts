@@ -12,6 +12,7 @@ import type {
   RuntimeId,
 } from "@aacl/shared";
 import type { AssetId } from "@aacl/shared";
+import { isProjectMarkerId } from "@aacl/shared";
 import {
   parseAssetDocument,
   validateAsset,
@@ -127,6 +128,18 @@ export const parseBindingAsset = (asset: CanonicalAsset): AssetResult<CanonicalB
   if (asset.operation === "disable" && (Object.hasOwn(asset.metadata, "target-kind") || Object.hasOwn(asset.metadata, "provider-id") || Object.hasOwn(asset.metadata, "runtime-id") || Object.hasOwn(asset.metadata, "model-id") || Object.hasOwn(asset.metadata, "fallback-for"))) {
     details.push(detail(["document", "frontmatter", "metadata"], "disable_target_metadata", "A disabled Binding must not declare target or fallback metadata."));
   }
+  // A Project id no Marker can mint names a Project that will never be in any
+  // context, so the declared scope could only ever match nothing. Rejecting it
+  // here is what keeps such a value out of the published `BindingScopeDto`,
+  // which the projection excludes as a diagnostic rather than shipping.
+  for (const projectId of asset.scope.project ?? []) {
+    if (isProjectMarkerId(projectId)) continue;
+    details.push(detail(
+      ["document", "frontmatter", "scope.project"],
+      "invalid_project_id",
+      `Binding scope.project "${projectId}" is not a Project Marker identity.`,
+    ));
+  }
   const fallbackValue = scalarMetadata(asset, "fallback-for", details, false);
   const fallbackFor = fallbackValue === undefined ? undefined : asBindingId(fallbackValue as AssetId);
   if (fallbackValue !== undefined && !/^(?!.*--)[a-z](?:[a-z0-9-]{0,126}[a-z0-9])?$/.test(fallbackValue)) {
@@ -216,9 +229,24 @@ const reasonForGeneric = (reason: CandidateReason, bindingId: BindingId): Bindin
     case "disabled": return [{ kind: "binding_disabled", actorBindingId: asBindingId(reason.disabledBy) }];
     case "overridden": return [{ kind: "binding_overridden", actorBindingId: asBindingId(reason.overriddenBy) }];
     case "unavailable":
-      if (reason.cause === "capability_not_allowed") return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_not_allowed", capabilityId: id }));
-      if (reason.cause === "capability_unavailable") return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_unavailable", capabilityId: id }));
-      return [{ kind: "invalid_binding", bindingId }];
+      // Exhaustive on purpose, with no `default`: a cause with no arm of its own
+      // used to fall through to `invalid_binding`, which describes a well-formed
+      // Binding as malformed and drops the ids the resolver had already worked
+      // out. A new cause now leaves this function without a return and fails to
+      // compile rather than reaching that fallback.
+      switch (reason.cause) {
+        case "capability_not_allowed":
+          return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_not_allowed", capabilityId: id }));
+        case "capability_unavailable":
+          return (reason.failedCapabilities ?? []).map((id) => ({ kind: "capability_unavailable", capabilityId: id }));
+        case "missing_requirement":
+        case "requirement_out_of_scope":
+        case "requirement_disabled":
+        case "requirement_overridden":
+        case "requirement_cycle":
+        case "requirement_invalid":
+          return reason.failedRequirements.map((id) => ({ kind: "requirement_unavailable", requirementId: id }));
+      }
   }
 };
 
@@ -286,11 +314,21 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   // survives as one reason per axis; the other two collapse to `invalid_binding`,
   // so without this the caller sees an unavailable Binding and nothing to correct
   // it by — neither the offending selector nor which assets conflicted.
-  for (const { evaluation } of base) {
-    const reason = evaluation.reason;
-    if (reason.kind !== "excluded") continue;
-    if (reason.cause === "invalid_directory") diagnostics.push(...reason.diagnostics);
-    if (reason.cause === "resolution_conflict") diagnostics.push(...toResolutionConflictDetails(reason.conflict));
+  for (const state of base) {
+    const reason = state.evaluation.reason;
+    if (reason.kind === "excluded") {
+      if (reason.cause === "invalid_directory") diagnostics.push(...reason.diagnostics);
+      if (reason.cause === "resolution_conflict") diagnostics.push(...toResolutionConflictDetails(reason.conflict));
+      continue;
+    }
+    // The reason arm names which requirement failed; only the resolver knows why.
+    if (reason.kind === "unavailable" && reason.failedRequirements.length > 0) {
+      diagnostics.push(detail(
+        ["binding", String(state.binding.bindingId), "requires"],
+        reason.cause,
+        `The Binding requirement is unavailable: ${reason.cause}.`,
+      ));
+    }
   }
   const statesByBindingId = new Map<BindingId, BindingState[]>();
   for (const state of base) {
@@ -334,6 +372,23 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     if (cyclic.has(state.binding.bindingId)) return "fallback_cycle";
     return undefined;
   };
+
+  // Reported for every Binding whose relation is in force, not only for those
+  // that would otherwise have been eligible. A cycle whose members all have
+  // missing targets is still a cycle, and it is the defect the author has to
+  // fix — leaving it to the candidate reason hides it behind `target_missing`.
+  for (const state of base) {
+    if (!state.included) continue;
+    const broken = brokenFallback(state);
+    if (broken === undefined) continue;
+    diagnostics.push(detail(
+      ["binding", String(state.binding.bindingId), "fallbackFor"],
+      broken,
+      broken === "missing_fallback_primary"
+        ? "The fallback primary Binding is missing."
+        : "The Binding fallback relation contains a cycle.",
+    ));
+  }
 
   /**
    * Whether the preference chain rooted at this Binding already has an eligible
@@ -387,16 +442,8 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
       });
       continue;
     }
-    const broken = brokenFallback(item);
-    if (broken !== undefined) {
+    if (brokenFallback(item) !== undefined) {
       candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "invalid_binding", bindingId: binding.bindingId }], ...candidateBase });
-      diagnostics.push(detail(
-        ["binding", binding.bindingId, "fallbackFor"],
-        broken,
-        broken === "missing_fallback_primary"
-          ? "The fallback primary Binding is missing."
-          : "The Binding fallback relation contains a cycle.",
-      ));
       continue;
     }
     if (primaryId === undefined) {

@@ -329,6 +329,90 @@ describe("binding resolution", () => {
     ]));
   });
 
+  it("names the unsatisfied requirement instead of calling the Binding malformed", () => {
+    const dependent = binding(
+      "reviewer-dependent",
+      "metadata.target-kind: model\nmetadata.model-id: gpt-5\n",
+      "requires: [missing-asset]\nscope.role: [reviewer]\n",
+    );
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([dependent]),
+      catalog,
+    }));
+
+    expect(result.candidates[0]).toMatchObject({
+      status: "unavailable",
+      reasons: [{ kind: "requirement_unavailable", requirementId: "missing-asset" }],
+    });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "missing_requirement",
+        path: ["binding", "reviewer-dependent", "requires"],
+      }),
+    ]));
+  });
+
+  it("reports a fallback cycle even when every member's target is missing", () => {
+    const left = binding("cycle-left", "metadata.target-kind: model\nmetadata.model-id: missing-model\nmetadata.fallback-for: cycle-right\n", "scope.role: [reviewer]\n");
+    const right = binding("cycle-right", "metadata.target-kind: model\nmetadata.model-id: missing-model\nmetadata.fallback-for: cycle-left\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([left, right]),
+      catalog,
+    }));
+
+    for (const bindingId of ["cycle-left", "cycle-right"]) {
+      expect(result.candidates.find((candidate) => candidate.definition?.bindingId === bindingId))
+        .toMatchObject({ status: "unavailable", reasons: [{ kind: "target_missing", targetId: "missing-model" }] });
+    }
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "fallback_cycle" }),
+    ]));
+  });
+
+  it("reports a missing fallback primary even when the fallback's own target is missing", () => {
+    const orphan = binding(
+      "orphan-fallback",
+      "metadata.target-kind: model\nmetadata.model-id: missing-model\nmetadata.fallback-for: absent-primary\n",
+      "scope.role: [reviewer]\n",
+    );
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([orphan]),
+      catalog,
+    }));
+
+    expect(result.candidates[0]).toMatchObject({
+      status: "unavailable",
+      reasons: [{ kind: "target_missing", targetId: "missing-model" }],
+    });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "missing_fallback_primary" }),
+    ]));
+  });
+
+  it("rejects a Binding whose declared Project scope is not a Marker identity", () => {
+    const result = parseBindingDocument(`---
+schema-version: 3
+id: bad-project-scope
+type: binding
+tier: core
+operation: add
+scope.project: [not-a-marker]
+metadata.target-kind: model
+metadata.model-id: gpt-5
+---
+`);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.details).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "invalid_project_id",
+          path: ["document", "frontmatter", "scope.project"],
+        }),
+      ]));
+    }
+  });
+
   it("keeps the resolver conflict diagnostics on an unavailable Binding", () => {
     const orphan = binding(
       "orphan-override",

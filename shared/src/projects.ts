@@ -6,14 +6,23 @@ import { DirectoryPath, NonEmptyString } from "./primitives.ts";
 export const PROJECT_MARKER_SCHEMA_VERSION = 1;
 export const PROJECT_MARKER_ID_MAX_LENGTH = 128;
 
+const PROJECT_MARKER_ID_PATTERN = /^project-[a-z0-9-]+$/;
+
 /**
  * A Project identity as the Marker defines it. Every Project id Core can ever
- * observe comes from a Marker, so any DTO field Core *produces* a Project id
- * into carries this rather than the bare branded id.
+ * observe comes from a Marker, so a DTO field naming a Project carries this
+ * rather than the bare branded id.
  */
 export const ProjectMarkerId = ProjectId
-  .check(z.regex(/^project-[a-z0-9-]+$/))
+  .check(z.regex(PROJECT_MARKER_ID_PATTERN))
   .check(z.maxLength(PROJECT_MARKER_ID_MAX_LENGTH));
+
+/**
+ * The same constraint as plain JavaScript, for consumers outside this package:
+ * the schema is an implementation detail they must not import.
+ */
+export const isProjectMarkerId = (value: string): boolean =>
+  PROJECT_MARKER_ID_PATTERN.test(value) && value.length <= PROJECT_MARKER_ID_MAX_LENGTH;
 
 /** The durable identity stored at `<project-root>/.aacl/project.json`. */
 export const ProjectMarkerDto = z.strictObject({

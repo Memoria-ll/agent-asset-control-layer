@@ -293,6 +293,7 @@ export { parseVersionInfo, tryParseVersionInfo } from "./contract-version.ts";
 
 export {
   createProjectMarkerDto,
+  isProjectMarkerId,
   parseProjectMarkerDto,
   tryParseProjectMarkerDto,
   parseProjectInitRequest,
