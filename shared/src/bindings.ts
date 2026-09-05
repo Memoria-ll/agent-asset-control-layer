@@ -235,6 +235,10 @@ export const BindingCandidateDto = z.discriminatedUnion("status", [
   }
   if (candidate.definition !== undefined && candidate.definition.bindingId !== candidate.bindingId) return false;
   return candidate.reasons.every((reason) => {
+    // The only reason arm naming the Binding it is about rather than another
+    // one: `binding_disabled` and `binding_overridden` name the actor, which a
+    // same-ID overlay makes equal to this candidate and a cross-ID one does not.
+    if (reason.kind === "invalid_binding") return reason.bindingId === candidate.bindingId;
     if (reason.kind !== "fallback_not_needed" && reason.kind !== "fallback_primary_unavailable") return true;
     return candidate.definition?.fallbackFor === reason.primaryBindingId;
   });

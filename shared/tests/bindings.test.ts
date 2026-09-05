@@ -129,6 +129,22 @@ describe("Binding shared contract", () => {
       revision: "revision-1",
       loadingTier: "core",
     })).toThrow();
+    expect(() => parseBindingCandidateDto({
+      status: "unavailable",
+      bindingId: "binding-1",
+      reasons: [{ kind: "invalid_binding", bindingId: "binding-2" }],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toThrow();
+    expect(parseBindingCandidateDto({
+      status: "unavailable",
+      bindingId: "binding-1",
+      reasons: [{ kind: "binding_overridden", actorBindingId: "binding-2" }],
+      source: { layer: "global" },
+      revision: "revision-1",
+      loadingTier: "core",
+    })).toMatchObject({ bindingId: "binding-1" });
   });
 
   it("parses a fallback candidate's own reason through the standalone reason schema", () => {

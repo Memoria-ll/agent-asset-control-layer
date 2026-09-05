@@ -268,6 +268,43 @@ describe("binding resolution", () => {
       .toMatchObject({ status: "unavailable", reasons: [{ kind: "fallback_not_needed", primaryBindingId: "chain-first" }] });
   });
 
+  it("does not let a Binding with a missing primary cover the chain beneath it", () => {
+    const first = binding("chain-first", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-absent\n", "scope.role: [reviewer]\n");
+    const second = binding("chain-second", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: chain-first\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([first, second]),
+      catalog,
+    }));
+
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-first"))
+      .toMatchObject({ status: "unavailable", reasons: [{ kind: "invalid_binding", bindingId: "chain-first" }] });
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "chain-second"))
+      .toMatchObject({ status: "fallback", reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "chain-first" }] });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "missing_fallback_primary" }),
+    ]));
+  });
+
+  it("does not let a cyclic Binding cover the chain beneath it", () => {
+    const left = binding("cycle-left", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: cycle-right\n", "scope.role: [reviewer]\n");
+    const right = binding("cycle-right", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: cycle-left\n", "scope.role: [reviewer]\n");
+    const below = binding("cycle-below", "metadata.target-kind: model\nmetadata.model-id: gpt-5\nmetadata.fallback-for: cycle-right\n", "scope.role: [reviewer]\n");
+    const result = unwrap(resolveBindings({
+      entries: entriesFor([left, right, below]),
+      catalog,
+    }));
+
+    for (const bindingId of ["cycle-left", "cycle-right"]) {
+      expect(result.candidates.find((candidate) => candidate.definition?.bindingId === bindingId))
+        .toMatchObject({ status: "unavailable", reasons: [{ kind: "invalid_binding", bindingId }] });
+    }
+    expect(result.candidates.find((candidate) => candidate.definition?.bindingId === "cycle-below"))
+      .toMatchObject({ status: "fallback", reasons: [{ kind: "fallback_primary_unavailable", primaryBindingId: "cycle-right" }] });
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "fallback_cycle" }),
+    ]));
+  });
+
   it("keeps the offending directory selector diagnostics on an unavailable Binding", () => {
     const invalid = binding(
       "reviewer-directory",

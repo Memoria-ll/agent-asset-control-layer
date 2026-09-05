@@ -311,6 +311,19 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
   for (const id of fallbackIds.keys()) visit(id, []);
 
   /**
+   * Why this state's own fallback relation makes it unavailable, whatever its
+   * scope and target say. Chain coverage and the candidate loop below read the
+   * one predicate, so a Binding the response reports as unavailable can never
+   * stand in for the chain it belongs to.
+   */
+  const brokenFallback = (state: BindingState): "missing_fallback_primary" | "fallback_cycle" | undefined => {
+    const primary = state.binding.fallbackFor;
+    if (primary !== undefined && !statesByBindingId.has(primary)) return "missing_fallback_primary";
+    if (cyclic.has(state.binding.bindingId)) return "fallback_cycle";
+    return undefined;
+  };
+
+  /**
    * Whether the preference chain rooted at this Binding already has an eligible
    * member. A fallback activates on the whole chain being unserved, not on its
    * immediate primary standing down: alternating the answer at every edge makes
@@ -329,6 +342,7 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
     }
     const nested = new Set([...path, String(id)]);
     const covered = states.some((state) => {
+      if (brokenFallback(state) !== undefined) return false;
       if (state.eligible) return true;
       const primary = state.binding.fallbackFor;
       return primary !== undefined && isChainCovered(primary, nested);
@@ -356,14 +370,16 @@ export const resolveBindings = (input: BindingResolutionInput): AssetResult<Bind
       });
       continue;
     }
-    if (primaryId !== undefined && !statesByBindingId.has(primaryId)) {
+    const broken = brokenFallback(item);
+    if (broken !== undefined) {
       candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "invalid_binding", bindingId: binding.bindingId }], ...candidateBase });
-      diagnostics.push(detail(["binding", binding.bindingId, "fallbackFor"], "missing_fallback_primary", "The fallback primary Binding is missing."));
-      continue;
-    }
-    if (cyclic.has(binding.bindingId)) {
-      candidates.push({ status: "unavailable", bindingId: binding.bindingId, ...optionalDefinition(binding), reasons: [{ kind: "invalid_binding", bindingId: binding.bindingId }], ...candidateBase });
-      diagnostics.push(detail(["binding", binding.bindingId, "fallbackFor"], "fallback_cycle", "The Binding fallback relation contains a cycle."));
+      diagnostics.push(detail(
+        ["binding", binding.bindingId, "fallbackFor"],
+        broken,
+        broken === "missing_fallback_primary"
+          ? "The fallback primary Binding is missing."
+          : "The Binding fallback relation contains a cycle.",
+      ));
       continue;
     }
     if (primaryId === undefined) {
