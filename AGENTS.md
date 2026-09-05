@@ -93,6 +93,8 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   capability offer が 0 件であることを意味する。
 - `ResolutionResult.context.directory` は caller の入力表現、`scope.directory` は matching 用の
   正規化表現。再現には前者、同一性判定には後者を使う。
+- `overridden` の reason / status DTO の `mergeGroup` は optional。same-ID overlay は merge group に
+  属さず欄自体を持たないので、消費側は必須欄として読まず、生成側は `undefined` をキーごと省く。
 - capability offer は provider identity を持たない。同一 capability と features の offer は
   producer が permission を `allowed` / `denied` に畳み、1件として渡す。
 - on-disk scope axis と resolution context axis は名前が異なる。`CanonicalAsset.scope` から

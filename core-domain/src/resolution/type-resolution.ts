@@ -139,7 +139,7 @@ export const dynamicReason = (state: CandidateState, pass: OperationPass): Candi
     if (status?.kind === "overridden") return {
       kind: "overridden",
       overriddenBy: status.overriddenBy,
-      mergeGroup: status.mergeGroup,
+      ...(status.mergeGroup === undefined ? {} : { mergeGroup: status.mergeGroup }),
       winnerRank: status.winnerRank,
     };
     if (status?.kind === "conflict") return resolutionConflictReason(status.conflict, state.rank);

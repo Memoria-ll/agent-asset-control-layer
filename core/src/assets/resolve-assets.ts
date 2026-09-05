@@ -134,27 +134,37 @@ export const resolveAssets = async (
   if (rootFailure !== undefined) return { ok: false, failure: rootFailure.failure };
 
   const projection = toResolutionSnapshot(listed.assets, options.contracts);
-  const loadingTiers = request.loadingTiers === undefined
-    ? undefined
-    : new Set(request.loadingTiers);
-  const snapshot = loadingTiers === undefined
-    ? projection.snapshot
-    : {
-        candidates: projection.snapshot.candidates.filter((candidate) =>
-          loadingTiers.has(candidate.loadingTier)),
-      };
   const resolved = resolveScope({
     context,
-    snapshot,
+    snapshot: projection.snapshot,
     capabilityContext: options.capabilityContext,
     ...(options.contracts === undefined ? {} : { contracts: options.contracts }),
   });
   if (!resolved.ok) return resolved;
 
+  // The requested loading tiers choose what is delivered, never what is resolved.
+  // Nothing ties an overlay's tier to its target's, and `requires` crosses tiers
+  // just as freely: filtering the snapshot first drops the issuer and silently
+  // leaves the target included, or drops the target and reports an
+  // operation_conflict against an asset the caller never asked about.  `outcome`
+  // and `conflicts` stay unfiltered for the same reason — they describe the whole
+  // resolution, and a conflict hidden because its assets sit in another tier reads
+  // as a clean result.
+  const loadingTiers = request.loadingTiers === undefined
+    ? undefined
+    : new Set(request.loadingTiers);
+  const resolution = loadingTiers === undefined
+    ? resolved.value
+    : {
+        ...resolved.value,
+        evaluations: resolved.value.evaluations.filter(({ candidate }) =>
+          loadingTiers.has(candidate.loadingTier)),
+      };
+
   return {
     ok: true,
     value: {
-      resolution: resolved.value,
+      resolution,
       assets: listed.assets,
       storeDiagnostics: listed.failures,
       projectionExclusions: projection.excluded,

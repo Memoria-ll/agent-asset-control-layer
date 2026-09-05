@@ -56,10 +56,14 @@ const assetFromDocument = (source: string): CanonicalAsset => {
   return unwrap(validateAsset(parsed));
 };
 
-const workflowDocument = (id: string, body: string): string => [
+const workflowDocument = (
+  id: string,
+  body: string,
+  operation: "add" | "override" | "disable" = "add",
+): string => [
   "---",
   "schema-version: 3",
-  "operation: add",
+  `operation: ${operation}`,
   `id: ${id}`,
   "type: workflow",
   "tier: core",
@@ -185,6 +189,24 @@ describe("filesystem workflow definition loader", () => {
       expect(result.assetDiagnostics).toHaveLength(1);
       expect(result.assetDiagnostics[0]?.failure.details?.[0]?.path).toEqual([
         "root", "global", "file", "broken.md", "frontmatter", "tier",
+      ]);
+    }
+  });
+
+  it.each(["override", "disable"] as const)("refuses to execute a %s overlay it cannot resolve", async (operation) => {
+    const fixtureValue = await fixture([{
+      path: "workflows/review-flow.md",
+      document: workflowDocument("review-flow", validBody(), operation),
+    }]);
+
+    const result = await load(fixtureValue.store);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.code).toBe("invalid_request");
+      expect(result.failure.details?.[0]?.code).toBe("unresolved_asset_operation");
+      expect(result.failure.details?.[0]?.path).toEqual([
+        "root", "global", "file", "workflows/review-flow.md", "asset", "operation",
       ]);
     }
   });

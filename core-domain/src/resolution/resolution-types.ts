@@ -101,7 +101,8 @@ export type CandidateReason =
   | {
       readonly kind: "overridden";
       readonly overriddenBy: AssetId;
-      readonly mergeGroup: string;
+      /** Absent for a same-ID overlay, which stands in no merge group. */
+      readonly mergeGroup?: string;
       readonly winnerRank: ResolutionRank;
     }
   | {
@@ -229,7 +230,7 @@ export type CandidateRecord = {
 export type FixedStatus =
     | { readonly kind: "included" }
     | { readonly kind: "disabled"; readonly disabledBy: AssetId }
-    | { readonly kind: "overridden"; readonly overriddenBy: AssetId; readonly mergeGroup: string; readonly winnerRank: ResolutionRank }
+    | { readonly kind: "overridden"; readonly overriddenBy: AssetId; readonly mergeGroup?: string; readonly winnerRank: ResolutionRank }
     | { readonly kind: "conflict"; readonly conflict: ResolutionConflict };
 export type OperationAction = { readonly issuer: CandidateState; readonly target: CandidateState; readonly kind: "override" | "disable" };
 export type OperationFailure = { readonly issuer: CandidateState; readonly conflict: ResolutionConflict };

@@ -160,6 +160,31 @@ describe("resolveAssets", () => {
       : { kind: "disabled", disabledBy: "shared-rule" });
   });
 
+  it.each(["override", "disable"] as const)(
+    "applies a Project-local %s whose loading tier the request excludes",
+    async (operation) => {
+      const fixture = await makeFixture();
+      const project = await initializeProject(fixture, "project", "tier");
+      await writeAsset(fixture.globalRoot.directory, "target.md", rule("shared-rule"));
+      await writeAsset(join(project.root, ".aacl"), "overlay.md", rule("shared-rule", {
+        operation,
+        tier: "discoverable",
+      }));
+      const service = createProjectService({ registry: createProjectRegistry(fixture.registryPath) });
+
+      const result = unwrap(await resolve(
+        service,
+        [fixture.globalRoot, fixture.personalRoot],
+        request(project.root, undefined, ["core"]),
+      ));
+
+      expect(result.resolution.evaluations.map(({ candidate }) => candidate.loadingTier)).toEqual(["core"]);
+      expect(result.resolution.evaluations[0]?.reason).toMatchObject(operation === "override"
+        ? { kind: "overridden", overriddenBy: "shared-rule" }
+        : { kind: "disabled", disabledBy: "shared-rule" });
+    },
+  );
+
   it("reads the latest shared Asset revision on every call", async () => {
     const fixture = await makeFixture();
     const path = join(fixture.globalRoot.directory, "changing.md");
