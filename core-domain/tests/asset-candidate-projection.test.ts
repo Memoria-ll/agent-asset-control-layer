@@ -162,4 +162,64 @@ describe("asset candidate projection", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("excludes a candidate whose supplied contract disallows the add operation", () => {
+    const contracts = {
+      ...DEFAULT_ASSET_TYPE_CONTRACTS,
+      rule: { ...DEFAULT_ASSET_TYPE_CONTRACTS.rule, allowedOperationKinds: ["override", "disable"] as const },
+    };
+    const result = toAssetCandidate(assetFromDocument(assetDocument("no-add", "rule")), origin, contracts);
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: {
+        code: "invalid_request",
+        details: [{ code: "operation_not_allowed", path: ["asset", "no-add", "operation"] }],
+      },
+    });
+  });
+
+  it("binds an asset stored in a project root to that project", () => {
+    const candidate = unwrap(toAssetCandidate(
+      assetFromDocument(assetDocument("owned-rule", "rule")),
+      { ...origin, owningProjectId: "project-one" },
+    ));
+
+    expect(candidate.rule.selectors).toEqual({ projectId: ["project-one"] });
+  });
+
+  it("intersects a declared project scope with the owning project", () => {
+    const candidate = unwrap(toAssetCandidate(
+      assetFromDocument(assetDocument("narrowed-rule", "rule", "scope.project: [project-one, project-two]\n")),
+      { ...origin, owningProjectId: "project-one" },
+    ));
+
+    expect(candidate.rule.selectors).toEqual({ projectId: ["project-one"] });
+  });
+
+  it("excludes a declared project scope that omits the owning project", () => {
+    const result = toAssetCandidate(
+      assetFromDocument(assetDocument("foreign-rule", "rule", "scope.project: [project-two]\n")),
+      { ...origin, owningProjectId: "project-one" },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: {
+        code: "invalid_request",
+        details: [{ code: "project_scope_conflict", path: ["asset", "foreign-rule", "scope.project"] }],
+      },
+    });
+  });
+
+  it("leaves the project axis to the frontmatter when the origin names no owning project", () => {
+    const declared = unwrap(toAssetCandidate(
+      assetFromDocument(assetDocument("global-declared", "rule", "scope.project: [project-two]\n")),
+      origin,
+    ));
+    const omitted = unwrap(toAssetCandidate(assetFromDocument(assetDocument("global-omitted", "rule")), origin));
+
+    expect(declared.rule.selectors).toEqual({ projectId: ["project-two"] });
+    expect(Object.hasOwn(omitted.rule.selectors, "projectId")).toBe(false);
+  });
 });

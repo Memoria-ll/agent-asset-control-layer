@@ -35,6 +35,7 @@ export const toResolutionSnapshot = (
       {
         revision: stored.revision,
         source: { layer: stored.source.kind, sourceId: sourceIdFor(stored.source) },
+        ...(stored.source.kind === "project" ? { owningProjectId: stored.source.projectId } : {}),
       },
       contracts,
     );

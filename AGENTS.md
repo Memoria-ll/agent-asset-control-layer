@@ -99,7 +99,14 @@ resolution を担う local-first Core と、その Workbench となる VS Code E
   resolution candidate への projection は明示的な対応表で行う。
 - `ResolutionSnapshot` を組み立てる producer は、Asset Type contract に反する候補を渡す前に
   除いて診断として返す。`resolveScope` は候補1件の構造違反で snapshot 全体を
-  `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。
+  `invalid_request` にするため、1つの不正な入力が他の全候補の解決を止める。判定対象は
+  `AssetTypeContract` のうち、その producer が出力しうる値を持つ全欄。merge policy だけを
+  見て `allowedOperationKinds` を見落とすと、`resolveScope` 側の同名判定が snapshot 全体を
+  落とす経路が残る。
+- Asset の on-disk 位置は適用条件そのもの。project root から読んだ Asset を投影する producer は
+  `AssetProjectionSource.owningProjectId` を渡す。省略すると project A のファイルが project B の
+  候補になり、型検査もゲートも黙って通る。宣言 `scope.project` は所属 project との積を取り、
+  空になる候補は診断として除く。
 - `AssetRevision` は canonical frontmatter と body を直列化した内容の hash。同じ revision を同じ
   内容として畳む resolver の前提なので、serializer、revision 生成、resolver deduplication は一体で見直す。
 - `ExecutionInstanceId` は全 Workflow Definition を通じて一意。`workflowId` は namespace ではなく、

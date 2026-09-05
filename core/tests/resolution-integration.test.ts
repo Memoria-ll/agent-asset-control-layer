@@ -199,4 +199,77 @@ invalid
       expect(implementer.value.evaluations.find((item) => item.candidate.assetId === "flexible-rule")?.reason.kind).toBe("included");
     }
   });
+
+  it("keeps a project root's assets out of another project's resolution", async () => {
+    const oneDirectory = await mkdtemp(join(tmpdir(), "aacl-resolution-one-"));
+    const twoDirectory = await mkdtemp(join(tmpdir(), "aacl-resolution-two-"));
+    temporaryDirectories.push(oneDirectory, twoDirectory);
+    const store = unwrap(createFilesystemAssetStore([
+      { rootId: "one-root", kind: "project", projectId: "project-one", directory: oneDirectory },
+      { rootId: "two-root", kind: "project", projectId: "project-two", directory: twoDirectory },
+    ]));
+
+    await saveAsset(store, "one-root", "unscoped.md", `---
+id: project-one-rule
+type: rule
+schema-version: 2
+tier: core
+scope.role: [reviewer]
+---
+one
+`);
+    await saveAsset(store, "two-root", "unscoped.md", `---
+id: project-two-rule
+type: rule
+schema-version: 2
+tier: core
+scope.role: [reviewer]
+---
+two
+`);
+    await saveAsset(store, "two-root", "foreign.md", `---
+id: foreign-rule
+type: rule
+schema-version: 2
+tier: core
+scope.project: [project-one]
+---
+foreign
+`);
+
+    const listed = await store.list();
+    expect(listed.failures).toHaveLength(0);
+    const projection = toResolutionSnapshot(listed.assets);
+    expect(projection.excluded).toMatchObject([{
+      source: { kind: "project", projectId: "project-two", relativePath: "foreign.md" },
+      failure: { details: [{ code: "project_scope_conflict", path: ["asset", "foreign-rule", "scope.project"] }] },
+    }]);
+
+    const selectorsByAssetId = new Map(
+      projection.snapshot.candidates.map((candidate) => [String(candidate.assetId), candidate.rule.selectors] as const),
+    );
+    expect(selectorsByAssetId.get("project-one-rule")).toMatchObject({ projectId: ["project-one"] });
+    expect(selectorsByAssetId.get("project-two-rule")).toMatchObject({ projectId: ["project-two"] });
+
+    const resolved = resolveScope({
+      context: parseResolveRequest({
+        context: {
+          executionMode: "advisory_preparation",
+          workflow: { kind: "none" },
+          projectId: "project-two",
+          roleId: "reviewer",
+        },
+      }).context,
+      snapshot: projection.snapshot,
+      capabilityContext: { catalog: unwrap(buildCapabilityCatalog([])), offers: [] },
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value.evaluations.find((item) => item.candidate.assetId === "project-two-rule")?.reason.kind).toBe("included");
+    expect(resolved.value.evaluations.find((item) => item.candidate.assetId === "project-one-rule")?.reason).toMatchObject({
+      kind: "excluded",
+      cause: "scope_mismatch",
+      mismatchedAxes: ["projectId"],
+    });
+  });
 });

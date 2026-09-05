@@ -3,6 +3,7 @@ import type { CanonicalAsset } from "../assets.ts";
 import { coreFailure, type AssetResult } from "../failures.ts";
 import {
   DEFAULT_ASSET_TYPE_CONTRACTS,
+  type AssetOperationKind,
   type AssetTypeContractRegistry,
 } from "./asset-type-contracts.ts";
 import type {
@@ -16,7 +17,17 @@ import type { ResolutionAxis } from "./resolution-context.ts";
 export type AssetProjectionSource = {
   readonly revision: AssetRevision;
   readonly source: ResolutionSource;
+  /**
+   * The project that owns the file this asset was read from, when it came from
+   * a project root.  The on-disk location is itself an applicability condition:
+   * without it a file stored under project A is a candidate for project B, and
+   * the frontmatter alone cannot say otherwise.
+   */
+  readonly owningProjectId?: string;
 };
+
+/** The single operation this projection can produce; `overrides` / `disables` are #4's. */
+const PROJECTED_OPERATION_KIND: AssetOperationKind = "add";
 
 const detail = (path: readonly string[], code: string, message: string) => ({
   path: [...path],
@@ -39,6 +50,13 @@ export const toAssetCandidate = (
   contracts: AssetTypeContractRegistry = DEFAULT_ASSET_TYPE_CONTRACTS,
 ): AssetResult<AssetCandidate> => {
   const contract = contracts[asset.type];
+  if (!contract.allowedOperationKinds.includes(PROJECTED_OPERATION_KIND)) {
+    return projectionFailure(
+      "operation_not_allowed",
+      ["asset", asset.id, "operation"],
+      "The asset type does not allow this operation.",
+    );
+  }
   const resolvedMergeMode = asset.mergeMode ?? contract.mergePolicy.defaultMode;
   if (resolvedMergeMode === "exclusive" && asset.mergeGroup === undefined) {
     return projectionFailure(
@@ -55,8 +73,23 @@ export const toAssetCandidate = (
     );
   }
 
+  const declaredProjects = asset.scope.project;
+  const owningProjectId = origin.owningProjectId;
+  const projectIds = owningProjectId === undefined
+    ? declaredProjects
+    : declaredProjects === undefined
+      ? [owningProjectId]
+      : declaredProjects.filter((projectId) => projectId === owningProjectId);
+  if (owningProjectId !== undefined && projectIds !== undefined && projectIds.length === 0) {
+    return projectionFailure(
+      "project_scope_conflict",
+      ["asset", asset.id, "scope.project"],
+      "The declared project scope excludes the project the asset is stored in.",
+    );
+  }
+
   const selectors: Partial<Record<ResolutionAxis, readonly string[]>> = {
-    ...(asset.scope.project === undefined ? {} : { projectId: asset.scope.project }),
+    ...(projectIds === undefined ? {} : { projectId: projectIds }),
     ...(asset.scope.workflow === undefined ? {} : { workflowId: asset.scope.workflow }),
     ...(asset.scope.stage === undefined ? {} : { stageId: asset.scope.stage }),
     ...(asset.scope["task-type"] === undefined ? {} : { taskTypeId: asset.scope["task-type"] }),
@@ -75,7 +108,7 @@ export const toAssetCandidate = (
   const rule: ResolutionRule = {
     selectors,
     mandatory: asset.mandatory ?? false,
-    operation: { kind: "add" },
+    operation: { kind: PROJECTED_OPERATION_KIND },
     ...(Object.hasOwn(asset, "priority") ? { explicitPriority: asset.priority as number } : {}),
     requires: asset.requires,
     ...merge,
