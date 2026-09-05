@@ -183,6 +183,11 @@ const representativeInputs: Record<string, unknown> = {
   BindingResolutionRequest: {
     context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
   },
+  SelectedStageRequirementsDto: {
+    stageId: "review",
+    requiredRoleId: "reviewer",
+    requiredTaskTypeId: "code-review",
+  },
   BindingResolutionResponse: {
     context: { executionMode: "advisory_preparation", workflow: { kind: "none" } },
     candidates: [],

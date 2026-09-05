@@ -7,6 +7,7 @@ import {
   BindingRecordDto,
   BindingResolutionRequest,
   BindingResolutionResponse,
+  SelectedStageRequirementsDto,
   BindingScopeDto,
   BindingSourceDto,
   BindingTargetDto,
@@ -68,6 +69,7 @@ export const contractSchemas: Readonly<Record<string, z.core.$ZodType>> = {
   BindingCandidateDto,
   BindingResolutionRequest,
   BindingResolutionResponse,
+  SelectedStageRequirementsDto,
 };
 
 /**

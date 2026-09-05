@@ -117,6 +117,8 @@ describe("contract JSON Schemas", () => {
     for (const arm of schemas.BindingSourceDto.oneOf) expect(arm.additionalProperties).toBe(false);
     const projectSource = schemas.BindingSourceDto.oneOf.find((arm: any) => arm.properties.layer.const === "project");
     expect(projectSource.required).toEqual(["layer", "projectId"]);
+    expect(schemas.SelectedStageRequirementsDto.additionalProperties).toBe(false);
+    expect(schemas.SelectedStageRequirementsDto.required).toEqual(["stageId"]);
     expect(projectSource.properties.projectId.pattern).toBe("^project-[a-z0-9-]+$");
     expect(projectSource.properties.projectId.maxLength).toBe(128);
     // The published schema is the third representation of the reason set, beside

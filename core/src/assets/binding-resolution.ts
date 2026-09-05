@@ -5,6 +5,7 @@ import {
   type CoreErrorDetail,
   type ProjectId,
   type ResolutionContextDto,
+  type SelectedStageRequirementsDto,
 } from "@aacl/shared";
 import {
   coreFailure,
@@ -87,39 +88,31 @@ const evaluationDetails = (evaluation: ResolutionEvaluation): readonly CoreError
 };
 
 /**
- * The Role and Task Type the selected Stage requires, which the Workflow
- * Definition owns and no Binding repeats. `undefined` means the context already
- * carries every axis this can supply, so nothing has to be resolved again.
+ * What the selected Stage requires, as the Workflow Definition states it, plus
+ * the diagnostics explaining an absence.
  *
- * Read from a completed match rather than from the store, because which
+ * Read from the completed match rather than from the store, because which
  * Definition applies is itself a resolution question: a raw lookup sees a
  * same-ID Project override as two files and calls it ambiguous, and reads a
  * Definition the current scope excludes as if it applied.
+ *
+ * A Stage that cannot be resolved leaves the requirements absent and says why
+ * in the diagnostics; it never fails the request. The candidates are matched
+ * against the caller's own context, so they do not depend on this.
  */
-const workflowStageContext = (
+const selectedStageRequirements = (
   context: ResolutionContextDto,
   resolved: ResolvedAssets,
   catalog: MetadataCatalog,
-): AssetResult<ResolutionContextDto | undefined> => {
+): {
+  readonly stage?: SelectedStageRequirementsDto;
+  readonly diagnostics: readonly CoreErrorDetail[];
+} => {
   const selection = context.workflow;
-  if (selection.kind !== "selected") return { ok: true, value: undefined };
-  if (context.roleId !== undefined && context.taskTypeId !== undefined) return { ok: true, value: undefined };
+  if (selection.kind !== "selected") return { diagnostics: [] };
 
-  const workflowFailure = (
-    code: "not_found" | "conflict" | "invalid_request",
-    message: string,
-    path: readonly string[],
-    detailCode: string,
-    evaluationReasons: readonly CoreErrorDetail[] = [],
-  ): AssetResult<never> => ({
-    ok: false,
-    failure: coreFailure(code, message, [
-      { path: [...path], code: detailCode, message },
-      ...evaluationReasons,
-      // A file the store could not read is absent from the resolution, so the
-      // Workflow reads as missing for a reason only these carry.
-      ...diagnosticDetails({ ok: true, value: resolved }),
-    ]),
+  const absent = (code: string, message: string, extra: readonly CoreErrorDetail[] = []) => ({
+    diagnostics: [{ path: ["context", "workflow", "workflowId"], code, message }, ...extra],
   });
 
   const forSelection = resolved.resolution.evaluations.filter((evaluation) =>
@@ -132,80 +125,60 @@ const workflowStageContext = (
     evaluation.reason.kind === "included"
     && evaluation.candidate.rule.operation.kind !== "disable");
   if (applicable.length === 0) {
-    return workflowFailure(
-      "not_found",
-      "The selected Workflow Definition does not apply to this context.",
-      ["context", "workflow", "workflowId"],
+    return absent(
       "workflow_definition_missing",
+      "The selected Workflow Definition does not apply to this context.",
       // Why it does not apply lives in the evaluations that were filtered out;
       // without them the caller sees only that the Workflow is not there.
       forSelection.flatMap((evaluation) => evaluationDetails(evaluation)),
     );
   }
   if (applicable.length > 1) {
-    return workflowFailure(
-      "conflict",
-      "The selected Workflow Definition is not unique.",
-      ["context", "workflow", "workflowId"],
-      "workflow_definition_conflict",
-    );
+    return absent("workflow_definition_conflict", "The selected Workflow Definition is not unique.");
   }
 
   const key = evaluationCandidateKey(applicable[0]!);
   const stored = resolved.assets.find((asset) => storedCandidateKey(asset) === key);
   if (stored === undefined) {
-    return {
-      ok: false,
-      failure: coreFailure("internal", "A resolved Workflow candidate could not be matched to its stored asset.", [{
-        path: ["context", "workflow", "workflowId"],
-        code: "workflow_candidate_missing",
-        message: "A resolved Workflow candidate could not be matched to its stored asset.",
-      }]),
-    };
+    return absent(
+      "workflow_candidate_missing",
+      "A resolved Workflow candidate could not be matched to its stored asset.",
+    );
   }
   // No `unresolvedOperationFailure` here, unlike the single-file loader: an
   // `override` that won resolution is the effective Definition, and resolution
   // is what established that.
   const definition = parseWorkflowDefinitionAsset(stored.asset, catalog);
   if (!definition.ok) {
-    return {
-      ok: false,
-      failure: withFilePath(stored.source.rootId, stored.source.relativePath, definition.failure),
-    };
+    const rooted = withFilePath(stored.source.rootId, stored.source.relativePath, definition.failure);
+    return absent("workflow_definition_invalid", rooted.message, rooted.details ?? []);
   }
 
   const stage = definition.value.stages.find((item) => item.stageId === selection.stageId);
   if (stage === undefined) {
-    const message = "The selected Stage is not part of the Workflow Definition.";
     return {
-      ok: false,
-      failure: coreFailure("invalid_request", message, [{
+      diagnostics: [{
         path: ["context", "workflow", "stageId"],
         code: "workflow_stage_missing",
-        message,
-      }]),
+        message: "The selected Stage is not part of the Workflow Definition.",
+      }],
     };
   }
 
-  const derivedAxes = {
-    ...(context.roleId === undefined && stage.requiredRoleId !== undefined
-      ? { roleId: stage.requiredRoleId }
-      : {}),
-    ...(context.taskTypeId === undefined && stage.requiredTaskTypeId !== undefined
-      ? { taskTypeId: stage.requiredTaskTypeId }
-      : {}),
+  return {
+    stage: {
+      stageId: stage.stageId,
+      ...(stage.requiredRoleId === undefined ? {} : { requiredRoleId: stage.requiredRoleId }),
+      ...(stage.requiredTaskTypeId === undefined ? {} : { requiredTaskTypeId: stage.requiredTaskTypeId }),
+    },
+    diagnostics: [],
   };
-  return Object.keys(derivedAxes).length === 0
-    ? { ok: true, value: undefined }
-    : { ok: true, value: { ...context, ...derivedAxes } };
 };
 
 /** Resolve Binding Assets through the generic filesystem resolution pipeline. */
 export const resolveBindingAssets = async (
   requestInput: unknown,
-  // `deriveContext` is not among them: this service owns the Workflow Stage
-  // projection, so a caller-supplied hook could only be one that is never run.
-  options: Omit<ResolveAssetsOptions, "deriveContext">,
+  options: ResolveAssetsOptions,
   catalog: MetadataCatalog,
 ): Promise<AssetResult<BindingResolutionResponse>> => {
   const parsed = tryParseBindingResolutionRequest(requestInput);
@@ -217,11 +190,9 @@ export const resolveBindingAssets = async (
   }
 
   const { loadingTiers, ...unfilteredRequest } = parsed.value;
-  const resolved = await resolveAssets(unfilteredRequest, {
-    ...options,
-    deriveContext: (context, firstMatch) => workflowStageContext(context, firstMatch, catalog),
-  });
+  const resolved = await resolveAssets(unfilteredRequest, options);
   if (!resolved.ok) return resolved;
+  const selectedStage = selectedStageRequirements(unfilteredRequest.context, resolved.value, catalog);
 
   const bindingsByCandidate = new Map<string, StoredAsset>();
   for (const stored of resolved.value.assets) {
@@ -236,7 +207,7 @@ export const resolveBindingAssets = async (
     readonly evaluation: ResolutionEvaluation;
     readonly source: BindingSourceDto;
   }[] = [];
-  const diagnostics = diagnosticDetails(resolved);
+  const diagnostics = [...diagnosticDetails(resolved), ...selectedStage.diagnostics];
   for (const evaluation of resolved.value.resolution.evaluations) {
     if (evaluation.candidate.assetType !== "binding") continue;
     const match = bindingsByCandidate.get(evaluationCandidateKey(evaluation));
@@ -266,6 +237,7 @@ export const resolveBindingAssets = async (
     value: {
       context: resolved.value.resolution.context,
       candidates: [...candidates],
+      ...(selectedStage.stage === undefined ? {} : { stage: selectedStage.stage }),
       ...(diagnostics.length === 0 ? {} : { diagnostics }),
     },
   };

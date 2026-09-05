@@ -38,6 +38,10 @@ metadata.fallback-for: reviewer-primary
 - fallbackはbinding IDによる明示relationだけから生成する。
 - scope、Project Overlay、disable、Capability結果を既存Asset resolution経路で評価する。
 - Workflow / StageのRole・Task Type relationはWorkflow Definitionを正とし、binding Assetへ複製しない。
+- 選択StageのrequiredRoleId / requiredTaskTypeIdはresponseの`stage`欄で報告する。候補はcallerが送った
+  contextで突合し、Stage由来の値をcontextへ足さない。Stageで絞りたいcallerはその値を次の要求に載せる。
+  Definitionの適用可否はscopeとoverlayが決めるので、Definition自身が供給する値をcontextへ入れると
+  どのDefinitionが有効かがその値に依存する (#131 レビュー裁定)。
 - 自然言語、Journal、実行履歴からbindingを推測しない。
 - winner、assignment、transition、runtime invocationは生成しない。
 

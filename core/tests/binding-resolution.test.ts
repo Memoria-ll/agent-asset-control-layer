@@ -245,7 +245,7 @@ malformed
     ]));
   });
 
-  it("narrows candidates by the Role and Task Type the selected Stage requires", async () => {
+  it("reports the Stage's Role and Task Type without narrowing the candidates", async () => {
     const fixture = await makeFixture();
     await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
     await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding", { role: "reviewer" }));
@@ -253,14 +253,21 @@ malformed
 
     const response = unwrap(await resolve(fixture, selectedStageRequest()));
 
-    expect(response.context).toMatchObject({ roleId: "reviewer", taskTypeId: "code-review" });
-    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "reviewer-binding"))
-      .toMatchObject({ status: "eligible" });
-    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
-      .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
+    expect(response.stage).toEqual({
+      stageId: "review",
+      requiredRoleId: "reviewer",
+      requiredTaskTypeId: "code-review",
+    });
+    // The context the caller sent carries no Role, so both Bindings stay
+    // eligible; a caller that wants only the Stage's Role asks again with it.
+    expect(response.context).not.toHaveProperty("roleId");
+    for (const bindingId of ["reviewer-binding", "implementer-binding"]) {
+      expect(response.candidates.find((candidate) => candidate.definition?.bindingId === bindingId))
+        .toMatchObject({ status: "eligible" });
+    }
   });
 
-  it("derives the Stage axes from the Workflow the Project override makes effective", async () => {
+  it("reports the Stage of the Workflow the Project override makes effective", async () => {
     const fixture = await makeFixture();
     const projectRoot = join(fixture.root, "project");
     await mkdir(projectRoot);
@@ -270,23 +277,16 @@ malformed
       operation: "override",
       requiredRoleId: "implementer",
     }));
-    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding", { role: "reviewer" }));
-    await write(fixture.globalRoot.directory, "implementer.md", binding("implementer-binding", { role: "implementer" }));
 
     const response = unwrap(await resolve(fixture, {
       ...selectedStageRequest(),
       ide: { workspaceFolder: projectRoot },
     }));
 
-    // The override is the effective Definition, so its Stage's Role decides.
-    expect(response.context).toMatchObject({ roleId: "implementer" });
-    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
-      .toMatchObject({ status: "eligible" });
-    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "reviewer-binding"))
-      .toMatchObject({ status: "unavailable", reasons: [{ kind: "scope_mismatch", axis: "roleId" }] });
+    expect(response.stage).toMatchObject({ requiredRoleId: "implementer" });
   });
 
-  it("treats a disabled Workflow as inapplicable rather than reading the directive", async () => {
+  it("reports no Stage for a disabled Workflow and says why", async () => {
     const fixture = await makeFixture();
     const projectRoot = join(fixture.root, "project");
     await mkdir(projectRoot);
@@ -304,43 +304,40 @@ malformed
     ].join("\n"));
     await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding"));
 
-    const result = await resolve(fixture, {
+    const response = unwrap(await resolve(fixture, {
       ...selectedStageRequest(),
       ide: { workspaceFolder: projectRoot },
-    });
+    }));
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.failure.code).toBe("not_found");
-      expect(result.failure.details).toEqual(expect.arrayContaining([
-        expect.objectContaining({ code: "workflow_definition_missing" }),
-        // The base says why it is gone, rather than the Workflow just being absent.
-        expect.objectContaining({ code: "binding_disabled", path: ["asset", "review-flow"] }),
-      ]));
-    }
+    expect(response.stage).toBeUndefined();
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "workflow_definition_missing" }),
+      // The base says why it is gone, rather than the Workflow just being absent.
+      expect.objectContaining({ code: "binding_disabled", path: ["asset", "review-flow"] }),
+    ]));
+    // The Bindings are unaffected: they never depended on the Workflow.
+    expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "reviewer-binding"))
+      .toMatchObject({ status: "eligible" });
   });
 
-  it("does not derive Stage axes from a Workflow the scope excludes", async () => {
+  it("reports no Stage for a Workflow the scope excludes", async () => {
     const fixture = await makeFixture();
     // Declares a Model the request's context does not carry, so scope matching
     // drops it — the Definition exists on disk but does not apply here.
     await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument({ model: "other-model" }));
-    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding", { role: "reviewer" }));
+    await write(fixture.globalRoot.directory, "reviewer.md", binding("reviewer-binding"));
 
-    const result = await resolve(fixture, {
+    const response = unwrap(await resolve(fixture, {
       context: { ...selectedStageRequest().context, modelId: "gpt-5" },
-    });
+    }));
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.failure.code).toBe("not_found");
-      expect(result.failure.details).toEqual(expect.arrayContaining([
-        expect.objectContaining({ code: "workflow_definition_missing" }),
-      ]));
-    }
+    expect(response.stage).toBeUndefined();
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "workflow_definition_missing" }),
+    ]));
   });
 
-  it("carries the read failure when the selected Workflow file cannot be read", async ({ skip }) => {
+  it("reports the read failure when the selected Workflow file cannot be read", async ({ skip }) => {
     if (process.platform === "win32") {
       skip("POSIX permission bits cannot reproduce this read failure on Windows.");
       return;
@@ -367,20 +364,19 @@ malformed
     const result = await resolve(fixture, selectedStageRequest());
     await chmod(workflowPath, 0o644);
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      // The Workflow reads as absent, but the reason it is absent is the only
-      // thing the caller can act on.
-      expect(result.failure.details).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          code: "unavailable",
-          path: ["root", "global", "file", "review-flow.md"],
-        }),
-      ]));
-    }
+    const response = unwrap(result);
+    expect(response.stage).toBeUndefined();
+    // The Workflow reads as absent, but the reason it is absent is the only
+    // thing the caller can act on.
+    expect(response.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "unavailable",
+        path: ["root", "global", "file", "review-flow.md"],
+      }),
+    ]));
   });
 
-  it("keeps a Role the caller supplied over the one the selected Stage requires", async () => {
+  it("narrows on a Role the caller supplied while still reporting the Stage", async () => {
     const fixture = await makeFixture();
     await write(fixture.globalRoot.directory, "review-flow.md", workflowDocument());
     await write(fixture.globalRoot.directory, "implementer.md", binding("implementer-binding", { role: "implementer" }));
@@ -389,10 +385,12 @@ malformed
       context: { ...selectedStageRequest().context, roleId: "implementer" },
     }));
 
-    expect(response.context).toMatchObject({ roleId: "implementer", taskTypeId: "code-review" });
+    expect(response.context).toMatchObject({ roleId: "implementer" });
+    expect(response.stage).toMatchObject({ requiredRoleId: "reviewer" });
     expect(response.candidates.find((candidate) => candidate.definition?.bindingId === "implementer-binding"))
       .toMatchObject({ status: "eligible" });
   });
+
 
   it("resolves fallback relations before applying the requested loading tiers", async () => {
     const fixture = await makeFixture();

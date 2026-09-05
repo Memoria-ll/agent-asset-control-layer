@@ -280,9 +280,27 @@ export const BindingResolutionRequest = z.strictObject({
 export type BindingResolutionRequest = z.infer<typeof BindingResolutionRequest>;
 export type BindingResolutionRequestInput = z.input<typeof BindingResolutionRequest>;
 
+/**
+ * What the selected Stage requires, as the Workflow Definition states it.
+ *
+ * Reported, not applied: the candidates are matched against the context the
+ * caller sent, so a caller that wants only the Stage's Role asks again with it.
+ * Deriving the axes here instead would make which Definition applies depend on
+ * a value that Definition itself supplies.
+ */
+export const SelectedStageRequirementsDto = z.strictObject({
+  stageId: StageId,
+  requiredRoleId: z.optional(RoleId),
+  requiredTaskTypeId: z.optional(TaskTypeId),
+});
+export type SelectedStageRequirementsDto = z.infer<typeof SelectedStageRequirementsDto>;
+export type SelectedStageRequirementsDtoInput = z.input<typeof SelectedStageRequirementsDto>;
+
 export const BindingResolutionResponse = z.strictObject({
   context: ResolutionContextInput,
   candidates: z.array(BindingCandidateDto),
+  /** Absent unless the request selected a Stage and its Definition resolved. */
+  stage: z.optional(SelectedStageRequirementsDto),
   diagnostics: z.optional(z.array(CoreErrorDetail).check(z.minLength(1))),
 });
 export type BindingResolutionResponse = z.infer<typeof BindingResolutionResponse>;
@@ -304,5 +322,6 @@ export const parseBindingCandidateDto = (value: unknown): BindingCandidateDto =>
 export const tryParseBindingCandidateDto = (value: unknown): ParseOutcome<BindingCandidateDto> => tryParseWith(BindingCandidateDto, value, "response");
 export const parseBindingResolutionRequest = (value: unknown): BindingResolutionRequest => z.parse(BindingResolutionRequest, value);
 export const tryParseBindingResolutionRequest = (value: unknown): ParseOutcome<BindingResolutionRequest> => tryParseWith(BindingResolutionRequest, value, "request");
+export const parseSelectedStageRequirementsDto = (value: unknown): SelectedStageRequirementsDto => z.parse(SelectedStageRequirementsDto, value);
 export const parseBindingResolutionResponse = (value: unknown): BindingResolutionResponse => z.parse(BindingResolutionResponse, value);
 export const tryParseBindingResolutionResponse = (value: unknown): ParseOutcome<BindingResolutionResponse> => tryParseWith(BindingResolutionResponse, value, "response");

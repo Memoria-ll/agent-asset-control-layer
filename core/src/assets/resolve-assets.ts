@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { tryParseResolveRequest, type ResolutionContextDto } from "@aacl/shared";
+import { tryParseResolveRequest } from "@aacl/shared";
 import {
   coreFailure,
   resolveScope,
@@ -27,17 +27,6 @@ export type ResolveAssetsOptions = {
   readonly projectService: ProjectService;
   readonly capabilityContext: CapabilityResolutionContext;
   readonly contracts?: AssetTypeContractRegistry;
-  /**
-   * Fill context axes another Asset is the source of truth for. Runs on the
-   * completed first match — which is what establishes the effective Asset,
-   * overlays and scope included — and its result is matched again against the
-   * same snapshot. `undefined` means nothing was added, so the first match
-   * stands.
-   */
-  readonly deriveContext?: (
-    context: ResolutionContextDto,
-    resolved: ResolvedAssets,
-  ) => AssetResult<ResolutionContextDto | undefined>;
 };
 
 export type ResolvedAssets = {
@@ -145,35 +134,13 @@ export const resolveAssets = async (
   if (rootFailure !== undefined) return { ok: false, failure: rootFailure.failure };
 
   const projection = toResolutionSnapshot(listed.assets, options.contracts);
-  const matchScope = (against: typeof context) => resolveScope({
-    context: against,
+  const resolved = resolveScope({
+    context,
     snapshot: projection.snapshot,
     capabilityContext: options.capabilityContext,
     ...(options.contracts === undefined ? {} : { contracts: options.contracts }),
   });
-  const first = matchScope(context);
-  if (!first.ok) return first;
-
-  // An axis another Asset owns is settled here, between the two things that
-  // decide it: which Definition applies is a resolution question, and an axis
-  // added after matching narrows nothing. Both runs read one `list()`, so the
-  // Asset the axes come from and the Assets they narrow are the same files —
-  // a second listing could resolve the two against different snapshots.
-  let resolved = first;
-  if (options.deriveContext !== undefined) {
-    const derived = options.deriveContext(context, {
-      resolution: first.value,
-      assets: listed.assets,
-      storeDiagnostics: listed.failures,
-      projectionExclusions: projection.excluded,
-    });
-    if (!derived.ok) return derived;
-    if (derived.value !== undefined) {
-      const narrowed = matchScope(derived.value);
-      if (!narrowed.ok) return narrowed;
-      resolved = narrowed;
-    }
-  }
+  if (!resolved.ok) return resolved;
 
   // The requested loading tiers choose what is delivered, never what is resolved.
   // Nothing ties an overlay's tier to its target's, and `requires` crosses tiers

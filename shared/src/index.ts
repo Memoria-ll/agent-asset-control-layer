@@ -81,6 +81,7 @@ export type {
   BindingResolutionRequest,
   BindingResolutionRequestInput,
   BindingResolutionResponse,
+  SelectedStageRequirementsDto,
   BindingResolutionResponseInput,
 } from "./bindings.ts";
 
@@ -233,6 +234,7 @@ export {
   tryParseBindingCandidateDto,
   parseBindingResolutionRequest,
   tryParseBindingResolutionRequest,
+  parseSelectedStageRequirementsDto,
   parseBindingResolutionResponse,
   tryParseBindingResolutionResponse,
 } from "./bindings.ts";
