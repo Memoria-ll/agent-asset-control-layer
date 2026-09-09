@@ -26,21 +26,33 @@ flowchart LR
 
 ## 始める
 
-Node.js 24以上を用意し、このリポジトリのルートで実行します。
+Node.js 24以上を用意し、最初の一度だけ、このリポジトリのルートでビルドとCLIのインストールを行います。現在は手元のリポジトリからインストールします。
 
 ```sh
 npm ci
 npm run build
+npm install --global .
 npm start
 ```
 
-| 接続方法            | 設定                                                                      |
-| ------------------- | ------------------------------------------------------------------------- |
-| ブラウザUI          | `http://localhost:4780`を開きます。                                       |
-| MCPのHTTP接続       | AIの接続先に`http://localhost:4780/mcp`を設定します。                     |
-| MCPの標準入出力接続 | Coreを起動したまま、リポジトリを作業場所として`npm --silent run mcp`を実行します。 |
+Coreを起動したまま、別の端末で管理対象のProjectへ移動して登録します。Coreと同じOS環境で実行してください。
 
-標準入出力の接続は、稼働中のCoreへの中継です。`--silent`はnpmの起動ログがMCPの通信に混ざることを防ぎます。接続後は「このプロジェクトを登録し、既存の開発手順を取り込んで整理してください」とAIに依頼できます。資産がない場合は、新しいWorkflowの作成を依頼するか、UIから編集可能なスターターを追加します。モデルの登録は任意です。
+```sh
+cd my-project
+aacl init
+```
+
+`aacl init`は現在のProjectをAACL管理下に登録します。Project IDはProject自身の`.aacl/project.json`に保存し、CoreがそのIDと場所を登録して把握します。再実行すると既存のProject IDを返します。AACL本体の作業ディレクトリへ戻る必要はありません。
+
+対象を明示する場合は`aacl init /path/to/project`を使います。どちらも同じCore APIの`initProject`を呼びます。開発用の`npm run cli -- init ../my-project`も引き続き利用できます。
+
+| 接続方法            | 設定                                                                |
+| ------------------- | ------------------------------------------------------------------- |
+| ブラウザUI          | `http://localhost:4780`を開きます。                                 |
+| MCPのHTTP接続       | AIの接続先に`http://localhost:4780/mcp`を設定します。               |
+| MCPの標準入出力接続 | Coreを起動したまま、コマンドを`aacl`、引数を`["mcp"]`に設定します。 |
+
+標準入出力の接続は、稼働中のCoreへの中継です。`aacl mcp`は作業場所に依存せず、標準出力にはMCP通信だけを出します。開発用にインストール前のコマンドを使う場合は、`npm --silent run mcp`も利用できます。`--silent`はnpmの起動ログがMCPの通信に混ざることを防ぎます。接続後は「このプロジェクトの既存の開発手順を取り込んで整理してください」とAIに依頼できます。資産がない場合は、新しいWorkflowの作成を依頼するか、UIから編集可能なスターターを追加します。モデルの登録は任意です。
 
 | 環境変数        | 用途・既定値                                                |
 | --------------- | ----------------------------------------------------------- |
@@ -283,7 +295,7 @@ flowchart LR
 Coreを起動した状態で、まだ存在しないディレクトリーへ出力します。
 
 ```sh
-npm run cli -- export-bundle export-input.json ./exported-assets
+aacl export-bundle export-input.json ./exported-assets
 ```
 
 `aacl_materialize`とCLIの`export`も、MCPを必要とする接続用の出力です。Coreなしで使うファイル一式を保存する場合は、上の`export-bundle`を使います。
@@ -307,7 +319,7 @@ npm run test:ui                  # ブラウザテスト
 | ----------------------------------- | ------------------------------------------------------------------------- |
 | 導入・日常操作・復元・出力          | [導入・運用ガイド](docs/mcp-operations.md)                                |
 | 型ごとの契約・変更提案・改訂比較    | [Coreの契約](docs/core-contracts.md)                                      |
-| 現在の要件                          | [開発要件v15](agent-asset-control-layer-requirements.md)                  |
+| 現在の要件                          | [開発要件v16](agent-asset-control-layer-requirements.md)                  |
 | 実装箇所と検証範囲                  | [2026年9月9日の実装確認表](docs/improvement-implementation-2026-09-09.md) |
 | Skill・Workflow・モデル・出力の設計 | [設計方針](docs/skill-workflow-model-and-export-design.md)                |
 

@@ -1,6 +1,6 @@
 # 2026年9月9日の改善要求への対応
 
-[総合改善インプット](integrated-improvement-input-2026-09-09.md)と[利用方針更新](mcp-first-onboarding-and-asset-relations.md)を、会話とMCPで導入・日常操作を完結させる方針として実装しました。同日追加された[Skill・Workflow・モデル・出力の設計](skill-workflow-model-and-export-design.md)も反映しています。既存の人間用UIも維持しています。操作手順は[運用ガイド](mcp-operations.md)、製品の契約は[開発要件v15](../agent-asset-control-layer-requirements.md)に記載しています。
+[総合改善インプット](integrated-improvement-input-2026-09-09.md)と[利用方針更新](mcp-first-onboarding-and-asset-relations.md)を、会話とMCPで導入・日常操作を完結させる方針として実装しました。同日追加された[Skill・Workflow・モデル・出力の設計](skill-workflow-model-and-export-design.md)も反映しています。既存の人間用UIも維持しています。操作手順は[運用ガイド](mcp-operations.md)、製品の契約は[開発要件v16](../agent-asset-control-layer-requirements.md)に記載しています。
 
 ## 同日の追加設計への対応
 

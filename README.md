@@ -26,21 +26,33 @@ flowchart LR
 
 ## Get started
 
-Use Node.js 24 or newer. Run these commands from the repository root:
+Use Node.js 24 or newer. Build the app and install the CLI once from this repository's root. Installation currently uses your local checkout:
 
 ```sh
 npm ci
 npm run build
+npm install --global .
 npm start
 ```
 
-| Interface      | Setup                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------ |
-| Browser UI     | Open `http://localhost:4780`.                                                              |
-| MCP over HTTP  | Connect your AI client to `http://localhost:4780/mcp`.                                     |
-| MCP over stdio | Keep the Core running. Set this repository as the working directory and run `npm --silent run mcp`. |
+Keep the Core running, then open another terminal in the project you want to manage. Run the CLI in the same OS environment as the Core:
 
-The stdio process bridges to the running Core. The `--silent` option keeps npm banners out of the MCP protocol stream. Once connected, ask the AI to register your project and import and organize existing development instructions. If you have no assets, ask it to create a Workflow or add the editable starter through the UI. Model registration is optional.
+```sh
+cd my-project
+aacl init
+```
+
+`aacl init` registers the current Project with AACL. Project identity lives in the Project's own `.aacl/project.json`; the Core registers its ID and location. Running it again returns the existing Project ID. You do not need to return to the AACL source directory.
+
+To specify a target explicitly, use `aacl init /path/to/project`. Both forms call the same Core API, `initProject`. The development command `npm run cli -- init ../my-project` remains available.
+
+| Interface      | Setup                                                                        |
+| -------------- | ---------------------------------------------------------------------------- |
+| Browser UI     | Open `http://localhost:4780`.                                                |
+| MCP over HTTP  | Connect your AI client to `http://localhost:4780/mcp`.                       |
+| MCP over stdio | Keep the Core running. Set the command to `aacl` and arguments to `["mcp"]`. |
+
+The stdio process bridges to the running Core. `aacl mcp` works from any directory and writes only MCP protocol messages to stdout. For development without the installed command, `npm --silent run mcp` remains available; `--silent` keeps npm banners out of the MCP protocol stream. Once connected, ask the AI to import and organize your project's existing development instructions. If you have no assets, ask it to create a Workflow or add the editable starter through the UI. Model registration is optional.
 
 | Environment variable | Purpose and default                                                  |
 | -------------------- | -------------------------------------------------------------------- |
@@ -283,7 +295,7 @@ For example, save this as `export-input.json`, replacing the asset ID with a reg
 Keep the Core running and export to a directory that does not yet exist:
 
 ```sh
-npm run cli -- export-bundle export-input.json ./exported-assets
+aacl export-bundle export-input.json ./exported-assets
 ```
 
 `aacl_materialize` and CLI `export` also generate connected output that requires MCP. Use `export-bundle` as shown above to save a complete set of files for use without the Core.
@@ -309,7 +321,7 @@ Further documentation is currently in Japanese:
 | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Onboarding, daily operation, restore, and export   | [Operating guide](docs/mcp-operations.md)                                          |
 | Type contracts, proposals, and revision comparison | [Core contracts](docs/core-contracts.md)                                           |
-| Current requirements                               | [Requirements v15](agent-asset-control-layer-requirements.md)                      |
+| Current requirements                               | [Requirements v16](agent-asset-control-layer-requirements.md)                      |
 | Implementation and verification scope              | [September 9 implementation report](docs/improvement-implementation-2026-09-09.md) |
 | Skill, Workflow, model, and export design          | [Design notes](docs/skill-workflow-model-and-export-design.md)                     |
 
