@@ -28,6 +28,16 @@ export function executionLabel(run: Run) {
       ? '引き継ぎ取得済み・作業開始は未確認'
       : '準備済み';
 }
+export function isPrepared(run: Run) {
+  return (
+    run.status === 'active' &&
+    (run.executionStatus === 'prepared' || (!run.executionStatus && !run.runtimeHandoffAt))
+  );
+}
+export function runStatusLabel(run: Run) {
+  if (run.status !== 'active') return statusLabel(run.status);
+  return isPrepared(run) ? '準備済み／AIへ依頼待ち' : executionLabel(run);
+}
 export function exactTime(at: string) {
   const date = new Date(at);
   return Number.isNaN(date.getTime())

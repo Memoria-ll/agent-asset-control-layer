@@ -171,13 +171,35 @@ export function RelationEditor({
     </section>
   );
 }
-export function AssetFiles({ asset }: { asset: Pick<AssetInput, 'files' | 'sources'> }) {
+export function AssetFiles({
+  asset,
+}: {
+  asset: Pick<AssetInput, 'files' | 'sources'> & Partial<Pick<Asset, 'id' | 'revision'>>;
+}) {
+  const updateRequest = `AACLの資産 ${asset.id ? `ID ${JSON.stringify(asset.id)}` : '[対象の資産IDに置換]'} の補助ファイルを更新してください。
+変更するファイルと内容: [対象パスと具体的な変更内容に置換]
+${asset.revision ? `画面で確認したrevision（改訂番号）は ${asset.revision} です。` : '画面には保存済みのrevision（改訂番号）がないため、現在の値を取得してください。'}
+1. aacl_asset_getでこのIDの現在の資産を取得してください。${asset.revision ? '画面のrevisionから変わっていたら、差分と依頼内容を確認してから変更してください。' : ''}
+2. 取得した資産のfilesに対象ファイルの変更を反映してください。filesはファイル一覧全体なので、変更しない補助ファイルをすべて保持してください。本文・説明・出所・関係など、依頼していない項目も保持してください。画面で未保存の編集は含まれません。
+3. aacl_asset_changeのoperationsにop: "upsert"、変更後のAssetInput（取得した資産からrevisionとupdatedAtを除いた入力）、expectedRevision: 取得した現在のrevisionを指定してください。userRequestにはこの依頼、reasonには変更理由を記録してください。actorはオブジェクトで、kind: "runtime"、id: 実際の実行者ID、userId: 実際の依頼者IDを指定してください。
+4. expectedRevisionの競合が起きたら、最新内容と差分を再確認してください。保存後にaacl_asset_getで対象ファイルの更新と、他の補助ファイルが保持されたことを確認して報告してください。`;
   return (
     <section className="form-section" aria-label="補助ファイルと出所">
-      <h3>補助ファイルと出所</h3>
+      <div className="section-head compact">
+        <h3>補助ファイルと出所</h3>
+        <Badge>読み取り専用</Badge>
+      </div>
       <p className="muted small-text">
-        本文とは別に取り込んだファイルと元の場所です。Assetの編集時も保持されます。
+        本文とは別に取り込んだファイルと元の場所です。この画面では閲覧・コピーできます。補助ファイルはここでは編集できず、資産の編集時も保持されます。
       </p>
+      <p className="muted small-text">
+        更新はAACLにMCP（AIがツールを使う接続方式）で接続したAIに依頼できます。対象パスと変更内容を依頼文に記入してください。
+      </p>
+      <CopyButton text={updateRequest} label="補助ファイル更新の依頼をコピー" />
+      <details>
+        <summary>補助ファイル更新の依頼文を確認</summary>
+        <pre className="context-content">{updateRequest}</pre>
+      </details>
       {Object.entries(asset.files ?? {}).map(([path, content]) => (
         <details key={path} className="source-file">
           <summary>

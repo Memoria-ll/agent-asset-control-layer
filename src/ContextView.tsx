@@ -23,6 +23,9 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
   const [tab, setTab] = useState('included');
   const [bundle, setBundle] = useState<{ files: { path: string; content: string }[] } | null>(null);
   const [fileIndex, setFileIndex] = useState(0);
+  const [exportRuntime, setExportRuntime] = useState('codex');
+  const exportIds = [...new Set([...(context.workflow ? [context.workflow] : []), ...requested])];
+  const exportRequest = `選択したAACL資産を、Coreなしで使える単独出力として保存してください。\naacl_export_bundleを次の引数で呼び出してください。\n${JSON.stringify({ assetIds: exportIds, mode: 'standalone', runtime: exportRuntime, context }, null, 2)}\n保存先を確認し、出力の制約と既存ファイルとの差分を確認してください。ready=trueの場合に、Workflow・Role・Skill・補助ファイルを含むfiles全件を相対パスどおりに保存し、ハッシュと参照先を検証してください。`;
   const workflow = data.assets.find((a) => a.id === context.workflow);
   const stage = workflow?.workflow?.stages.find(
     (s) => s.id === (context.stage ?? workflow.workflow?.entryStage),
@@ -376,8 +379,8 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
               </section>
               <div className="export-bar">
                 <div>
-                  <strong>Runtimeに渡すファイルを生成</strong>
-                  <p>Canonical Assetから、選択したRuntime向けの表現を作成します。</p>
+                  <strong>Coreに接続して使うファイルを生成</strong>
+                  <p>利用時もCoreとMCP接続が必要です。単独出力は下の案内からAIへ依頼できます。</p>
                 </div>
                 <div className="button-row">
                   {(['codex', 'claude'] as const).map((runtime) => (
@@ -407,6 +410,46 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                   ))}
                 </div>
               </div>
+              <section className="panel" aria-label="Core不要の単独出力">
+                <div className="panel-head">
+                  <h3>Core不要の単独出力をAIに依頼</h3>
+                </div>
+                <div className="panel-body">
+                  <p>
+                    選択したWorkflowと追加の利用候補を、補助ファイルも含めて一式保存する依頼を作成します。出力の取得時はCoreとMCP接続が必要です。保存後はCoreを停止して使えます。
+                  </p>
+                  <Field label="単独出力の形式">
+                    <select
+                      value={exportRuntime}
+                      onChange={(e) => setExportRuntime(e.target.value)}
+                    >
+                      <option value="codex">Codex</option>
+                      <option value="claude">Claude</option>
+                      <option value="cursor">Cursor</option>
+                      <option value="generic">汎用Markdown</option>
+                    </select>
+                  </Field>
+                  {exportIds.length ? (
+                    <>
+                      <p>
+                        対象:{' '}
+                        {exportIds
+                          .map((id) => data.assets.find((asset) => asset.id === id)?.name ?? id)
+                          .join('、')}
+                      </p>
+                      <CopyButton text={exportRequest} label="単独出力の依頼をコピー" />
+                      <details>
+                        <summary>AIへの依頼内容</summary>
+                        <pre className="context-content">{exportRequest}</pre>
+                      </details>
+                    </>
+                  ) : (
+                    <p className="muted">
+                      左のWorkflowまたは「追加する利用候補」から出力対象を選択してください。
+                    </p>
+                  )}
+                </div>
+              </section>
               <p className="small-text muted">
                 Token数は文字種に基づく推定値です。Previewとコピーは実行を開始せず、Snapshot・実行versionを更新しません。
               </p>

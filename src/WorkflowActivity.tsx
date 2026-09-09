@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Asset } from '../server/domain.ts';
 import type { Overview } from './api.ts';
 import { Badge, statusLabel } from './ui.tsx';
-import { exactTime, executionLabel } from './RunEvidence.tsx';
+import { exactTime, runStatusLabel } from './RunEvidence.tsx';
 
 export function WorkflowActivity({
   workflow,
@@ -72,7 +72,7 @@ export function WorkflowActivity({
             <button key={run.id} className="activity-link" onClick={() => onRun(run.id)}>
               <strong>{run.title}</strong>
               <span>
-                r{run.workflow?.revision} · {statusLabel(run.status)} · {executionLabel(run)}
+                r{run.workflow?.revision} · {runStatusLabel(run)}
               </span>
               <span>
                 {run.events.filter((event) => event.kind === 'return').length}回の差し戻し ·{' '}

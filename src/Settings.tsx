@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Plus, FolderGit2, Plug, Download, ArrowUpRight } from 'lucide-react';
 import type { Overview } from './api.ts';
 import { RuntimeConfigEditor } from './RuntimeConfigEditor.tsx';
@@ -254,6 +254,19 @@ export function Projects({ data, mutate }: { data: Overview; mutate: Mutate }) {
     </>
   );
 }
+function markdownName(content: string, fallback: string) {
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
+  const value = frontmatter?.match(/^name:[ \t]*([^\r\n]*)$/m)?.[1].trim();
+  if (!value) return fallback;
+  const doubleQuoted = value.match(/^"([^"\\]*)"(?:[ \t]+#.*)?$/);
+  if (doubleQuoted) return doubleQuoted[1].trim() || fallback;
+  const singleQuoted = value.match(/^'((?:[^']|'')*)'(?:[ \t]+#.*)?$/);
+  if (singleQuoted) return singleQuoted[1].replace(/''/g, "'").trim() || fallback;
+  // Only suggest simple scalar names; leave complex YAML to the user.
+  if (/^["'\[\]{},&*!|>#%@`]/.test(value)) return fallback;
+  return value.replace(/[ \t]+#.*$/, '').trim() || fallback;
+}
+
 export function ImportModal({
   data,
   mutate,
@@ -270,8 +283,26 @@ export function ImportModal({
   const [projectId, setProjectId] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const nameEdited = useRef(false);
+  const fileSelection = useRef(0);
+  const filenameSuggestion = useRef('');
+  const onboardingRequest = `既存のAI向け設定・SkillをAACLへ移行してください。対象フォルダ: [移行する絶対パスに置換]。通常のREADMEやプロジェクト資料は元の場所に残してください。
+1. AACLのMCP（AIがツールを使う接続方式） ${location.origin}/mcp に接続したAIから、aacl_onboarding_discoverで対象を調べ、返された移行IDを記録してください。
+2. 対象ファイルを確認し、aacl_onboarding_importでバックアップを作成して無効状態で取り込んでください。元のパス・ハッシュと補助ファイルも確認してください。
+3. 接続先のAIからaacl_asset_getで取り込んだ全資産を読み、この移行依頼をuserRequestに指定してaacl_onboarding_verifyで実際のMCP書き込みを検証してください。
+4. 検証後にaacl_onboarding_organizeで種別・適用条件・資産間の関係を分類・整理してください。不明な資産は無効または未接続のままにしてください。
+5. 追加の接続設定が必要なAI環境がある場合だけ、aacl_onboarding_planで設定を確認し、aacl_onboarding_connectで設定してください。既に接続済みなら設定を繰り返す必要はありません。
+6. バックアップ・分類・接続の検証結果と切り替え対象を示してください。元ファイルの自動読み込みを止める切り替えは、その対象について私の依頼を確認してからaacl_onboarding_cutoverで行ってください。通常のREADMEは切り替え対象から外してください。
+7. 移行IDと復元手順を報告してください。復元を依頼した場合はaacl_onboarding_restoreにそのIDをidとして渡し、バックアップから戻してください。`;
   return (
-    <Modal title="Native Markdownを取り込む" onClose={onClose}>
+    <Modal title="単一Markdownを登録" onClose={onClose}>
+      <p>
+        1つのMarkdownを新しい資産として登録します。登録直後から有効になります。Skillは必要時に本文を取得する候補になります。
+      </p>
+      <p className="muted small-text">
+        元のパス・ハッシュ・補助ファイルは保存しません。元ファイルは変更しません。既存環境のバックアップや移行には、下の「AIに移行・初期設定を依頼」を使ってください。
+      </p>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -298,19 +329,42 @@ export function ImportModal({
             accept=".md,.txt"
             onChange={async (e) => {
               const file = e.target.files?.[0];
-              if (file) {
-                setContent(await file.text());
-                setName((current) => current || file.name.replace(/\.md$/, ''));
+              if (!file) return;
+              const selection = ++fileSelection.current;
+              setReading(true);
+              setError('');
+              try {
+                const text = await file.text();
+                if (selection !== fileSelection.current) return;
+                filenameSuggestion.current = file.name.replace(/\.(md|txt)$/i, '');
+                setContent(text);
+                if (!nameEdited.current) {
+                  setName(markdownName(text, filenameSuggestion.current));
+                }
+              } catch {
+                if (selection === fileSelection.current)
+                  setError(
+                    'ファイルを読み込めませんでした。もう一度選択するか、本文を貼り付けてください。',
+                  );
+              } finally {
+                if (selection === fileSelection.current) setReading(false);
               }
             }}
           />
         </Field>
         <div className="form-grid">
-          <Field label="ID">
+          <Field label="ID" hint="既存の資産と重複しないIDを入力してください。">
             <input required value={id} onChange={(e) => setId(e.target.value)} />
           </Field>
           <Field label="名前">
-            <input required value={name} onChange={(e) => setName(e.target.value)} />
+            <input
+              required
+              value={name}
+              onChange={(e) => {
+                nameEdited.current = true;
+                setName(e.target.value);
+              }}
+            />
           </Field>
           <Field label="種別">
             <select value={type} onChange={(e) => setType(e.target.value)}>
@@ -335,23 +389,45 @@ export function ImportModal({
             required
             rows={10}
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              ++fileSelection.current;
+              setReading(false);
+              setContent(e.target.value);
+              if (!nameEdited.current) {
+                setName(markdownName(e.target.value, filenameSuggestion.current));
+              }
+            }}
           />
         </Field>
         <p className="muted small-text">
-          名前は画面の入力値を使います。先頭メタデータからdescriptionを取り込み、nameは使いません。scopeやbindingは本文から推測しません。
+          名前は先頭メタデータのname（単純な引用符付き・引用符なしの値）を候補にし、なければファイル名を使います。本文の貼り付けでも候補を更新します。名前を手入力した後は、ファイルを選び直しても上書きしません。保存には画面の名前を使います。
         </p>
+        <p className="muted small-text">
+          先頭メタデータのdescriptionを説明として保存し、先頭メタデータを除いた内容を本文として保存します。適用条件（scope）や割り当て（binding）は本文から推測しません。
+        </p>
+        {reading && <p role="status">ファイルを読み込み中です。</p>}
         {error && <div className="error">{error}</div>}
         <div className="modal-actions">
           <button type="button" className="button" onClick={onClose}>
             キャンセル
           </button>
-          <button disabled={busy} className="button primary">
+          <button disabled={busy || reading} className="button primary">
             <Download size={15} />
             取り込む
           </button>
         </div>
       </form>
+      <section className="form-section" aria-label="AIに移行・初期設定を依頼">
+        <h3>AIに移行・初期設定を依頼</h3>
+        <p className="muted small-text">
+          既存のAI環境を移行する場合の依頼文です。対象フォルダを書き換えて、AACLにMCPで接続したAIに渡してください。移行ではバックアップを保存し、接続確認後に元の自動読み込みを切り替えます。
+        </p>
+        <CopyButton text={onboardingRequest} label="移行の依頼をコピー" />
+        <details>
+          <summary>移行の依頼文を確認</summary>
+          <pre className="context-content">{onboardingRequest}</pre>
+        </details>
+      </section>
     </Modal>
   );
 }
