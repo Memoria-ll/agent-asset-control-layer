@@ -105,6 +105,10 @@ export function AssetEditor({
           setBusy(true);
           setError('');
           try {
+            if (form.type === 'skill' && form.skill?.steps !== undefined)
+              throw new Error(
+                '旧形式のSkill.stepsは保存できません。委譲・工程管理をWorkflowへ移し、旧定義を明示的に取り除いてください。',
+              );
             const next = {
               ...form,
               ...(form.type === 'workflow' ? { workflow: definition } : {}),
@@ -174,6 +178,7 @@ export function AssetEditor({
         </div>
         {form.type === 'workflow' && (
           <WorkflowEditor
+            config={data.config}
             value={definition}
             assets={data.assets}
             onChange={setDefinition}

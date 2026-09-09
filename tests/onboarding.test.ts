@@ -23,6 +23,7 @@ import {
   onboardingRestore,
   onboardingPlan,
   onboardingConnect,
+  onboardingSchemas,
   type OnboardingManifest,
 } from '../server/onboarding.ts';
 
@@ -77,21 +78,141 @@ function organize(core: Core, operation: OnboardingManifest) {
     id: operation.id,
     userRequest: 'Enable the imported assets for on-demand use',
     reason: 'Keep the native runtime scope',
+    classification: review(operation),
     operations: core
       .state()
       .assets.filter((a) => operation.selected?.includes(a.id))
       .map((a) => ({
         op: 'upsert',
-        asset: { ...inputOf(a), enabled: true },
+        asset: {
+          ...inputOf(a),
+          type: operation.candidates.find((c) => c.id === a.id)!.type,
+          enabled: true,
+        },
         expectedRevision: a.revision,
       })),
   });
+}
+function review(operation: OnboardingManifest) {
+  return {
+    reviewer: 'fixture-ai-reviewer',
+    entries: (operation.selected ?? []).map((sourceId) => ({
+      sourceId,
+      status: 'classified' as const,
+      outputIds: [sourceId],
+      reason: 'Reviewed the fixture content and retained its same-worker behavior',
+      unconvertedParts: [] as string[],
+    })),
+  };
 }
 function ready(core: Core, native: string) {
   const discovered = discover(core, native);
   const imported = onboardingImport(core, { id: discovered.id });
   verify(core, imported);
   return organize(core, imported);
+}
+
+function conversion(
+  core: Core,
+  operation: OnboardingManifest,
+  inPlace = false,
+): z.input<typeof onboardingSchemas.organize> {
+  const source = core.state().assets.find((a) => a.id === operation.selected![0])!;
+  const workflowId = inPlace ? source.id : 'converted-workflow';
+  return {
+    id: operation.id,
+    userRequest: 'Convert the reviewed delegation procedure and preserve review rework',
+    reason: 'The source mixes delegation, responsibilities, and same-worker checks',
+    classification: {
+      reviewer: 'fixture-ai-reviewer',
+      entries: [
+        {
+          sourceId: source.id,
+          status: 'classified',
+          outputIds: [workflowId, 'converted-author', 'converted-reviewer', 'converted-check'],
+          reason:
+            'Workflow owns delegation and rework; Roles own responsibilities; Skill supplies local checks',
+          unconvertedParts: [],
+        },
+      ],
+    },
+    operations: [
+      ...(!inPlace
+        ? [{ op: 'delete' as const, id: source.id, expectedRevision: source.revision }]
+        : []),
+      {
+        op: 'upsert',
+        expectedRevision: 0,
+        asset: {
+          id: 'converted-author',
+          type: 'role',
+          name: 'Author',
+          content: 'Produce the report; apply the checks yourself.',
+          dependencies: ['converted-check'],
+          role: { responsibilities: ['Write the report'], expectedOutput: ['Report'] },
+        },
+      },
+      {
+        op: 'upsert',
+        expectedRevision: 0,
+        asset: {
+          id: 'converted-reviewer',
+          type: 'role',
+          name: 'Reviewer',
+          content: 'Review the report independently.',
+          role: { responsibilities: ['Check evidence'], expectedOutput: ['Review findings'] },
+        },
+      },
+      {
+        op: 'upsert',
+        expectedRevision: 0,
+        asset: {
+          id: 'converted-check',
+          type: 'skill',
+          name: 'Local checks',
+          content: 'Read references/guide.md and verify the report yourself.',
+          files: source.files,
+          skill: { expectedOutput: ['Checked report'], completionCriteria: ['Evidence verified'] },
+        },
+      },
+      {
+        op: 'upsert',
+        expectedRevision: inPlace ? source.revision : 0,
+        asset: {
+          id: workflowId,
+          type: 'workflow',
+          name: 'Report workflow',
+          content: 'Delegate report writing and review with explicit rework.',
+          workflow: {
+            developmentCapable: false,
+            entryStage: 'author',
+            entryRole: 'converted-author',
+            completionCriteria: ['Review accepted'],
+            stages: [
+              {
+                id: 'author',
+                name: 'Author',
+                role: 'converted-author',
+                requiredAssets: ['converted-check'],
+                expectedOutput: ['Report'],
+                transitions: [{ to: 'review', kind: 'advance', requiredArtifacts: ['Report'] }],
+              },
+              {
+                id: 'review',
+                name: 'Review',
+                role: 'converted-reviewer',
+                expectedOutput: ['Review findings'],
+                canComplete: true,
+                transitions: [
+                  { to: 'author', kind: 'return', requiredArtifacts: ['Review findings'] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ],
+  };
 }
 
 test('connection retries keep their original targets after creating a default runtime directory', (t) => {
@@ -228,9 +349,9 @@ test('bundles import from backups, preserve relative references and export into 
   assert.equal(fs.readFileSync(path.join(native, 'skills/checker/SKILL.md'), 'utf8'), content);
   const assets = core.state().assets;
   assert.equal(assets.length, 3);
-  assert(assets.some((a) => a.type === 'other'));
-  assert(assets.some((a) => a.type === 'rule'));
-  const skill = assets.find((a) => a.type === 'skill')!;
+  assert(result.classificationRequired);
+  assert(assets.every((a) => a.type === 'other' && !a.enabled));
+  const skill = assets.find((a) => a.name === 'checker')!;
   assert.equal(skill.name, 'checker');
   assert.equal(skill.content, content);
   assert.equal(skill.files?.['references/checklist.md'], 'check all cases\n');
@@ -241,14 +362,18 @@ test('bundles import from backups, preserve relative references and export into 
   assert.deepEqual(skill.scope, { project: [project.id], runtime: ['codex'] });
   assert.deepEqual(onboardingImport(core, { id: result.id }).selected, result.selected);
   assert.equal(core.state().assets.length, 3);
-  // User explicitly makes this skill portable; materialize it in an unrelated empty project.
+  verify(core, result);
+  organize(core, result);
+  const reviewed = core.state().assets.find((a) => a.id === skill.id)!;
+  assert.equal(reviewed.type, 'skill');
+  // User explicitly makes the reviewed skill portable; export to an empty project.
   core.changeAssets({
     summary: 'make skill portable',
     operations: [
       {
         op: 'upsert',
-        asset: { ...inputOf(skill), enabled: true, projectId: undefined, scope: {} },
-        expectedRevision: skill.revision,
+        asset: { ...inputOf(reviewed), enabled: true, projectId: undefined, scope: {} },
+        expectedRevision: reviewed.revision,
       },
     ],
   });
@@ -459,6 +584,7 @@ test('interrupted Core import and organization commits are recovered without dup
     id: operation.id,
     userRequest: 'Classify this asset',
     reason: 'Explicit scope',
+    classification: review(imported),
     operations: [
       {
         op: 'upsert',
@@ -594,11 +720,14 @@ test('connection plans leave credentials and native configuration untouched and 
   assert(!contract.includes('Human approval happens in the Core UI'));
 });
 
-test('one Core import batch resolves forward relative skill links from source entry files', (t) => {
+test('reviewed classification resolves forward relative skill links from source entry files', (t) => {
   const { core, native } = fixture(t);
   put(native, 'skills/a/SKILL.md', 'See [B](../b/SKILL.md).');
   put(native, 'skills/b/SKILL.md', 'B provides background.');
   const imported = onboardingImport(core, { id: discover(core, native).id });
+  assert(core.state().assets.every((a) => a.type === 'other'));
+  verify(core, imported);
+  organize(core, imported);
   const a = core.state().assets.find((a) => a.name === 'a')!;
   const b = core.state().assets.find((a) => a.name === 'b')!;
   assert.equal(a.sources?.[0].path, path.join(native, 'skills/a/SKILL.md'));
@@ -674,12 +803,14 @@ test('restore preserves subsequent canonical organization edits and unknown runt
       },
     ],
   });
-  assert.throws(() => onboardingRestore(core, { id: operation.id }), /後続の変更/);
+  assert.throws(() => onboardingRestore(core, { id: operation.id }), { code: 'ASSET_CHANGED' });
   assert.equal(core.state().assets[0].description, 'preserve this');
   assert.equal(fs.readFileSync(source, 'utf8'), 'rule');
+  const otherRoot = path.join(native, 'other');
+  put(otherRoot, 'note.md', 'other runtime instructions');
   const unknown = onboardingDiscover(core, {
     id: 'other-runtime',
-    roots: [{ path: native, runtime: 'other' }],
+    roots: [{ path: otherRoot, runtime: 'other' }],
   });
   const imported = onboardingImport(core, { id: unknown.id });
   verify(core, imported);
@@ -687,6 +818,7 @@ test('restore preserves subsequent canonical organization edits and unknown runt
     id: unknown.id,
     userRequest: 'Keep current organization',
     reason: 'Already classified',
+    classification: review(imported),
     operations: [],
   });
   assert.throws(
@@ -694,4 +826,395 @@ test('restore preserves subsequent canonical organization edits and unknown runt
     /explicit native loading adapter/,
   );
   assert.equal(onboardingPlan(core, { id: unknown.id }).plans[0].cutover.supported, false);
+});
+
+test('AI review must cover every selected source and uncertain content remains provisional', (t) => {
+  const { core, native } = fixture(t);
+  const content = 'Delegate a report to another worker. This may instead be a quoted example.';
+  const entry = put(native, 'skills/mixed/SKILL.md', content);
+  put(native, 'rules/check.md', 'Check the result yourself.');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  assert.equal(imported.classificationRequired, true);
+  assert(core.state().assets.every((a) => a.type === 'other' && !a.enabled));
+  verify(core, imported);
+  const classification = review(imported);
+  const request = {
+    id: imported.id,
+    userRequest: 'Review all imported content',
+    reason: 'Resolve ambiguous instructions',
+    classification,
+    operations: [],
+  };
+  const before = core.state();
+  assert.throws(() => onboardingOrganize(core, { ...request, classification: undefined }));
+  assert.throws(
+    () =>
+      onboardingOrganize(core, {
+        ...request,
+        classification: { ...classification, entries: classification.entries.slice(0, 1) },
+      }),
+    { code: 'CLASSIFICATION_COVERAGE' },
+  );
+  assert.throws(
+    () =>
+      onboardingOrganize(core, {
+        ...request,
+        classification: {
+          ...classification,
+          entries: [classification.entries[0], classification.entries[0]],
+        },
+      }),
+    { code: 'CLASSIFICATION_COVERAGE' },
+  );
+  assert.deepEqual(core.state(), before);
+  const uncertain = {
+    ...classification,
+    entries: classification.entries.map((e) => ({
+      ...e,
+      status: 'uncertain',
+      unconvertedParts: ['Determine whether the delegation is an instruction or an output example'],
+    })),
+  };
+  const source = core.state().assets[0];
+  assert.throws(
+    () =>
+      onboardingOrganize(core, {
+        ...request,
+        classification: uncertain,
+        operations: [
+          {
+            op: 'upsert',
+            asset: { ...inputOf(source), enabled: true },
+            expectedRevision: source.revision,
+          },
+        ],
+      }),
+    { code: 'UNCERTAIN_CLASSIFICATION' },
+  );
+  const organized = onboardingOrganize(core, { ...request, classification: uncertain });
+  assert.deepEqual(organized.organization?.classification, uncertain);
+  assert(core.state().assets.every((a) => !a.enabled && a.type === 'other'));
+  assert.throws(() => onboardingCutover(core, { id: imported.id }), {
+    code: 'CLASSIFICATION_INCOMPLETE',
+  });
+  assert.equal(fs.readFileSync(entry, 'utf8'), content);
+  assert.equal(onboardingRestore(core, { id: imported.id }).phase, 'restored');
+});
+
+test('one reviewed source becomes Workflow, Roles and Skill in one reversible batch', (t) => {
+  const { core, native, dir, reopen } = fixture(t);
+  const text =
+    'Delegate authoring, wait for independent review, return findings to the author, then finish.';
+  const entry = put(native, 'skills/mixed/SKILL.md', text);
+  put(native, 'skills/mixed/references/guide.md', 'Evidence checklist');
+  const projectRoot = path.join(dir, 'project');
+  fs.mkdirSync(projectRoot);
+  const project = core.initProject({ root: projectRoot, name: 'Scoped conversion' });
+  const discovered = onboardingDiscover(core, {
+    roots: [{ path: native, runtime: 'codex', projectId: project.id }],
+  });
+  const imported = onboardingImport(core, { id: discovered.id });
+  verify(core, imported);
+  const source = core.state().assets[0];
+  const request = conversion(core, imported);
+  const beforeChanges = core.state().state.changesets.length;
+  const organized = onboardingOrganize(core, request);
+  assert.equal(core.state().state.changesets.length, beforeChanges + 1);
+  assert.equal(core.state().assets.length, 4);
+  assert(!core.state().assets.some((a) => a.id === source.id));
+  assert.deepEqual(organized.organization!.absent, [source.id]);
+  assert.deepEqual(
+    new Set(organized.organization!.assets.map((a) => a.id)),
+    new Set(request.classification.entries[0].outputIds),
+  );
+  for (const asset of core.state().assets) {
+    assert.deepEqual(asset.sources, source.sources);
+    assert.deepEqual(asset.scope, source.scope);
+    assert.equal(asset.projectId, project.id);
+  }
+  assert.equal(
+    core.state().assets.find((a) => a.type === 'skill')!.files?.['references/guide.md'],
+    'Evidence checklist',
+  );
+  const workflow = core.state().assets.find((a) => a.type === 'workflow')!.workflow!;
+  assert.deepEqual(workflow.stages[1].transitions, [
+    { to: 'author', kind: 'return', requiredArtifacts: ['Review findings'] },
+  ]);
+  assert.deepEqual(workflow.stages[0].expectedOutput, ['Report']);
+  const manifestText = fs.readFileSync(
+    path.join(core.store.root, 'onboarding', imported.id, 'manifest.json'),
+    'utf8',
+  );
+  assert(!manifestText.includes(text));
+  const restarted = reopen();
+  assert.equal(onboardingCutover(restarted, { id: imported.id }).phase, 'cutover');
+  assert(!fs.existsSync(entry));
+  assert.throws(
+    () => onboardingRestore(restarted, { id: imported.id, rollbackOrganization: false }),
+    { code: 'ORGANIZATION_ROLLBACK_REQUIRED' },
+  );
+  const restored = onboardingRestore(restarted, { id: imported.id });
+  assert(restored.rollbackChangeSetId);
+  assert.equal(fs.readFileSync(entry, 'utf8'), text);
+  assert.equal(restarted.state().assets.length, 1);
+  const original = restarted.state().assets[0];
+  assert.equal(original.id, source.id);
+  assert.equal(original.type, 'other');
+  assert.equal(original.enabled, false);
+  assert.deepEqual(inputOf(original), inputOf(source));
+  const reimport = onboardingDiscover(restarted, {
+    id: 'converted-reimport',
+    roots: [{ path: native, runtime: 'codex', projectId: project.id }],
+  });
+  const revision = original.revision;
+  onboardingImport(restarted, { id: reimport.id });
+  assert.equal(restarted.state().assets.length, 1);
+  assert.equal(restarted.state().assets[0].revision, revision);
+});
+
+test('review may transform the original ID into a Workflow without retaining orchestration as a Skill', (t) => {
+  const { core, native } = fixture(t);
+  put(native, 'skills/mixed/SKILL.md', 'Delegate and review.');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const id = imported.selected![0];
+  const organized = onboardingOrganize(core, conversion(core, imported, true));
+  assert.equal(core.state().assets.find((a) => a.id === id)!.type, 'workflow');
+  assert.deepEqual(organized.organization!.absent, []);
+  onboardingCutover(core, { id: imported.id });
+  onboardingRestore(core, { id: imported.id });
+  assert.equal(core.state().assets.length, 1);
+  assert.equal(core.state().assets[0].id, id);
+  assert.equal(core.state().assets[0].enabled, false);
+});
+
+test('conversion rejects scope loss, uncovered outputs, duplicate activation and invalid references atomically', (t) => {
+  const { core, native } = fixture(t);
+  put(native, 'skills/mixed/SKILL.md', 'Delegate and review.');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const source = core.state().assets[0];
+  const request = conversion(core, imported);
+  const before = core.state();
+  const wrongScope = structuredClone(request);
+  const output = wrongScope.operations.find((op) => op.op === 'upsert')!;
+  if (output.op === 'upsert') output.asset.scope = { runtime: ['claude'] };
+  assert.throws(() => onboardingOrganize(core, wrongScope), { code: 'SOURCE_SCOPE_CHANGED' });
+  const undeclared = structuredClone(request);
+  undeclared.operations.push({
+    op: 'upsert',
+    expectedRevision: 0,
+    asset: { id: 'unreviewed-output', type: 'rule', name: 'unreviewed' },
+  });
+  assert.throws(() => onboardingOrganize(core, undeclared), { code: 'CLASSIFICATION_COVERAGE' });
+  const duplicate = structuredClone(request);
+  duplicate.operations[0] = {
+    op: 'upsert',
+    expectedRevision: source.revision,
+    asset: { ...inputOf(source), enabled: true },
+  };
+  assert.throws(() => onboardingOrganize(core, duplicate), { code: 'ORIGINAL_STILL_ACTIVE' });
+  duplicate.classification.entries[0].outputIds.push(source.id);
+  assert.throws(() => onboardingOrganize(core, duplicate), { code: 'ORIGINAL_STILL_ACTIVE' });
+  const invalid = structuredClone(request);
+  const flow = invalid.operations.find((op) => op.op === 'upsert' && op.asset.type === 'workflow')!;
+  if (flow.op === 'upsert') flow.asset.workflow!.stages[0].requiredAssets = ['missing-skill'];
+  assert.throws(() => onboardingOrganize(core, invalid));
+  assert.deepEqual(core.state(), before);
+  assert.equal(onboardingGet(core, { id: imported.id }).phase, 'verified');
+  assert(fs.existsSync(path.join(native, 'skills/mixed/SKILL.md')));
+});
+
+test('unconverted portions are reported and block native cutover even for classified outputs', (t) => {
+  const { core, native } = fixture(t);
+  const entry = put(
+    native,
+    'skills/mixed/SKILL.md',
+    'Delegate; legacy external rework trigger is unclear.',
+  );
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const request = conversion(core, imported);
+  request.classification.entries[0].unconvertedParts = ['Legacy external rework trigger'];
+  const organized = onboardingOrganize(core, request);
+  assert.deepEqual(organized.organization!.classification!.entries[0].unconvertedParts, [
+    'Legacy external rework trigger',
+  ]);
+  assert.throws(() => onboardingCutover(core, { id: imported.id }), {
+    code: 'CLASSIFICATION_INCOMPLETE',
+  });
+  assert(fs.existsSync(entry));
+  onboardingRestore(core, { id: imported.id });
+  assert(core.state().assets.every((a) => !a.enabled));
+});
+
+test('interrupted conversion recovers deleted originals and output stamps without absorbing later edits', (t) => {
+  const { core, native } = fixture(t);
+  const entry = put(native, 'skills/mixed/SKILL.md', 'Delegate and review.');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const request = conversion(core, imported);
+  const changeAssets = core.changeAssets.bind(core);
+  const mock = t.mock.method(core, 'changeAssets', (input: unknown) => {
+    changeAssets(input);
+    throw new Error('crash after conversion commit');
+  });
+  assert.throws(() => onboardingOrganize(core, request), /crash after conversion/);
+  mock.mock.restore();
+  const before = core.state();
+  const flow = before.assets.find((a) => a.type === 'workflow')!;
+  core.changeAssets({
+    summary: 'later user edit',
+    operations: [
+      {
+        op: 'upsert',
+        expectedRevision: flow.revision,
+        asset: { ...inputOf(flow), description: 'Do not roll this back' },
+      },
+    ],
+  });
+  const organized = onboardingOrganize(core, request);
+  assert.equal(
+    organized.organization!.assets.find((a) => a.id === flow.id)!.revision,
+    flow.revision,
+  );
+  assert.equal(core.state().state.changesets.length, before.state.changesets.length + 1);
+  assert.deepEqual(organized.organization!.absent, imported.selected);
+  assert.throws(() => onboardingCutover(core, { id: imported.id }), { code: 'ASSET_CHANGED' });
+  assert.throws(() => onboardingRestore(core, { id: imported.id }), { code: 'ASSET_CHANGED' });
+  assert.equal(
+    core.state().assets.find((a) => a.id === flow.id)!.description,
+    'Do not roll this back',
+  );
+  assert(fs.existsSync(entry));
+});
+
+test('cutover and restore reject recreated originals and interrupted restore rejects recreated outputs', (t) => {
+  const { core, native } = fixture(t);
+  const entry = put(native, 'skills/mixed/SKILL.md', 'Delegate and review.');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const source = core.state().assets[0];
+  onboardingOrganize(core, conversion(core, imported));
+  core.changeAssets({
+    summary: 'restore original independently',
+    operations: [{ op: 'upsert', expectedRevision: 0, asset: inputOf(source) }],
+  });
+  assert.throws(() => onboardingCutover(core, { id: imported.id }), { code: 'ASSET_CHANGED' });
+  assert.throws(() => onboardingRestore(core, { id: imported.id }), { code: 'ASSET_CHANGED' });
+  assert(fs.existsSync(entry));
+  const recreated = core.state().assets.find((a) => a.id === source.id)!;
+  core.changeAssets({
+    summary: 'remove independently restored original',
+    operations: [{ op: 'delete', id: source.id, expectedRevision: recreated.revision }],
+  });
+  onboardingCutover(core, { id: imported.id });
+  const output = core.state().assets.find((a) => a.type === 'skill')!;
+  const openSync = fs.openSync;
+  const mock = t.mock.method(fs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]) === entry && typeof args[1] === 'number' && args[1] & fs.constants.O_CREAT)
+      throw new Error('interrupted native restore');
+    return openSync(...args);
+  });
+  assert.throws(() => onboardingRestore(core, { id: imported.id }), /interrupted native restore/);
+  mock.mock.restore();
+  assert(!fs.existsSync(entry));
+  core.changeAssets({
+    summary: 'independent output creation',
+    operations: [{ op: 'upsert', expectedRevision: 0, asset: inputOf(output) }],
+  });
+  assert.throws(() => onboardingRestore(core, { id: imported.id }), { code: 'ROLLBACK_CONFLICT' });
+  assert(!fs.existsSync(entry));
+});
+
+test('legacy saved manifests remain readable without rewriting or imposing new classification fields', (t) => {
+  const { core, native } = fixture(t);
+  put(native, 'skills/legacy/SKILL.md', 'Local procedure.');
+  const operation = ready(core, native);
+  const manifestPath = path.join(core.store.root, 'onboarding', operation.id, 'manifest.json');
+  const legacy = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  delete legacy.classificationRequired;
+  delete legacy.organization.classification;
+  delete legacy.organization.absent;
+  fs.writeFileSync(manifestPath, JSON.stringify(legacy));
+  const before = fs.readFileSync(manifestPath);
+  assert.equal(onboardingGet(core, { id: operation.id }).classificationRequired, undefined);
+  assert(onboardingList(core).some((m) => m.id === operation.id));
+  onboardingPlan(core, { id: operation.id });
+  assert.deepEqual(fs.readFileSync(manifestPath), before);
+  assert.equal(onboardingCutover(core, { id: operation.id }).phase, 'cutover');
+  assert.equal(onboardingRestore(core, { id: operation.id }).phase, 'restored');
+});
+
+test('retained originals stay disabled and participate in the atomic revision guard', (t) => {
+  const { core, native } = fixture(t);
+  put(native, 'skills/mixed/SKILL.md', 'Delegate and review.');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const request = conversion(core, imported);
+  request.operations = request.operations.filter((op) => op.op !== 'delete');
+  const source = core.state().assets[0];
+  const changeAssets = core.changeAssets.bind(core);
+  const mock = t.mock.method(core, 'changeAssets', (input: unknown) => {
+    changeAssets({
+      summary: 'concurrent edit of retained original',
+      operations: [
+        {
+          op: 'upsert',
+          expectedRevision: source.revision,
+          asset: { ...inputOf(source), description: 'Keep this edit' },
+        },
+      ],
+    });
+    return changeAssets(input);
+  });
+  assert.throws(() => onboardingOrganize(core, request));
+  mock.mock.restore();
+  assert.equal(core.state().assets.length, 1);
+  assert.equal(core.state().assets[0].description, 'Keep this edit');
+  assert(!core.state().assets[0].enabled);
+  assert(!onboardingGet(core, { id: imported.id }).organization);
+});
+
+test('interrupted split cutover and committed organization rollback both resume after restart', (t) => {
+  const { core, native, reopen } = fixture(t);
+  const entry = put(native, 'skills/mixed/SKILL.md', 'Delegate and review.');
+  put(native, 'skills/mixed/references/guide.md', 'Local checklist');
+  const imported = onboardingImport(core, { id: discover(core, native).id });
+  verify(core, imported);
+  const request = conversion(core, imported);
+  // A copy of the original can remain for reference, but stays disabled and tracked.
+  request.operations = request.operations.filter((op) => op.op !== 'delete');
+  const organized = onboardingOrganize(core, request);
+  assert.equal(organized.organization!.assets.length, 5);
+  assert.equal(core.state().assets.find((a) => a.id === imported.selected![0])!.enabled, false);
+  const unlinkSync = fs.unlinkSync;
+  const unlink = t.mock.method(fs, 'unlinkSync', (...args: Parameters<typeof fs.unlinkSync>) => {
+    unlinkSync(...args);
+    if (String(args[0]) === entry) throw new Error('crash after source removal');
+  });
+  assert.throws(() => onboardingCutover(core, { id: imported.id }), /crash after source removal/);
+  unlink.mock.restore();
+  assert.equal(onboardingGet(core, { id: imported.id }).phase, 'cutting-over');
+  assert(!fs.existsSync(entry));
+  assert.equal(onboardingCutover(core, { id: imported.id }).phase, 'cutover');
+  const rollback = core.rollback.bind(core);
+  const crash = t.mock.method(core, 'rollback', (input: unknown) => {
+    rollback(input);
+    throw new Error('crash after organization rollback');
+  });
+  assert.throws(
+    () => onboardingRestore(core, { id: imported.id }),
+    /crash after organization rollback/,
+  );
+  crash.mock.restore();
+  assert.equal(core.state().assets.length, 1);
+  assert(!fs.existsSync(entry));
+  const changes = core.state().state.changesets.length;
+  const restarted = reopen();
+  assert.equal(onboardingRestore(restarted, { id: imported.id }).phase, 'restored');
+  assert.equal(restarted.state().state.changesets.length, changes);
+  assert.equal(fs.readFileSync(entry, 'utf8'), 'Delegate and review.');
+  assert.equal(restarted.state().assets.length, 1);
+  assert(!restarted.state().assets[0].enabled);
 });

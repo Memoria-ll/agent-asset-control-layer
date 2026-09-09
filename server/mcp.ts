@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { Core } from './core.ts';
+import { Core, runtimeEventSchema, skillGetSchema } from './core.ts';
 import {
   configSchema,
   contextSchema,
@@ -13,6 +13,7 @@ import { onboardingRecordMcpRead } from './onboarding.ts';
 import { registerOnboarding } from './onboarding-mcp.ts';
 import { bootstrap, materialize } from './adapters.ts';
 import { discoveryInput } from './discovery.ts';
+import { exportInputSchema, exportBundle } from './export.ts';
 import {
   Management,
   authorizationShape,
@@ -213,13 +214,10 @@ export function createMcpServer(
   register(
     'aacl_asset_get',
     'Read an asset and its decision history.',
-    { id: idSchema },
+    { id: idSchema, revision: z.number().int().positive().optional() },
     true,
-    ({ id }) => {
-      const asset = requireValue(
-        core.state().assets.find((a) => a.id === id),
-        'Assetが見つかりません',
-      );
+    ({ id, revision }) => {
+      const asset = core.assetGet(id, revision);
       onboardingRecordMcpRead(core, { assetId: asset.id, revision: asset.revision });
       return {
         asset,
@@ -241,20 +239,26 @@ export function createMcpServer(
   );
   registerOnboarding(core, endpoint, register);
   register(
+    'aacl_export_bundle',
+    'Read one coherent revision-pinned asset/dependency/config bundle and output specification. Standalone output includes local Workflow orchestration and supporting files; connected output explicitly requires MCP. File placement is performed by the runtime after checking the requested destination and diff.',
+    exportInputSchema.shape,
+    true,
+    (args) => exportBundle(core, args),
+  );
+  register(
+    'aacl_skill_get',
+    'Retrieve exactly one pinned Skill body. Initial candidates contain descriptions only; inspect records retrieval, use additionally records reported use in the supplied snapshot. Referenced Skill bodies and helper files require separate retrieval.',
+    skillGetSchema.shape,
+    false,
+    (args) => core.skillGet(args),
+  );
+  register(
     'aacl_asset_file_get',
     'Read one support file from an asset bundle, optionally at a historical revision. Paths are bundle-relative; arbitrary filesystem paths are never read.',
     { id: idSchema, path: bundlePathSchema, revision: z.number().int().positive().optional() },
     true,
     ({ id, path, revision }) => {
-      const asset = revision
-        ? requireValue(
-            core.assetHistory(id).revisions.find((a) => a.revision === revision),
-            'Assetの改訂が見つかりません',
-          )
-        : requireValue(
-            core.state().assets.find((a) => a.id === id),
-            'Assetが見つかりません',
-          );
+      const asset = core.assetGet(id, revision);
       return {
         id,
         revision: asset.revision,
@@ -346,7 +350,7 @@ export function createMcpServer(
     'Start a user-requested session. Only explicitly selected workflows enter workflow mode; plain instructions remain advisory. A slash command may include trailing instructions; the separate instruction field is appended to them.',
     startShape,
     false,
-    (args) => core.startRun(args),
+    (args) => management.runGet(core.startRun(args).id),
   );
   register(
     'aacl_session_preflight',
@@ -390,23 +394,17 @@ export function createMcpServer(
       reason: z.string().trim().min(1),
     },
     false,
-    ({ runId, ...args }) => core.restartRun(runId, args),
+    ({ runId, ...args }) => management.runGet(core.restartRun(runId, args).id),
   );
   register(
     'aacl_runtime_event',
     'Report actual runtime work for a uniquely identified attempt. Handoff retrieval alone does not mean work started.',
     {
       runId: idSchema,
-      expectedVersion: z.number().int().positive(),
-      event: z.enum(['started', 'resumed', 'result', 'failed', 'waiting-user']),
-      requestId: z.string().trim().min(1).max(200).optional(),
-      attemptId: z.string().trim().min(1),
-      note: z.string().optional(),
-      artifacts: z.record(z.string()).optional(),
-      observedAt: z.string().datetime().optional(),
+      ...runtimeEventSchema.shape,
     },
     false,
-    ({ runId, ...args }) => core.runtimeEvent(runId, args),
+    ({ runId, ...args }) => management.runGet(core.runtimeEvent(runId, args).id),
   );
   register(
     'aacl_context_handoff',
@@ -435,7 +433,10 @@ export function createMcpServer(
       criteria: z.record(z.string()).default({}),
     },
     false,
-    ({ runId, ...args }) => core.transition(runId, args),
+    ({ runId, ...args }) => {
+      core.transition(runId, args);
+      return management.runGet(runId);
+    },
   );
   register(
     'aacl_snapshot_get',

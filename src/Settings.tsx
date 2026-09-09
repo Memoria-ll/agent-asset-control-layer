@@ -82,11 +82,18 @@ export function Settings({ data, mutate }: { data: Overview; mutate: Mutate }) {
                 </dd>
               </div>
               <div>
+                <dt>必要なSkillを読む</dt>
+                <dd>
+                  <code>aacl_skill_get</code>{' '}
+                  で候補のID・revision・snapshotIdを指定して本文を取得します。説明だけの候補、本文の取得、使用の報告は別に記録されます。
+                </dd>
+              </div>
+              <div>
                 <dt>作業を実行</dt>
                 <dd>
                   <code>aacl_context_handoff</code>{' '}
                   でContextを受け取り、実際の作業開始・結果・失敗を <code>aacl_runtime_event</code>{' '}
-                  で報告します。
+                  で報告します。モデル未指定ならRuntimeの標準設定で起動し、開始報告に実際のモデル・Runtimeを添えます。不明な値は推測しません。
                 </dd>
               </div>
               <div>

@@ -46,6 +46,15 @@ export const stageSchema = z
     id: idSchema,
     name: z.string().min(1),
     role: idSchema,
+    model: modelIdSchema.optional(),
+    runtime: idSchema.optional(),
+    modelConstraint: z
+      .object({
+        model: modelIdSchema.optional(),
+        differentFromStage: idSchema.optional(),
+      })
+      .strict()
+      .optional(),
     taskType: idSchema.optional(),
     requiredAssets: z.array(idSchema).default([]),
     requiredCapabilities: z.array(idSchema).default([]),
@@ -255,6 +264,14 @@ export const assetSchema = z
       if (!w.stages.some((s) => s.canComplete ?? s.transitions.length === 0))
         ctx.addIssue({ code: 'custom', message: '完了Stageが必要です' });
       for (const s of w.stages) {
+        if (
+          s.modelConstraint?.differentFromStage &&
+          (!ids.has(s.modelConstraint.differentFromStage) ||
+            s.modelConstraint.differentFromStage === s.id)
+        )
+          ctx.addIssue({ code: 'custom', message: '比較対象の工程が不正です' });
+        if (s.model && s.modelConstraint?.model && s.model !== s.modelConstraint.model)
+          ctx.addIssue({ code: 'custom', message: '工程のモデル指定と必須モデルが矛盾しています' });
         const edges = new Set<string>();
         for (const t of s.transitions) {
           const key = `${t.to}:${t.kind}`;
@@ -277,7 +294,16 @@ export const assetSchema = z
 export type AssetInput = z.infer<typeof assetSchema>;
 export type Asset = AssetInput & { revision: number; updatedAt: string };
 export type ResolutionStatus =
-  'included' | 'excluded' | 'overridden' | 'disabled' | 'unavailable' | 'conflict';
+  'included' | 'available' | 'excluded' | 'overridden' | 'disabled' | 'unavailable' | 'conflict';
+export type SkillCandidate = {
+  id: string;
+  name: string;
+  description: string;
+  revision: number;
+  reasons: string[];
+  loading: 'metadata' | 'body';
+  retrieval: { tool: string; arguments: { id: string; revision: number; snapshotId?: string } };
+};
 export type ResolutionEntry = {
   asset: Asset;
   status: ResolutionStatus;
@@ -292,6 +318,8 @@ export type Resolution = {
   estimatedTokens: number;
   valid: boolean;
   errors: string[];
+  skillCandidates?: SkillCandidate[];
+  unevaluated?: { assetId: string; dimension: string; expected: string[] }[];
 };
 export type Project = {
   id: string;
@@ -316,6 +344,7 @@ export const configSchema = z
           name: z.string().min(1),
           provider: idSchema,
           endpoint: z.string().url().optional(),
+          supportsModelSelection: z.boolean().optional(),
           enforcement: z
             .object({
               repository: z.enum(['enforced', 'instruction-only', 'unsupported']),
@@ -342,7 +371,7 @@ export const configSchema = z
         .object({
           role: idSchema,
           workflow: idSchema.optional(),
-          model: modelIdSchema,
+          model: modelIdSchema.optional(),
           runtime: idSchema,
         })
         .strict(),
@@ -352,6 +381,8 @@ export const configSchema = z
 export type Config = z.infer<typeof configSchema>;
 export type Snapshot = {
   id: string;
+  origin?: 'preparation' | 'runtime-report';
+  preparedFrom?: string;
   runId: string;
   createdAt: string;
   mode: 'advisory' | 'workflow';
@@ -363,6 +394,12 @@ export type Snapshot = {
   resolution: Resolution;
   artifacts: Record<string, string>;
   settings?: { version: number; config: Config; project: Project | null };
+  modelSelection?: {
+    policy: 'runtime-default' | 'explicit';
+    requestedModel?: string;
+    actualModel?: string;
+    actualRuntime?: string;
+  };
 };
 export type Run = {
   id: string;
@@ -375,6 +412,15 @@ export type Run = {
   stage: string | null;
   context: Context;
   runtimeSelection?: Pick<Context, 'model' | 'runtime' | 'provider'>;
+  skillReads?: {
+    snapshotId: string;
+    assetId: string;
+    revision: number;
+    attemptId?: string;
+    retrievedAt: string;
+    usedAt?: string;
+    reason?: string;
+  }[];
   skillId?: string;
   skill?: Asset;
   createdAt: string;
@@ -401,6 +447,8 @@ export type Run = {
     finishedAt?: string;
     status: 'running' | 'result' | 'failed' | 'waiting-user';
     model?: string;
+    requestedModel?: string;
+    actualModel?: string;
     runtime?: string;
     note: string;
   }[];
@@ -418,6 +466,8 @@ export type Run = {
     observedAt?: string;
     requestId?: string;
     requestVersion?: number;
+    actualModel?: string;
+    actualRuntime?: string;
   }[];
   artifacts: Record<string, string>;
   criteria: Record<string, string>;

@@ -68,7 +68,7 @@ export function AssetCosts({ data }: { data: Overview }) {
         </Field>
       </div>
       <p className="muted small-text panel-body">
-        Snapshotに含まれた本文・実行条件の推定量です。再取得も1回として数え、除外されたAssetは含めません。
+        Snapshotに含まれたContextの推定量です。Skillの説明の提示、本文取得、使用の報告を別々に数えます。説明の提示は本文の読み込みや使用を意味しません。
       </p>
       <div className="table-scroll">
         <table>
@@ -78,7 +78,10 @@ export function AssetCosts({ data }: { data: Overview }) {
                 'Asset / revision',
                 'Workflow / revision',
                 'Stage / Role',
-                '読込回数',
+                'Context保存数',
+                '説明の提示',
+                '本文取得',
+                '使用の報告',
                 '累計tokens',
                 '平均tokens',
               ].map((h) => (
@@ -104,6 +107,9 @@ export function AssetCosts({ data }: { data: Overview }) {
                   <small>{m.role}</small>
                 </td>
                 <td>{m.snapshots}</td>
+                <td>{m.type === 'skill' ? (m.candidatePresentations ?? 0) : '—'}</td>
+                <td>{m.type === 'skill' ? (m.retrieved ?? 0) : '—'}</td>
+                <td>{m.type === 'skill' ? (m.reportedUses ?? 0) : '—'}</td>
                 <td>{m.estimatedTokens.toLocaleString()}</td>
                 <td>{m.averageTokens.toLocaleString()}</td>
               </tr>

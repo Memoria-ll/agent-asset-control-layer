@@ -119,7 +119,26 @@ try {
     );
   else if (command === 'start')
     console.log(JSON.stringify(await api('/runs', { command: args.join(' ') }), null, 2));
-  else if (command === 'export') {
+  else if (command === 'export-bundle') {
+    const [inputFile, output] = args;
+    if (!inputFile || !output || args.length !== 2)
+      throw new Error('使い方: export-bundle input.json new-directory');
+    if (fs.statSync(inputFile).size > 1_000_000) throw new Error('Export input exceeds 1 MB');
+    const input = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
+    const result = (await api('/export-bundle', input)) as {
+      files: { path: string; content: string }[];
+      limitations: unknown;
+    };
+    const root = path.resolve(output);
+    exportFiles(root, result.files);
+    console.log(
+      JSON.stringify(
+        { output: root, files: result.files.length, limitations: result.limitations },
+        null,
+        2,
+      ),
+    );
+  } else if (command === 'export') {
     const [runtime, workflow, output] = args;
     if (!['codex', 'claude', 'cursor', 'other'].includes(runtime) || !output)
       throw new Error('使い方: npm run cli -- export codex issue-development ./generated');
@@ -133,7 +152,7 @@ try {
   } else if (command === 'status') console.log(JSON.stringify(await api('/health'), null, 2));
   else {
     console.log(
-      'aacl Core CLI\n  init [path] [name]\n  start /workflow additional instruction\n  export <codex|claude|cursor|other> <workflow> <new-directory>\n  onboarding <discover|connect|import|get|list|plan|verify|organize|cutover|restore> [id] [input.json]\n  status\nCoreを先に起動してください。',
+      'aacl Core CLI\n  init [path] [name]\n  start /workflow additional instruction\n  export <codex|claude|cursor|other> <workflow> <new-directory>\n  export-bundle input.json <new-directory>\n  onboarding <discover|connect|import|get|list|plan|verify|organize|cutover|restore> [id] [input.json]\n  status\nCoreを先に起動してください。',
     );
     if (command) process.exitCode = 1;
   }

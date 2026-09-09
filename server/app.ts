@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { ZodError } from 'zod';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { exportBundle } from './export.ts';
 import { Core } from './core.ts';
 import { DomainError } from './domain.ts';
 import { createMcpServer } from './mcp.ts';
@@ -211,6 +212,8 @@ export function createApp(core: Core, discovery = discoverModels) {
     res.json(await core.handoff(req.params.id, req.body)),
   );
   app.get('/api/snapshots/:id', (req, res) => res.json(core.getSnapshot(req.params.id)));
+  app.post('/api/skills/get', (req, res) => res.json(core.skillGet(req.body)));
+  app.post('/api/export-bundle', (req, res) => res.json(exportBundle(core, req.body)));
   app.get('/api/journals', (req, res) => res.json(management.journals(req.query)));
   app.post('/api/journals', async (req, res) => res.json(await core.addJournal(req.body)));
   app.get('/api/reviews', (req, res) => res.json(management.reviews(req.query)));

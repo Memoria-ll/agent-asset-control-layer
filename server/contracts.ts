@@ -17,13 +17,7 @@ export function assetBody(a: AssetInput): string {
     list('Completion criteria', a.skill.completionCriteria);
     if (a.skill.steps?.length)
       sections.push(
-        'Skill内の手順（現在のRole・Model・権限を引き継ぎます）:\n' +
-          a.skill.steps
-            .map(
-              (s, i) =>
-                `${i + 1}. ${s.skillId}${s.condition ? `（条件: ${s.condition}）` : ''}${s.input ? ` 入力: ${JSON.stringify(s.input)}` : ''}${s.output ? ` 出力: ${s.output.join(', ')}` : ''}`,
-            )
-            .join('\n'),
+        '旧Skill内の構造化手順は実行しません。担当者・工程の制御はWorkflowへ移してください。',
       );
   }
   if (a.role) {
@@ -41,12 +35,30 @@ export function pinnedSkill(run: Run, snapshots: Snapshot[]): Asset | undefined 
   if (run.skill) return run.skill;
   if (!run.skillId) return undefined;
   const first = snapshots.find((s) => s.id === run.snapshotIds[0]);
-  return first?.resolution.assets.find((a) => a.id === run.skillId);
+  return (
+    first?.resolution.assets.find((a) => a.id === run.skillId) ??
+    first?.resolution.entries.find((e) => e.asset.id === run.skillId)?.asset
+  );
 }
 export function runRequirements(run: Run, snapshots: Snapshot[]) {
   const stage = run.workflow?.workflow?.stages.find((s) => s.id === run.stage);
   const snapshot = snapshots.find((s) => s.id === run.snapshotIds.at(-1));
-  const skills = snapshot?.resolution.assets.filter((a) => a.skill) ?? [];
+  const skills = [
+    ...(snapshot?.resolution.assets.filter((a) => a.skill) ?? []),
+    ...(run.skillReads ?? [])
+      .filter(
+        (read) =>
+          read.usedAt &&
+          (read.snapshotId === snapshot?.id || read.snapshotId === snapshot?.preparedFrom),
+      )
+      .flatMap(
+        (read) =>
+          snapshot?.resolution.entries
+            .filter((e) => e.asset.id === read.assetId && e.asset.revision === read.revision)
+            .map((e) => e.asset) ?? [],
+      ),
+    ...(pinnedSkill(run, snapshots)?.skill ? [pinnedSkill(run, snapshots)!] : []),
+  ].filter((asset) => asset.skill);
   return {
     completionCriteria: [
       ...new Set([

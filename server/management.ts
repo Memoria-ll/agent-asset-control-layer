@@ -20,6 +20,7 @@ import {
 import { assetDiff } from './history.ts';
 import { pinnedSkill, runRequirements } from './contracts.ts';
 import { discoveryInput, discoveryService, discoverModels } from './discovery.ts';
+import { builtinSkills } from './builtin-skills.ts';
 
 const text = z.string().trim().min(1).max(20000);
 export const actorSchema = z
@@ -209,6 +210,7 @@ export function assetMetadata(asset: Asset) {
   return {
     id: asset.id,
     name: asset.name,
+    description: asset.description,
     type: asset.type,
     revision: asset.revision,
     projectId: asset.projectId,
@@ -224,6 +226,8 @@ export function compactResolution(resolution: Resolution) {
     content: resolution.content,
     estimatedTokens: resolution.estimatedTokens,
     assets: resolution.assets.map(assetMetadata),
+    skillCandidates: resolution.skillCandidates ?? [],
+    unevaluated: resolution.unevaluated ?? [],
     entries: resolution.entries.map(({ asset, status, reasons, estimatedTokens }) => ({
       id: asset.id,
       revision: asset.revision,
@@ -429,9 +433,8 @@ export class Management {
   assets(input: unknown = {}) {
     const req = z.object(assetListShape).parse(input);
     return page(
-      this.core
-        .state()
-        .assets.filter(
+      [...this.core.state().assets, ...builtinSkills]
+        .filter(
           (a) =>
             (!req.type || a.type === req.type) &&
             (!req.projectId ||

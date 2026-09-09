@@ -86,10 +86,22 @@ test('production HTTP MCP tools complete native onboarding, preserve files and k
     id: discovery.id,
     userRequest: 'Enable this imported sample skill',
     reason: 'Confirmed useful for explicit invocation',
+    classification: {
+      reviewer: 'test-runtime',
+      entries: [
+        {
+          sourceId: assetId,
+          status: 'classified',
+          outputIds: [assetId],
+          reason: 'The source describes one actor performing a check',
+          unconvertedParts: [],
+        },
+      ],
+    },
     operations: [
       {
         op: 'upsert',
-        asset: { ...inputOf(current), enabled: true },
+        asset: { ...inputOf(current), type: 'skill', enabled: true },
         expectedRevision: current.revision,
       },
     ],

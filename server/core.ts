@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { Store } from './store.ts';
 import { resolveContext } from './resolver.ts';
 import { starterAssets } from './starter.ts';
-import { pinnedSkill, runRequirements } from './contracts.ts';
+import { builtinSkills } from './builtin-skills.ts';
+import { assetBody, pinnedSkill, runRequirements } from './contracts.ts';
 import { assetHistory, assetDiff, changeKinds } from './history.ts';
 import { prepareProposal } from './proposals.ts';
 import { extractRelations, validateRelations } from './relations.ts';
@@ -19,6 +20,7 @@ import {
   contextSchema,
   scopeSchema,
   idSchema,
+  modelIdSchema,
   operationSchema,
   inputOf,
   requireValue,
@@ -36,6 +38,29 @@ import {
 
 const uid = (prefix: string) => `${prefix}-${randomUUID().slice(0, 12)}`;
 const now = () => new Date().toISOString();
+export const skillGetSchema = z
+  .object({
+    id: idSchema,
+    revision: z.number().int().positive(),
+    snapshotId: idSchema.optional(),
+    attemptId: z.string().min(1).max(200).optional(),
+    usage: z.enum(['inspect', 'use']).default('inspect'),
+    reason: z.string().trim().min(1).max(4000).optional(),
+  })
+  .strict();
+export const runtimeEventSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    event: z.enum(['started', 'resumed', 'result', 'failed', 'waiting-user']),
+    attemptId: z.string().trim().min(1).max(200),
+    note: z.string().max(20000).default(''),
+    artifacts: z.record(z.string().trim().min(1)).default({}),
+    observedAt: z.string().datetime().optional(),
+    requestId: z.string().trim().min(1).max(200).optional(),
+    actualModel: modelIdSchema.optional(),
+    actualRuntime: idSchema.optional(),
+  })
+  .strict();
 function canonicalJson(value: unknown): string {
   const sort = (v: unknown): unknown =>
     Array.isArray(v)
@@ -108,6 +133,7 @@ export class Core {
         context: resolution.context,
         estimatedTokens: resolution.estimatedTokens,
         assetCount: resolution.assets.length,
+        skillCandidates: resolution.skillCandidates ?? [],
       })),
       diagnostics: this.diagnostics(),
       metrics: this.metrics(),
@@ -165,6 +191,11 @@ export class Core {
     };
     for (const op of ops) {
       const id = op.op === 'upsert' ? op.asset.id : op.id;
+      guard(
+        !builtinSkills.some((a) => a.id === id),
+        'BUILTIN_ASSET',
+        '組み込みSkillは別のIDへコピーして編集してください',
+      );
       const index = assets.findIndex((a) => a.id === id);
       const before = index < 0 ? null : assets[index];
       guard(
@@ -175,6 +206,11 @@ export class Core {
       let after: Asset | null = null;
       if (op.op === 'upsert') {
         const parsed = assetSchema.parse(op.asset);
+        guard(
+          !parsed.skill?.steps,
+          'SKILL_ORCHESTRATION',
+          'Skill内の構造化手順は保存できません。担当者や工程の制御をWorkflowへ移してください',
+        );
         if (parsed.projectId) {
           requireValue(
             state.projects.find((p) => p.id === parsed.projectId),
@@ -219,13 +255,18 @@ export class Core {
         proposalItemId: item?.id,
       });
     }
-    // Re-evaluate extracted links only when source text changes. Manual links remain intact.
+    // Type changes can turn provisional imports into Skills without changing their source text.
     for (const c of change.changes) {
-      if (!c.after || (c.before && c.before.content === c.after.content)) continue;
+      if (
+        !c.after ||
+        (c.before && c.before.type === c.after.type && c.before.content === c.after.content)
+      )
+        continue;
       const extracted = extractRelations(c.after, assets);
       const lines = c.after.content.split(/\r?\n/);
       const explicit = (c.after.relations ?? []).filter(
         (r) =>
+          c.before?.content === c.after?.content ||
           r.origin === 'manual' ||
           (r.source &&
             lines[r.source.line - 1] === r.source.text &&
@@ -413,15 +454,17 @@ export class Core {
           assets.find((a) => a.id === b.workflow && a.type === 'workflow'),
           'Workflowが存在しません',
         );
-      const m = requireValue(
-        config.models.find((m) => m.id === b.model),
-        'Modelが存在しません',
-      );
+      const m = b.model
+        ? requireValue(
+            config.models.find((m) => m.id === b.model),
+            'Modelが存在しません',
+          )
+        : undefined;
       const r = requireValue(
         config.runtimes.find((r) => r.id === b.runtime),
         'Runtimeが存在しません',
       );
-      guard(m.provider === r.provider, 'CONFIG', 'ModelとRuntimeのProviderが一致しません');
+      guard(!m || m.provider === r.provider, 'CONFIG', 'ModelとRuntimeのProviderが一致しません');
     }
     return this.store.transaction((state) => {
       recordSettingChange(state, {
@@ -436,14 +479,14 @@ export class Core {
       return config;
     });
   }
-  private boundContext(state: State, context: Context): Context {
+  private boundContext(state: State, context: Context, applyBindings = true): Context {
     const ctx = normalizeProjectContext(context, state.projects);
     const binding =
       state.config.bindings.find((b) => b.role === ctx.role && b.workflow === ctx.workflow) ??
       state.config.bindings.find((b) => b.role === ctx.role && !b.workflow);
-    if (binding && !ctx.model && !ctx.runtime) {
-      ctx.model = binding.model;
-      ctx.runtime = binding.runtime;
+    if (binding && applyBindings) {
+      ctx.model ??= binding.model;
+      ctx.runtime ??= binding.runtime;
     }
     const model = ctx.model
       ? requireValue(
@@ -463,6 +506,12 @@ export class Core {
         'PROVIDER',
         'ModelとRuntimeのProviderが一致しません',
       );
+    if (model && runtime && applyBindings)
+      guard(
+        runtime.supportsModelSelection !== false,
+        'MODEL_SELECTION_UNSUPPORTED',
+        'このRuntimeは明示モデルの選択に対応していません。指定を無視して実行できません',
+      );
     const provider = model?.provider ?? runtime?.provider;
     if (ctx.provider && provider)
       guard(ctx.provider === provider, 'PROVIDER', '指定ProviderがModel / Runtimeと一致しません');
@@ -480,9 +529,15 @@ export class Core {
     context: Context,
     requested: string[] = [],
     pinned?: Asset | null,
+    options: { loadedSkills?: string[]; actual?: { model?: string; runtime?: string } } = {},
   ): Resolution {
     let ctx = { ...context };
+    assets = [
+      ...assets.filter((a) => !builtinSkills.some((b) => b.id === a.id)),
+      ...structuredClone(builtinSkills),
+    ];
     let catalog = assets;
+    if (!ctx.workflow) requested = [...requested, ...builtinSkills.map((a) => a.id)];
     if (ctx.workflow) {
       const workflow =
         pinned ??
@@ -506,6 +561,10 @@ export class Core {
         role: stage.role,
         taskType: stage.taskType,
       };
+      if (!options.actual) {
+        ctx.model ??= stage.model ?? stage.modelConstraint?.model;
+        ctx.runtime ??= stage.runtime;
+      }
       requested = [
         ...requested,
         workflow.id,
@@ -521,19 +580,45 @@ export class Core {
       if (ctx.role) requested.push(ctx.role);
       if (ctx.taskType) requested.push(ctx.taskType);
     }
-    ctx = this.boundContext(state, ctx);
+    if (options.actual) {
+      delete ctx.model;
+      delete ctx.provider;
+      if (options.actual.runtime) {
+        ctx.runtime = state.config.runtimes.find((r) => r.id === options.actual!.runtime)?.id;
+      }
+      const model = state.config.models.find((m) => m.id === options.actual!.model);
+      if (model) ctx.model = model.id;
+    }
+    ctx = this.boundContext(state, ctx, !options.actual);
+    const constraint =
+      pinned?.workflow?.stages.find((s) => s.id === ctx.stage)?.modelConstraint ??
+      catalog.find((a) => a.id === ctx.workflow)?.workflow?.stages.find((s) => s.id === ctx.stage)
+        ?.modelConstraint;
+    if (constraint?.model && ctx.model)
+      guard(
+        ctx.model === constraint.model,
+        'MODEL_CONSTRAINT',
+        'モデル指定がWorkflowの必須モデルと一致しません',
+      );
     return resolveContext(catalog, ctx, {
       project: state.projects.find((p) => p.id === ctx.project),
       requested,
+      loadedSkills: options.loadedSkills,
     });
   }
   preview(input: unknown) {
     const req = z
-      .object({ context: contextSchema.default({}), requested: z.array(idSchema).default([]) })
+      .object({
+        context: contextSchema.default({}),
+        requested: z.array(idSchema).default([]),
+        loadedSkills: z.array(idSchema).default([]),
+      })
       .strict()
       .parse(input);
     const { state, assets } = this.state();
-    return this.resolution(state, assets, req.context, req.requested);
+    return this.resolution(state, assets, req.context, req.requested, undefined, {
+      loadedSkills: req.loadedSkills,
+    });
   }
   private snapshot(state: State, assets: Asset[], run: Run, context?: Context): Snapshot {
     const base = context ?? run.context;
@@ -550,6 +635,7 @@ export class Core {
     const project = state.projects.find((p) => p.id === resolution.context.project);
     const snapshot: Snapshot = {
       id: uid('snapshot'),
+      origin: 'preparation',
       runId: run.id,
       createdAt: now(),
       mode: run.mode,
@@ -565,8 +651,14 @@ export class Core {
         config: structuredClone(state.config),
         project: project ? structuredClone(project) : null,
       },
+      modelSelection: {
+        policy: resolution.context.model ? 'explicit' : 'runtime-default',
+        requestedModel: resolution.context.model,
+      },
     };
     state.snapshots.unshift(snapshot);
+    for (const candidate of resolution.skillCandidates ?? [])
+      candidate.retrieval.arguments.snapshotId = snapshot.id;
     run.snapshotIds.push(snapshot.id);
     run.context = resolution.context;
     return snapshot;
@@ -591,6 +683,7 @@ export class Core {
     });
   }
   private prepareRun(state: State, assets: Asset[], req: z.infer<typeof launchSchema>): Run {
+    assets = [...assets, ...structuredClone(builtinSkills)];
     let workflowId = req.workflowId;
     let skillId = req.skillId;
     let instruction = req.instruction || req.command;
@@ -689,12 +782,6 @@ export class Core {
           run.workflow,
         );
         const ctx = resolution.context;
-        if (!ctx.model || !ctx.runtime)
-          issues.push({
-            code: 'RUNTIME_SELECTION_REQUIRED',
-            stage: stage.id,
-            message: `${stage.role ?? '実行'}のModelとRuntimeを設定してください`,
-          });
         for (const error of resolution.errors)
           issues.push({ code: 'CONTEXT_UNRESOLVED', stage: stage.id, message: error });
         const enforcement = state.config.runtimes.find((r) => r.id === ctx.runtime)?.enforcement;
@@ -710,6 +797,9 @@ export class Core {
           role: ctx.role,
           model: ctx.model,
           runtime: ctx.runtime,
+          modelPolicy: ctx.model ? 'explicit' : 'runtime-default',
+          modelConstraint:
+            run.workflow?.workflow?.stages.find((s) => s.id === stage.id)?.modelConstraint ?? null,
           enforcement: enforcement ?? null,
         };
       } catch (e) {
@@ -829,6 +919,38 @@ export class Core {
         );
       const from = run.stage;
       if (['advance', 'complete'].includes(req.kind)) {
+        const constraint = run.workflow?.workflow?.stages.find(
+          (s) => s.id === run.stage,
+        )?.modelConstraint;
+        if (constraint && (constraint.model || constraint.differentFromStage)) {
+          const attempt = run.attempts?.find(
+            (a) =>
+              a.snapshotId === run.snapshotIds.at(-1) &&
+              a.stage === run.stage &&
+              ['running', 'result'].includes(a.status),
+          );
+          guard(
+            attempt?.actualModel,
+            'MODEL_CONSTRAINT_UNVERIFIED',
+            '完了・進行の前に必須モデル条件を満たす試行の開始報告が必要です',
+          );
+          if (constraint.model)
+            guard(
+              attempt.actualModel === constraint.model,
+              'MODEL_CONSTRAINT_UNVERIFIED',
+              '必須モデルを実行報告で確認できません',
+            );
+          if (constraint.differentFromStage) {
+            const prior = run.attempts
+              ?.filter((a) => a.stage === constraint.differentFromStage && a.status === 'result')
+              .at(-1);
+            guard(
+              prior?.actualModel && prior.actualModel !== attempt.actualModel,
+              'MODEL_CONSTRAINT_UNVERIFIED',
+              '別モデルによる実行という必須条件を確認できません',
+            );
+          }
+        }
         const needed = runRequirements(run, state.snapshots);
         Object.assign(run.artifacts, req.artifacts);
         guard(
@@ -948,6 +1070,127 @@ export class Core {
       'Snapshotが見つかりません',
     );
   }
+  assetGet(id: string, revision?: number) {
+    const builtin = builtinSkills.find(
+      (a) => a.id === id && (!revision || revision === a.revision),
+    );
+    if (builtin) return structuredClone(builtin);
+    return requireValue(
+      revision
+        ? this.assetHistory(id).revisions.find((a) => a.revision === revision)
+        : this.state().assets.find((a) => a.id === id),
+      'Assetの改訂が見つかりません',
+    );
+  }
+  skillGet(input: unknown) {
+    const req = skillGetSchema.parse(input);
+    const retrieve = (state: State) => {
+      const snapshot = req.snapshotId
+        ? requireValue(
+            state.snapshots.find((s) => s.id === req.snapshotId),
+            'Snapshotが見つかりません',
+          )
+        : undefined;
+      const asset = snapshot
+        ? requireValue(
+            snapshot.resolution.entries.find(
+              (e) => e.asset.id === req.id && e.asset.revision === req.revision,
+            )?.asset,
+            'Snapshot内のSkill改訂が見つかりません',
+          )
+        : this.assetGet(req.id, req.revision);
+      guard(asset.type === 'skill', 'SKILL_REQUIRED', 'Skillを指定してください');
+      let referenced: Asset[] = [];
+      if (snapshot) {
+        const catalog = snapshot.resolution.entries.map((e) => e.asset);
+        const resolution = resolveContext(catalog, snapshot.resolution.context, {
+          project: snapshot.settings?.project ?? undefined,
+          requested: [asset.id],
+          loadedSkills: [asset.id],
+        });
+        guard(resolution.valid, 'CONTEXT_UNRESOLVED', resolution.errors.join('\n'));
+        referenced = catalog.filter(
+          (a) =>
+            a.id !== asset.id &&
+            (asset.dependencies.includes(a.id) || asset.relations?.some((r) => r.target === a.id)),
+        );
+        const run = requireValue(
+          state.runs.find((r) => r.id === snapshot.runId),
+          'Runが見つかりません',
+        );
+        if (req.attemptId)
+          guard(
+            run.attempts?.some((a) => a.id === req.attemptId && a.snapshotId === snapshot.id),
+            'SKILL_ATTEMPT',
+            '試行とSnapshotが一致しません',
+          );
+        if (req.usage === 'use')
+          guard(
+            run.status === 'active' && run.snapshotIds.at(-1) === snapshot.id,
+            'SKILL_CONTEXT_STALE',
+            '現在のSnapshotを使ってSkillを取得してください',
+          );
+        run.skillReads ??= [];
+        const previous = run.skillReads.find(
+          (r) =>
+            r.snapshotId === snapshot.id && r.assetId === asset.id && r.attemptId === req.attemptId,
+        );
+        const at = now();
+        if (previous) {
+          if (req.usage === 'use') {
+            previous.usedAt ??= at;
+            previous.reason = req.reason;
+          }
+        } else
+          run.skillReads.push({
+            snapshotId: snapshot.id,
+            assetId: asset.id,
+            revision: asset.revision,
+            attemptId: req.attemptId,
+            retrievedAt: at,
+            ...(req.usage === 'use' ? { usedAt: at } : {}),
+            reason: req.reason,
+          });
+      } else
+        guard(
+          req.usage === 'inspect' && !req.attemptId,
+          'SNAPSHOT_REQUIRED',
+          '使用記録にはSnapshotが必要です',
+        );
+      const { files, ...body } = asset;
+      return {
+        asset: body,
+        files: Object.keys(files ?? {}).map((path) => ({
+          path,
+          id: asset.id,
+          revision: asset.revision,
+          retrievalTool: 'aacl_asset_file_get',
+        })),
+        references: referenced.map((a) => ({
+          id: a.id,
+          revision: a.revision,
+          type: a.type,
+          name: a.name,
+          description: a.description,
+          retrieval: {
+            tool: a.type === 'skill' ? 'aacl_skill_get' : 'aacl_asset_get',
+            arguments: {
+              id: a.id,
+              revision: a.revision,
+              ...(a.type === 'skill' ? { snapshotId: snapshot?.id } : {}),
+            },
+          },
+        })),
+        usage: req.usage,
+        snapshotId: snapshot?.id,
+        guidance:
+          '同じ担当者が必要な参照を個別取得します。別担当や工程を起動しません。使用の記録はRuntimeの申告であり、取得だけでは使用を認定しません。',
+      };
+    };
+    return req.snapshotId
+      ? this.store.transaction((state) => retrieve(state))
+      : retrieve(this.state().state);
+  }
   handoff(runId: string, input: unknown) {
     const req = z
       .object({
@@ -998,11 +1241,22 @@ export class Core {
             'HANDOFF_CONTEXT',
             `Handoffで${key}は変更できません`,
           );
-      const context = { ...run.context, ...req.context };
+      const {
+        model: previousModel,
+        runtime: previousRuntime,
+        provider: previousProvider,
+        ...baseContext
+      } = run.context;
+      const context = { ...baseContext, ...run.runtimeSelection, ...req.context };
       if (req.context.model || req.context.runtime) {
         context.provider = req.context.provider;
         if (!req.context.model) delete context.model;
         if (!req.context.runtime) delete context.runtime;
+        run.runtimeSelection = {
+          model: context.model,
+          runtime: context.runtime,
+          provider: context.provider,
+        };
       }
       const snapshot = this.snapshot(state, assets, run, context);
       const runtime = state.config.runtimes.find(
@@ -1048,6 +1302,24 @@ export class Core {
       role: snapshot.resolution.context.role ?? null,
       runtime: config.runtimes.find((r) => r.id === snapshot.resolution.context.runtime) ?? null,
       model: config.models.find((m) => m.id === snapshot.resolution.context.model) ?? null,
+      requestedModel:
+        snapshot.modelSelection?.requestedModel ??
+        (snapshot.modelSelection ? null : (snapshot.resolution.context.model ?? null)),
+      actualModel: snapshot.modelSelection?.actualModel ?? null,
+      launch: {
+        kind: stage ? 'subagent' : 'current-agent',
+        role: snapshot.resolution.context.role ?? null,
+        modelPolicy:
+          snapshot.modelSelection?.policy ??
+          (snapshot.resolution.context.model ? 'explicit' : 'runtime-default'),
+        ...(snapshot.modelSelection?.requestedModel
+          ? { model: snapshot.modelSelection.requestedModel }
+          : !snapshot.modelSelection && snapshot.resolution.context.model
+            ? { model: snapshot.resolution.context.model }
+            : {}),
+        instruction:
+          'モデル未指定ならモデル引数を付けずにRuntimeの標準設定で起動します。親モデルを子の実モデルとして推測せず、子の実行情報を開始時に報告してください。',
+      },
       mode: run.mode,
       developmentAllowed: !!run.workflow?.workflow?.developmentCapable,
       delivery,
@@ -1057,6 +1329,8 @@ export class Core {
         revision: a.revision,
         type: a.type,
       })),
+      skillCandidates: snapshot.resolution.skillCandidates ?? [],
+      unevaluated: snapshot.resolution.unevaluated ?? [],
       artifacts: run.artifacts,
       ...runRequirements(run, state.snapshots),
       skill: skill
@@ -1067,6 +1341,7 @@ export class Core {
           }
         : null,
       possibleTransitions: stage?.transitions ?? [],
+      modelConstraint: stage?.modelConstraint ?? null,
       canComplete: stage ? (stage.canComplete ?? stage.transitions.length === 0) : true,
       executionStatus: run.executionStatus ?? 'prepared',
       relations: snapshot.resolution.assets.flatMap((a) =>
@@ -1094,18 +1369,12 @@ export class Core {
     return { ...this.handoffResult(state, run, snapshot, 'host-inject'), preview: true };
   }
   runtimeEvent(runId: string, input: unknown) {
-    const req = z
-      .object({
-        expectedVersion: z.number().int().positive(),
-        event: z.enum(['started', 'resumed', 'result', 'failed', 'waiting-user']),
-        attemptId: z.string().trim().min(1).max(200),
-        note: z.string().max(20000).default(''),
-        artifacts: z.record(z.string().trim().min(1)).default({}),
-        observedAt: z.string().datetime().optional(),
-        requestId: z.string().trim().min(1).max(200).optional(),
-      })
-      .strict()
-      .parse(input);
+    const req = runtimeEventSchema.parse(input);
+    guard(
+      req.event === 'started' || (!req.actualModel && !req.actualRuntime),
+      'RUNTIME_REPORT',
+      '実モデルと実行環境は試行開始時に報告してください',
+    );
     return this.store.transaction((state) => {
       const run = requireValue(
         state.runs.find((r) => r.id === runId),
@@ -1124,7 +1393,9 @@ export class Core {
             repeated.attemptId === req.attemptId &&
             repeated.note === req.note &&
             isDeepStrictEqual(repeated.artifacts ?? {}, req.artifacts) &&
-            repeated.observedAt === req.observedAt,
+            repeated.observedAt === req.observedAt &&
+            repeated.actualModel === req.actualModel &&
+            repeated.actualRuntime === req.actualRuntime,
           'REQUEST_CONFLICT',
           '同じ試行の報告を異なる内容で再送できません',
         );
@@ -1152,19 +1423,95 @@ export class Core {
           '実行中の試行があります',
         );
         guard(run.lastHandoff, 'HANDOFF_REQUIRED', '開始報告の前にContextを取得してください');
-        guard(
-          run.context.model && run.context.runtime,
-          'RUNTIME_SELECTION_REQUIRED',
-          '開始報告には登録済みのModelとRuntimeが必要です',
+        const prepared = requireValue(
+          state.snapshots.find((s) => s.id === run.lastHandoff!.snapshotId),
+          '引き継ぎSnapshotが見つかりません',
         );
+        guard(
+          prepared.stage === run.stage,
+          'HANDOFF_REQUIRED',
+          '現在工程のContextを取得してください',
+        );
+        const requestedModel =
+          prepared.modelSelection?.requestedModel ?? prepared.resolution.context.model;
+        guard(
+          !requestedModel || !req.actualModel || requestedModel === req.actualModel,
+          'MODEL_MISMATCH',
+          '指定モデルと報告された実モデルが異なります',
+        );
+        guard(
+          !req.actualRuntime ||
+            !prepared.resolution.context.runtime ||
+            req.actualRuntime === prepared.resolution.context.runtime,
+          'RUNTIME_MISMATCH',
+          '指定Runtimeと実行環境が異なります',
+        );
+        const constraint = run.workflow?.workflow?.stages.find(
+          (s) => s.id === run.stage,
+        )?.modelConstraint;
+        if (constraint?.model)
+          guard(
+            req.actualModel === constraint.model,
+            'MODEL_CONSTRAINT_UNVERIFIED',
+            '必須モデルを実行報告で確認できません',
+          );
+        if (constraint?.differentFromStage) {
+          const prior = run.attempts
+            .filter((a) => a.stage === constraint.differentFromStage && a.status === 'result')
+            .at(-1);
+          guard(
+            prior?.actualModel && req.actualModel && prior.actualModel !== req.actualModel,
+            'MODEL_CONSTRAINT_UNVERIFIED',
+            '別モデルによる実行という必須条件を確認できません',
+          );
+        }
+        const pinnedState = {
+          ...state,
+          config: prepared.settings?.config ?? state.config,
+          projects: prepared.settings
+            ? prepared.settings.project
+              ? [prepared.settings.project]
+              : []
+            : state.projects,
+        };
+        const resolution = this.resolution(
+          pinnedState,
+          prepared.resolution.entries.map((e) => e.asset),
+          prepared.resolution.context,
+          run.skillId ? [run.skillId] : [],
+          run.workflow,
+          { actual: { model: req.actualModel, runtime: req.actualRuntime } },
+        );
+        guard(resolution.valid, 'CONTEXT_UNRESOLVED', resolution.errors.join('\n'));
+        const actualSnapshot: Snapshot = {
+          ...structuredClone(prepared),
+          id: uid('snapshot'),
+          origin: 'runtime-report',
+          preparedFrom: prepared.id,
+          createdAt: at,
+          resolution,
+          modelSelection: {
+            policy: requestedModel ? 'explicit' : 'runtime-default',
+            requestedModel,
+            actualModel: req.actualModel,
+            actualRuntime: req.actualRuntime,
+          },
+        };
+        for (const candidate of resolution.skillCandidates ?? [])
+          candidate.retrieval.arguments.snapshotId = actualSnapshot.id;
+        state.snapshots.unshift(actualSnapshot);
+        run.snapshotIds.push(actualSnapshot.id);
+        run.context = resolution.context;
         attempt = {
           id: req.attemptId,
           stage: run.stage,
-          snapshotId: run.lastHandoff.snapshotId,
+          snapshotId: actualSnapshot.id,
           startedAt: at,
           status: 'running',
-          model: run.context.model,
-          runtime: run.context.runtime,
+          model: req.actualModel,
+          requestedModel,
+          actualModel: req.actualModel,
+          runtime: req.actualRuntime ?? prepared.resolution.context.runtime,
           note: req.note,
         };
         run.attempts.push(attempt);
@@ -1210,6 +1557,8 @@ export class Core {
         observedAt: req.observedAt,
         requestId: req.requestId,
         requestVersion: req.expectedVersion,
+        actualModel: req.actualModel,
+        actualRuntime: req.actualRuntime,
       });
       run.version++;
       run.updatedAt = at;
@@ -1550,14 +1899,25 @@ export class Core {
       role: string;
       snapshots: number;
       estimatedTokens: number;
+      candidatePresentations: number;
+      retrieved: number;
+      reportedUses: number;
     };
     const groups = new Map<string, Group>();
     for (const s of state.snapshots)
-      for (const a of s.resolution.assets) {
+      for (const a of s.resolution.entries.map((e) => e.asset)) {
         const entry = s.resolution.entries.find(
           (e) => e.asset.id === a.id && e.asset.revision === a.revision,
         );
-        if (!entry || entry.status !== 'included') continue;
+        const reads =
+          state.runs
+            .find((r) => r.id === s.runId)
+            ?.skillReads?.filter(
+              (read) =>
+                read.snapshotId === s.id && read.assetId === a.id && read.revision === a.revision,
+            ) ?? [];
+        if (!entry || (!['included', 'available'].includes(entry.status) && !reads.length))
+          continue;
         const key = JSON.stringify([
           a.id,
           a.revision,
@@ -1577,9 +1937,17 @@ export class Core {
           role: s.resolution.context.role ?? '—',
           snapshots: 0,
           estimatedTokens: 0,
+          candidatePresentations: 0,
+          retrieved: 0,
+          reportedUses: 0,
         };
         group.snapshots++;
-        group.estimatedTokens += entry.estimatedTokens;
+        if (['included', 'available'].includes(entry.status))
+          group.estimatedTokens += entry.estimatedTokens;
+        group.candidatePresentations += Number(entry.status === 'available');
+        group.estimatedTokens += reads.length * Math.ceil(assetBody(a).length / 4);
+        group.retrieved += reads.length;
+        group.reportedUses += reads.filter((read) => read.usedAt).length;
         groups.set(key, group);
       }
     return [...groups.values()]

@@ -128,7 +128,10 @@ test('top-down role/model links deduplicate bodies; references/conditional links
     },
     role.revision,
   );
-  const resolution = core.preview({ context: { workflow: 'issue-development' } });
+  const resolution = core.preview({
+    context: { workflow: 'issue-development' },
+    loadedSkills: ['parent', 'child'],
+  });
   assert.equal(resolution.context.role, 'orchestrator');
   assert.equal(resolution.context.model, 'test-model');
   assert.equal(resolution.content.split('CHILD_UNIQUE_TEXT').length - 1, 1);
@@ -317,7 +320,7 @@ test('preflight and preview never mutate; retry IDs deduplicate and actual attem
   });
   const observedAt = new Date(Date.now() - 1000).toISOString();
   const journal = core.addJournal({
-    snapshotId: handoff.snapshotId,
+    snapshotId: started.attempts![0].snapshotId,
     attemptId: 'attempt-1',
     observedAt,
     kind: 'success',
@@ -457,8 +460,9 @@ test('absolute directory relation conditions match relative conditions, and mixe
       .preview({
         context: { project: project.id, directory: projectRoot + '/src/a' },
         requested: ['a'],
+        loadedSkills: ['a'],
       })
-      .assets.some((a) => a.id === 'b'),
+      .skillCandidates?.some((a) => a.id === 'b'),
   );
   const a = core.state().assets.find((a) => a.id === 'a')!;
   save({ ...inputOf(a), relations: [], dependencies: ['b'] }, a.revision);

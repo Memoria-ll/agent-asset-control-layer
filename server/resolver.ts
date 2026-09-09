@@ -58,7 +58,7 @@ function compare(a: Asset, b: Asset) {
 export function resolveContext(
   assets: Asset[],
   context: Context,
-  options: { project?: Project; requested?: string[] } = {},
+  options: { project?: Project; requested?: string[]; loadedSkills?: string[] } = {},
 ): Resolution {
   if (context.directory)
     context = { ...context, directory: normalizeDirectory(context.directory, options.project) };
@@ -80,6 +80,7 @@ export function resolveContext(
     return { ...asset, scope };
   });
   const requested = new Set(options.requested ?? []);
+  const loaded = new Set(options.loadedSkills ?? []);
   const selectedBy = new Map<string, string[]>();
   const relationMatches = (scope: Scope) =>
     scopeMatches(
@@ -112,9 +113,6 @@ export function resolveContext(
               requested.has(r.target)),
         )
         .map((r) => r.target),
-      ...(a.skill?.steps ?? [])
-        .filter((s) => !s.condition || requested.has(s.skillId))
-        .map((s) => s.skillId),
     ]),
   ];
   const expanded = new Set<string>();
@@ -130,6 +128,7 @@ export function resolveContext(
     )
       return;
     expanded.add(id);
+    if (a.type === 'skill' && !loaded.has(id)) return;
     for (const dep of dependencies(a)) {
       selectedBy.set(dep, [...new Set([...(selectedBy.get(dep) ?? []), id])]);
       if (!requested.has(dep)) {
@@ -223,8 +222,16 @@ export function resolveContext(
         for (const source of selectedBy.get(a.id) ?? [])
           reasons.push(`利用関係: ${source} → ${a.id}`);
         if (requested.has(a.id)) reasons.push('明示選択・scope一致、または必要な依存Asset');
+        if (a.type === 'skill' && !loaded.has(a.id)) status = 'available';
       }
-      return { asset: a, status, reasons, estimatedTokens: tokenEstimate(assetBody(a)) };
+      return {
+        asset: a,
+        status,
+        reasons,
+        estimatedTokens: tokenEstimate(
+          status === 'available' ? `${a.name}\n${a.description}` : assetBody(a),
+        ),
+      };
     })
     .sort((a, b) => compare(a.asset, b.asset) || a.asset.id.localeCompare(b.asset.id, 'en'));
   const get = (id: string) => entries.find((e) => e.asset.id === id);
@@ -232,12 +239,16 @@ export function resolveContext(
   for (const [id, replacement] of Object.entries(options.project?.overrides ?? {})) {
     const from = get(id),
       to = get(replacement);
-    if (from?.status !== 'included') continue;
+    if (!from || !['included', 'available'].includes(from.status)) continue;
     if (from.asset.mandatory) {
       from.reasons.push('mandatoryのためoverrideを無視');
       continue;
     }
-    if (!to || to.status !== 'included' || from.asset.type !== to.asset.type) {
+    if (
+      !to ||
+      !['included', 'available'].includes(to.status) ||
+      from.asset.type !== to.asset.type
+    ) {
       from.status = 'unavailable';
       from.reasons.push('override先が利用不可、またはAsset Typeが異なります');
     } else {
@@ -246,7 +257,7 @@ export function resolveContext(
       overrides.push({ from, to });
     }
   }
-  const included = entries.filter((e) => e.status === 'included');
+  const included = entries.filter((e) => ['included', 'available'].includes(e.status));
   for (let i = 0; i < included.length; i++)
     for (let j = i + 1; j < included.length; j++) {
       const a = included[i],
@@ -282,7 +293,7 @@ export function resolveContext(
   included.forEach((e) => visit(e.asset.id, []));
   for (const id of cycleMembers) {
     const e = get(id);
-    if (e?.status === 'included') {
+    if (e && ['included', 'available'].includes(e.status)) {
       e.status = 'unavailable';
       e.reasons.push('循環依存を検出');
     }
@@ -291,13 +302,15 @@ export function resolveContext(
   while (changed) {
     changed = false;
     for (const { from, to } of overrides)
-      if (from.status === 'overridden' && to.status !== 'included') {
+      if (from.status === 'overridden' && !['included', 'available'].includes(to.status)) {
         from.status = 'unavailable';
         from.reasons.push('override先の解決に失敗しました');
         changed = true;
       }
     for (const e of entries.filter((e) => e.status === 'included')) {
-      const missing = dependencies(e.asset).filter((d) => get(d)?.status !== 'included');
+      const missing = dependencies(e.asset).filter(
+        (d) => !['included', 'available'].includes(get(d)?.status ?? ''),
+      );
       if (missing.length) {
         e.status = 'unavailable';
         e.reasons.push(`必要な依存Assetが利用不可: ${missing.join(', ')}`);
@@ -318,14 +331,39 @@ export function resolveContext(
   };
   entries.filter((e) => e.status === 'included').forEach((e) => emit(e.asset));
   const errors = entries
-    .filter((e) => ['conflict', 'unavailable'].includes(e.status))
+    .filter(
+      (e) =>
+        ['conflict', 'unavailable'].includes(e.status) &&
+        (e.asset.type !== 'skill' ||
+          loaded.has(e.asset.id) ||
+          options.requested?.includes(e.asset.id)),
+    )
     .map((e) => `${e.asset.id}: ${e.reasons.at(-1)}`);
   for (const id of options.requested ?? [])
-    if (get(id)?.status !== 'included') errors.push(`Required Assetが解決されません: ${id}`);
-  const content = final
+    if (!['included', 'available'].includes(get(id)?.status ?? ''))
+      errors.push(`Required Assetが解決されません: ${id}`);
+  const skillCandidates = entries
+    .filter((e) => e.asset.type === 'skill' && ['included', 'available'].includes(e.status))
+    .map((e) => ({
+      id: e.asset.id,
+      name: e.asset.name,
+      description: e.asset.description,
+      revision: e.asset.revision,
+      reasons: e.reasons,
+      loading: (e.status === 'included' ? 'body' : 'metadata') as 'body' | 'metadata',
+      retrieval: {
+        tool: 'aacl_skill_get',
+        arguments: { id: e.asset.id, revision: e.asset.revision },
+      },
+    }));
+  const bodies = final
     .filter((a) => assetBody(a))
     .map((a) => `## ${a.name} [${a.id}@${a.revision}]\n\n${assetBody(a)}`)
     .join('\n\n');
+  const catalog = skillCandidates.length
+    ? `## 利用候補のSkill\n本文は使用時にaacl_skill_getで取得します。候補の提示は使用記録ではありません。\n${skillCandidates.map((s) => `- ${s.name} [${s.id}@${s.revision}]: ${s.description}`).join('\n')}`
+    : '';
+  const content = [bodies, catalog].filter(Boolean).join('\n\n');
   return {
     context,
     entries,
@@ -334,5 +372,11 @@ export function resolveContext(
     estimatedTokens: tokenEstimate(content),
     valid: errors.length === 0,
     errors,
+    skillCandidates,
+    unevaluated: !context.model
+      ? assets
+          .filter((a) => a.scope.model && scopeMatches({ ...a.scope, model: undefined }, context))
+          .map((a) => ({ assetId: a.id, dimension: 'model', expected: a.scope.model! }))
+      : [],
   };
 }

@@ -145,6 +145,14 @@ test('dependencies are ordered before parents, on-demand skills remain unloaded 
   ];
   assert.deepEqual(
     resolveContext(assets, {}).assets.map((a) => a.id),
+    ['parent'],
+  );
+  assert.equal(
+    resolveContext(assets, {}).skillCandidates?.find((s) => s.id === 'skill')?.loading,
+    'metadata',
+  );
+  assert.deepEqual(
+    resolveContext(assets, {}, { loadedSkills: ['skill'] }).assets.map((a) => a.id),
     ['skill', 'parent'],
   );
 });

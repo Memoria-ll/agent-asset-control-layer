@@ -22,12 +22,14 @@ export function compareWorkflows(state: State, input: unknown = {}) {
       revision: number | null;
       project: string | null;
       model: string | null;
+      requestedModel: string | null;
       runtime: string | null;
       settingsVersion: number | null;
       assetRevisions: string[];
       runIds: Set<string>;
       snapshotIds: Set<string>;
       attempts: number;
+      preparations: number;
       results: number;
       failedAttempts: number;
       waitingUser: number;
@@ -43,10 +45,27 @@ export function compareWorkflows(state: State, input: unknown = {}) {
         workflowId: snapshot.workflowId,
         revision: snapshot.workflowRevision,
         project: c.project ?? null,
-        model: c.model ?? null,
+        model: snapshot.modelSelection
+          ? (snapshot.modelSelection.actualModel ?? null)
+          : (c.model ?? null),
+        requestedModel: snapshot.modelSelection
+          ? (snapshot.modelSelection.requestedModel ?? null)
+          : (c.model ?? null),
         runtime: c.runtime ?? null,
         settingsVersion: snapshot.settings?.version ?? null,
-        assetRevisions: snapshot.resolution.assets.map((a) => `${a.id}@${a.revision}`).sort(),
+        assetRevisions: [
+          ...new Set([
+            ...snapshot.resolution.assets.map((a) => `${a.id}@${a.revision}`),
+            ...(snapshot.resolution.skillCandidates ?? []).map((a) => `${a.id}@${a.revision}`),
+            ...(run.skillReads ?? [])
+              .filter(
+                (read) =>
+                  read.snapshotId === snapshot.id ||
+                  (read.usedAt && read.snapshotId === snapshot.preparedFrom),
+              )
+              .map((read) => `${read.assetId}@${read.revision}`),
+          ]),
+        ].sort(),
       };
       const key = JSON.stringify(conditions);
       const g = groups.get(key) ?? {
@@ -54,6 +73,7 @@ export function compareWorkflows(state: State, input: unknown = {}) {
         runIds: new Set<string>(),
         snapshotIds: new Set<string>(),
         attempts: 0,
+        preparations: 0,
         results: 0,
         failedAttempts: 0,
         waitingUser: 0,
@@ -63,6 +83,7 @@ export function compareWorkflows(state: State, input: unknown = {}) {
       };
       g.runIds.add(run.id);
       g.snapshotIds.add(snapshot.id);
+      if (snapshot.origin !== 'runtime-report') g.preparations++;
       const attempts = (run.attempts ?? []).filter((a) => a.snapshotId === snapshot.id);
       g.attempts += attempts.length;
       g.results += attempts.filter((a) => a.status === 'result').length;
@@ -88,7 +109,6 @@ export function compareWorkflows(state: State, input: unknown = {}) {
     groups: [...groups.values()].map(({ runIds, snapshotIds, ...g }) => ({
       ...g,
       runs: runIds.size,
-      preparations: snapshotIds.size,
       completed: runs.filter((r) => runIds.has(r.id) && r.status === 'completed').length,
       cancelled: runs.filter((r) => runIds.has(r.id) && r.status === 'cancelled').length,
       returns: runs

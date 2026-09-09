@@ -57,6 +57,27 @@ const rootSchema = z
     projectId: idSchema.optional(),
   })
   .strict();
+// The caller's AI review supplies semantic judgments; Core only checks structure.
+// Discovery's candidate.type describes native layout, never a reviewed classification.
+export const onboardingClassificationSchema = z
+  .object({
+    reviewer: z.string().trim().min(1).max(200),
+    entries: z
+      .array(
+        z
+          .object({
+            sourceId: idSchema,
+            status: z.enum(['classified', 'uncertain']),
+            outputIds: z.array(idSchema).min(1).max(MAX_ASSETS),
+            reason: z.string().trim().min(1).max(4000),
+            unconvertedParts: z.array(z.string().trim().min(1).max(1000)).max(20),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_ASSETS),
+  })
+  .strict();
 /** Reuse these schemas' .shape in MCP registrations; functions also validate direct callers. */
 export const onboardingSchemas = {
   discover: z
@@ -78,6 +99,7 @@ export const onboardingSchemas = {
       id: idSchema,
       userRequest: z.string().trim().min(1).max(4000),
       reason: z.string().trim().min(1).max(4000),
+      classification: onboardingClassificationSchema,
       operations: z.array(operationSchema).max(100),
     })
     .strict(),
@@ -141,6 +163,8 @@ const manifestSchema = z
       'restoring',
       'restored',
     ]),
+    // Optional for saved v1 manifests; reading legacy operations never migrates them.
+    classificationRequired: z.literal(true).optional(),
     roots: z.array(rootSchema).max(32),
     candidates: z.array(candidateSchema).max(MAX_ASSETS),
     issues: z.array(z.object({ path: z.string(), code: z.string() }).strict()).max(MAX_SCAN + 32),
@@ -155,6 +179,8 @@ const manifestSchema = z
         requestHash: hashSchema,
         changeSetId: z.string().optional(),
         assets: z.array(stampSchema),
+        absent: z.array(idSchema).max(MAX_ASSETS).optional(),
+        classification: onboardingClassificationSchema.optional(),
       })
       .strict()
       .optional(),
@@ -164,6 +190,7 @@ const manifestSchema = z
         requestHash: hashSchema,
         marker: z.string(),
         assets: z.array(stampSchema),
+        classification: onboardingClassificationSchema.optional(),
       })
       .strict()
       .optional(),
@@ -456,6 +483,221 @@ function importedAssets(core: Core, m: OnboardingManifest) {
     return asset;
   });
 }
+function checkOrganizationState(core: Core, m: OnboardingManifest, rollbackId?: string) {
+  const organization = m.organization!;
+  const expected = new Map(organization.assets.map((a) => [a.id, a]));
+  const absent = new Set(organization.absent ?? []);
+  if (rollbackId) {
+    const rollback = core.state().state.changesets.find((cs) => cs.id === rollbackId);
+    guard(
+      rollback && rollback.rollbackOf === organization.changeSetId,
+      'ROLLBACK_CONFLICT',
+      'Organization rollback is missing',
+    );
+    for (const change of rollback.changes) {
+      if (change.after) {
+        expected.set(change.id, stamp(change.after));
+        absent.delete(change.id);
+      } else {
+        expected.delete(change.id);
+        absent.add(change.id);
+      }
+    }
+  }
+  const current = new Map(core.state().assets.map((a) => [a.id, a]));
+  guard(
+    [...expected.values()].every((s) => {
+      const asset = current.get(s.id);
+      return asset && asset.revision === s.revision && stamp(asset).hash === s.hash;
+    }) && [...absent].every((id) => !current.has(id)),
+    rollbackId ? 'ROLLBACK_CONFLICT' : 'ASSET_CHANGED',
+    'Canonical outputs or retired originals changed after organization or rollback',
+  );
+}
+
+/** Inherit provenance and existing scope constraints without interpreting source prose. */
+function classificationOperations(
+  core: Core,
+  m: OnboardingManifest,
+  req: z.infer<typeof onboardingSchemas.organize>,
+) {
+  const originals = importedAssets(core, m);
+  const catalog = new Map(core.state().assets.map((a) => [a.id, a]));
+  for (const original of originals) catalog.set(original.id, original);
+  guard(
+    originals.every((a) =>
+      m.verification?.assets.some(
+        (s) => s.id === a.id && s.revision === a.revision && s.hash === stamp(a).hash,
+      ),
+    ),
+    'ASSET_CHANGED',
+    'Imported assets changed after MCP verification; review the current source revisions',
+  );
+  const entries = req.classification.entries;
+  const sourceIds = new Set(originals.map((a) => a.id));
+  guard(
+    entries.length === sourceIds.size &&
+      new Set(entries.map((e) => e.sourceId)).size === entries.length &&
+      entries.every(
+        (e) => sourceIds.has(e.sourceId) && new Set(e.outputIds).size === e.outputIds.length,
+      ),
+    'CLASSIFICATION_COVERAGE',
+    'The AI review must cover every selected source exactly once, with distinct output IDs',
+  );
+  const outputs = new Map<string, Asset[]>();
+  for (const entry of entries) {
+    guard(
+      entry.status !== 'uncertain' ||
+        (entry.outputIds.length === 1 && entry.outputIds[0] === entry.sourceId),
+      'UNCERTAIN_CLASSIFICATION',
+      'Uncertain sources must retain their original ID as a disabled provisional asset',
+    );
+    for (const id of entry.outputIds) {
+      guard(
+        !sourceIds.has(id) || id === entry.sourceId,
+        'CLASSIFICATION_CONFLICT',
+        'An output cannot consume a different selected source ID',
+      );
+      outputs.set(id, [
+        ...(outputs.get(id) ?? []),
+        originals.find((a) => a.id === entry.sourceId)!,
+      ]);
+    }
+  }
+  guard(
+    outputs.size <= MAX_ASSETS,
+    'CLASSIFICATION_LIMIT',
+    'A classification may produce at most 100 outputs',
+  );
+  const operations = req.operations.map((op) => {
+    const id = op.op === 'upsert' ? op.asset.id : op.id;
+    guard(
+      sourceIds.has(id) || outputs.has(id),
+      'CLASSIFICATION_COVERAGE',
+      'Every operation must affect a selected source or a declared output',
+    );
+    if (op.op === 'delete') {
+      guard(
+        sourceIds.has(id) && !outputs.has(id),
+        'CLASSIFICATION_CONFLICT',
+        'Only replaced originals may be deleted',
+      );
+      return op;
+    }
+    const sources = outputs.get(id);
+    if (!sources) return op;
+    const asset = structuredClone(op.asset);
+    for (const source of sources) {
+      for (const [key, values] of Object.entries(source.scope)) {
+        const dimension = key as keyof typeof source.scope;
+        const supplied = asset.scope[dimension];
+        guard(
+          !supplied || JSON.stringify([...supplied].sort()) === JSON.stringify([...values!].sort()),
+          'SOURCE_SCOPE_CHANGED',
+          'Converted outputs must preserve every source scope constraint',
+        );
+        asset.scope[dimension] = values;
+      }
+      guard(
+        !source.projectId || !asset.projectId || source.projectId === asset.projectId,
+        'SOURCE_SCOPE_CHANGED',
+        'Converted outputs must preserve their source project',
+      );
+      asset.projectId ??= source.projectId;
+      const provenance = new Map((asset.sources ?? []).map((s) => [JSON.stringify(s), s]));
+      for (const origin of source.sources ?? []) provenance.set(JSON.stringify(origin), origin);
+      asset.sources = [...provenance.values()];
+    }
+    return { ...op, asset };
+  });
+  // Even retained or reused outputs participate in the revision-checked transaction.
+  // Otherwise another writer could change them between validation and the commit.
+  const tracked = new Set([...sourceIds, ...outputs.keys()]);
+  const operated = new Set(operations.map((op) => (op.op === 'upsert' ? op.asset.id : op.id)));
+  for (const id of tracked) {
+    const asset = catalog.get(id);
+    if (!operated.has(id) && asset)
+      operations.push({ op: 'upsert', asset: inputOf(asset), expectedRevision: asset.revision });
+  }
+  guard(
+    operations.length <= MAX_ASSETS,
+    'CLASSIFICATION_LIMIT',
+    'The complete atomic batch, including retained originals and reused outputs, may affect at most 100 assets',
+  );
+  const preview = core.validateChanges({ operations, summary: req.reason });
+  const after = new Map(catalog);
+  for (const change of preview.changes) {
+    if (change.after) after.set(change.id, change.after);
+    else after.delete(change.id);
+  }
+  for (const entry of entries) {
+    const original = originals.find((a) => a.id === entry.sourceId)!;
+    guard(
+      !m.classificationRequired || !original.enabled,
+      'PROVISIONAL_ASSET_REQUIRED',
+      'Disable the provisional original before reviewed conversion',
+    );
+    const retained = after.get(original.id);
+    guard(
+      entry.outputIds.every((id) => after.has(id)),
+      'CLASSIFICATION_CONFLICT',
+      'Every reviewed output must exist after the organization batch',
+    );
+    if (!entry.outputIds.includes(original.id)) {
+      guard(
+        !retained?.enabled,
+        'ORIGINAL_STILL_ACTIVE',
+        'Delete or disable replaced originals in the same batch',
+      );
+      guard(
+        !retained || stamp(retained).hash === stamp(original).hash,
+        'ORIGINAL_CHANGED',
+        'A retained provisional original must preserve its content, files, provenance and scopes',
+      );
+    }
+    if (entry.status === 'uncertain')
+      guard(
+        retained && !retained.enabled && stamp(retained).hash === stamp(original).hash,
+        'UNCERTAIN_CLASSIFICATION',
+        'Uncertain sources must remain unchanged and disabled',
+      );
+    if (
+      retained?.enabled &&
+      entry.outputIds.some(
+        (id) => id !== original.id && after.get(id)?.enabled && after.get(id)?.type === 'workflow',
+      )
+    )
+      guard(
+        retained.content !== original.content,
+        'ORIGINAL_STILL_ACTIVE',
+        'Do not enable original orchestration text alongside its converted Workflow',
+      );
+  }
+  // Also validate outputs that were reused without an upsert: inheritance cannot be skipped.
+  for (const [id, sources] of outputs) {
+    const asset = after.get(id)!;
+    for (const source of sources) {
+      guard(
+        Object.entries(source.scope).every(
+          ([key, values]) =>
+            JSON.stringify([...(asset.scope[key as keyof typeof asset.scope] ?? [])].sort()) ===
+            JSON.stringify([...values!].sort()),
+        ) &&
+          (!source.projectId || asset.projectId === source.projectId),
+        'SOURCE_SCOPE_CHANGED',
+        'Reused outputs must retain their source scopes',
+      );
+      guard(
+        (source.sources ?? []).every((s) =>
+          asset.sources?.some((a) => a.host === s.host && a.path === s.path && a.hash === s.hash),
+        ),
+        'SOURCE_PROVENANCE_REQUIRED',
+        'Every converted output must retain its original source provenance',
+      );
+    }
+  }
+  return { operations, baseline: [...catalog.values()].filter((a) => tracked.has(a.id)) };
+}
 function backupPath(core: Core, m: OnboardingManifest, c: Candidate, f: NativeFile) {
   return child(path.join(directory(core, m.id), 'backup', c.id), f.relative);
 }
@@ -516,20 +758,33 @@ function recoverPending(core: Core, m: OnboardingManifest) {
     .state()
     .state.changesets.find((cs) => cs.summary.startsWith(pending.marker + '\n'));
   if (!change) return false;
-  const assets = pending.assets.map((before) => {
+  const assets = pending.assets.flatMap((before) => {
     const changed = change.changes.find((c) => c.id === before.id);
     guard(
-      !changed || changed.after,
+      !changed || changed.after || pending.classification,
       'IMPORTED_ASSET_REQUIRED',
       'A pending operation removed an imported asset',
     );
-    return changed?.after ? stamp(changed.after) : before;
+    return changed ? (changed.after ? [stamp(changed.after)] : []) : [before];
   });
+  if (pending.classification)
+    for (const item of change.changes)
+      if (item.after && !assets.some((a) => a.id === item.id)) assets.push(stamp(item.after));
   if (pending.kind === 'verify') {
     m.verification = { requestHash: pending.requestHash, changeSetId: change.id, assets };
     m.phase = 'verified';
   } else {
-    m.organization = { requestHash: pending.requestHash, changeSetId: change.id, assets };
+    m.organization = {
+      requestHash: pending.requestHash,
+      changeSetId: change.id,
+      assets,
+      ...(pending.classification
+        ? {
+            classification: pending.classification,
+            absent: change.changes.filter((c) => !c.after).map((c) => c.id),
+          }
+        : {}),
+    };
     m.phase = 'organized';
   }
   delete m.pending;
@@ -591,6 +846,7 @@ export function onboardingDiscover(core: Core, input: unknown) {
     createdAt: now(),
     updatedAt: now(),
     phase: 'discovered',
+    classificationRequired: true,
     roots,
     candidates: [],
     issues: [],
@@ -853,7 +1109,7 @@ export function onboardingImport(core: Core, input: unknown) {
         const sourcePath = child(c.path, c.entry);
         const asset = assetSchema.parse({
           id: c.id,
-          type: c.type,
+          type: m.classificationRequired ? 'other' : c.type,
           name: c.name,
           content: contents[c.entry],
           files: Object.fromEntries(Object.entries(contents).filter(([name]) => name !== c.entry)),
@@ -884,7 +1140,8 @@ export function onboardingImport(core: Core, input: unknown) {
             (s) => s.host === root.host && s.path === sourcePath && s.hash === c.hash,
           ) &&
             existing.content === asset.content &&
-            JSON.stringify(existing.files) === JSON.stringify(asset.files),
+            JSON.stringify(existing.files) === JSON.stringify(asset.files) &&
+            (!m.classificationRequired || !existing.enabled),
           'ASSET_CONFLICT',
           'A canonical asset with this source ID already differs',
         );
@@ -1006,43 +1263,32 @@ export function onboardingOrganize(core: Core, input: unknown) {
     }
     ensureActive(m);
     guard(m.verification, 'MCP_REQUIRED', 'Verify MCP retrieval and write before organization');
-    guard(
-      !req.operations.some((op) => op.op === 'delete' && m.selected?.includes(op.id)),
-      'IMPORTED_ASSET_REQUIRED',
-      'Organization must retain imported assets for cutover',
-    );
     const marker = `onboarding:${m.id}:organize:${requestHash}`;
     guard(
       !m.pending || (m.pending.kind === 'organize' && m.pending.requestHash === requestHash),
       'PENDING_OPERATION',
       'Resume the pending organization request',
     );
+    const { operations, baseline } = classificationOperations(core, m, req);
     m.pending = {
       kind: 'organize',
       requestHash,
       marker,
-      assets: importedAssets(core, m).map(stamp),
+      assets: baseline.map(stamp),
+      classification: req.classification,
     };
     m.phase = 'organizing';
     save(core, m);
-    const previous = core
-      .state()
-      .state.changesets.find((cs) => cs.summary.startsWith(marker + '\n'));
-    const change =
-      previous ??
-      (req.operations.length
-        ? core.changeAssets({
-            operations: req.operations,
-            summary: `${marker}\nUser request: ${req.userRequest}\nOrganization reason: ${req.reason}`,
-          })
-        : undefined);
-    m.organization = {
-      requestHash,
-      changeSetId: change?.id,
-      assets: importedAssets(core, m).map(stamp),
-    };
-    delete m.pending;
-    m.phase = 'organized';
+    core.changeAssets({
+      operations,
+      summary: `${marker}\nUser request: ${req.userRequest}\nOrganization reason: ${req.reason}`,
+    });
+    // Read the committed snapshots, never absorb a later edit into the cutover proof.
+    guard(
+      recoverPending(core, m),
+      'ORGANIZATION_COMMIT_MISSING',
+      'The organization changeset is missing',
+    );
     return m;
   });
 }
@@ -1052,6 +1298,7 @@ export function onboardingCutover(core: Core, input: unknown) {
   const req = onboardingSchemas.cutover.parse(input);
   return update(core, req.id, (m) => {
     if (m.phase === 'cutover') return m;
+    recoverPending(core, m);
     guard(
       ['organized', 'cutting-over'].includes(m.phase) && m.organization && m.verification,
       'CUTOVER_NOT_READY',
@@ -1062,16 +1309,16 @@ export function onboardingCutover(core: Core, input: unknown) {
       'UNSUPPORTED_CUTOVER',
       'Other runtimes need an explicit native loading adapter before cutover',
     );
-    const assets = importedAssets(core, m);
     guard(
-      assets.every((a) =>
-        m.organization!.assets.some(
-          (s) => s.id === a.id && s.revision === a.revision && s.hash === stamp(a).hash,
-        ),
-      ),
-      'ASSET_CHANGED',
-      'Canonical assets changed after organization',
+      (!m.classificationRequired || m.organization.classification) &&
+        (!m.organization.classification ||
+          m.organization.classification.entries.every(
+            (e) => e.status === 'classified' && !e.unconvertedParts.length,
+          )),
+      'CLASSIFICATION_INCOMPLETE',
+      'Resolve every uncertain classification and unconverted part before cutover',
     );
+    checkOrganizationState(core, m);
     for (const c of selected(m)) checkSkillMembers(c);
     for (const c of selected(m))
       for (const f of c.files) {
@@ -1154,6 +1401,19 @@ export function onboardingRestore(core: Core, input: unknown) {
       'IMPORT_REQUIRED',
       'There is no import or connection to restore',
     );
+    guard(
+      !m.organization?.classification || req.rollbackOrganization,
+      'ORGANIZATION_ROLLBACK_REQUIRED',
+      'Restore must reverse reviewed conversion before restoring native entry points',
+    );
+    const priorRollback =
+      m.rollbackChangeSetId ??
+      core
+        .state()
+        .state.changesets.find(
+          (cs) => cs.rollbackOf === m.organization?.changeSetId && !!m.organization?.changeSetId,
+        )?.id;
+    if (m.organization?.classification) checkOrganizationState(core, m, priorRollback);
     checkConnectionDependents(core, m);
     preflightNativeConnectionRestore(path.join(directory(core, m.id), 'connections'));
     for (const c of selected(m))
@@ -1229,6 +1489,7 @@ export function onboardingPlan(core: Core, input: unknown) {
           'verified-backups',
           'actual-mcp-retrieval-and-write',
           'user-requested-organization',
+          'reviewed-classification-with-no-unconverted-parts',
           'unchanged-native-and-canonical-hashes',
         ],
         unsupported: m.issues.filter((i) => inside(root.path, i.path)),

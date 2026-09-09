@@ -404,8 +404,12 @@ test('runtime evidence identifies the attempt and Journal observation; Workflow 
     expectedVersion: handoff.version,
     event: 'started',
     attemptId: 'attempt-ui-1',
+    actualModel: 'ui-attempt-model',
+    actualRuntime: 'codex',
     note: 'Started actual fixture invocation',
   });
+  const attemptSnapshotId = started.attempts.find((a: any) => a.id === 'attempt-ui-1').snapshotId;
+  expect(attemptSnapshotId).not.toBe(handoff.snapshotId);
   await write(page, `/runs/${initial.id}/runtime-event`, {
     expectedVersion: started.version,
     event: 'result',
@@ -425,7 +429,7 @@ test('runtime evidence identifies the attempt and Journal observation; Workflow 
   const evidence = page.getByRole('region', { name: '保存された完了根拠' });
   await expect(evidence).toContainText('attempt-ui-1');
   await expect(evidence).toContainText('local-user');
-  await expect(evidence).toContainText(handoff.snapshotId);
+  await expect(evidence).toContainText(attemptSnapshotId);
   await page.getByRole('button', { name: 'Journalを記録', exact: true }).click();
   await dialog.getByLabel('観測対象の試行', { exact: true }).selectOption('attempt-ui-1');
   await dialog.getByLabel('観測した時刻（任意）', { exact: true }).fill('2026-01-02T03:04');
@@ -436,7 +440,7 @@ test('runtime evidence identifies the attempt and Journal observation; Workflow 
     (j: any) => j.observation === '試行に対応したレビューの観測',
   );
   expect(journal.attemptId).toBe('attempt-ui-1');
-  expect(journal.snapshotId).toBe(handoff.snapshotId);
+  expect(journal.snapshotId).toBe(attemptSnapshotId);
   const review = await write(page, '/reviews', {
     journalIds: [journal.id],
     reason: '試行の改善検討',
