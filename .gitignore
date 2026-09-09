@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.aacl-data/
+playwright-report/
+test-results/
+*.log
+*:Zone.Identifier
+*Zone.Identifier
