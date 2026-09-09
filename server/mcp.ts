@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { Core } from './core.ts';
-import { contextSchema, idSchema, operationSchema, requireValue } from './domain.ts';
+import { contextSchema, idSchema, reviewSubmissionShape, requireValue } from './domain.ts';
 import { bootstrap, materialize } from './adapters.ts';
 
 export function createMcpServer(core: Core) {
@@ -70,6 +70,27 @@ export function createMcpServer(core: Core) {
       ),
       history: core.state().state.changesets.filter((c) => c.changes.some((a) => a.id === id)),
     }),
+  );
+  register(
+    'aacl_asset_history',
+    'Read all known revisions and change provenance, including deleted assets.',
+    { id: idSchema },
+    true,
+    ({ id }) => core.assetHistory(id),
+  );
+  register(
+    'aacl_asset_diff',
+    'Compare two asset revisions: line diff of content and structured metadata changes. Revision 0 represents absence.',
+    { id: idSchema, from: z.number().int().nonnegative(), to: z.number().int().nonnegative() },
+    true,
+    ({ id, ...args }) => core.assetDiff(id, args),
+  );
+  register(
+    'aacl_asset_metrics',
+    'Read snapshot-based per-asset/revision/workflow/stage/role context token estimates.',
+    {},
+    true,
+    () => core.assetMetrics(),
   );
   register(
     'aacl_context_resolve',
@@ -161,12 +182,10 @@ export function createMcpServer(core: Core) {
   );
   register(
     'aacl_review_submit',
-    'Submit an improvement proposal to an existing review. Separate observed scopes from proposed asset scopes and explain the reason. This never changes canonical assets; human approval is available only through the Core UI.',
+    'Submit items, each with operation, proposedScope, proposedRelations, reason and evidence referencing journals/snapshots from this review. Core derives observed scopes from evidence. For no change submit items: []. Legacy operations is accepted with review-level evidence; send exactly one format. Human approval is available only through the Core UI.',
     {
       id: z.string(),
-      reason: z.string(),
-      proposedBy: z.string(),
-      operations: z.array(operationSchema),
+      ...reviewSubmissionShape,
     },
     false,
     ({ id, ...args }) => core.submitReview(id, args),
@@ -176,7 +195,11 @@ export function createMcpServer(core: Core) {
     'Read objective diagnostics and workflow/revision/stage/role context cost estimates. No automatic mutation.',
     {},
     true,
-    () => ({ diagnostics: core.diagnostics(), metrics: core.metrics() }),
+    () => ({
+      diagnostics: core.diagnostics(),
+      metrics: core.metrics(),
+      assetMetrics: core.assetMetrics(),
+    }),
   );
   register(
     'aacl_materialize',

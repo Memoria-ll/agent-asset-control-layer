@@ -5,6 +5,7 @@ import type { Overview } from './api.ts';
 import { Field, Modal } from './ui.tsx';
 import { TokenPicker, type Choice } from './TokenPicker.tsx';
 import { WorkflowEditor } from './WorkflowEditor.tsx';
+import { AssetContractEditor, defaultContract, contractKey } from './AssetContracts.tsx';
 
 export function AssetEditor({
   asset,
@@ -36,6 +37,7 @@ export function AssetEditor({
           compatibility: 'portable',
           dependencies: [],
           conflicts: [],
+          ...defaultContract(type),
         },
   );
   const role = data.assets.find((a) => a.type === 'role')?.id ?? 'orchestrator';
@@ -108,6 +110,8 @@ export function AssetEditor({
             };
             if (form.type !== 'workflow') delete next.workflow;
             if (form.type !== 'capability') delete next.capability;
+            for (const key of ['skill', 'role', 'taskType'])
+              if (key !== contractKey(form.type)) delete next[key];
             await onSave({
               operations: [{ op: 'upsert', asset: next, expectedRevision: asset?.revision ?? 0 }],
               summary: `${asset ? '編集' : '作成'}: ${form.name}`,
@@ -143,7 +147,9 @@ export function AssetEditor({
             <select
               value={form.type}
               disabled={!!asset}
-              onChange={(e) => set('type', e.target.value)}
+              onChange={(e) =>
+                setForm({ ...form, type: e.target.value, ...defaultContract(e.target.value) })
+              }
             >
               {assetTypes.map((t) => (
                 <option key={t}>{t}</option>
@@ -167,6 +173,7 @@ export function AssetEditor({
         {form.type === 'workflow' && (
           <WorkflowEditor value={definition} assets={data.assets} onChange={setDefinition} />
         )}
+        <AssetContractEditor value={form} assets={data.assets} onChange={set} />
         <details className="form-section" open={form.type !== 'workflow'}>
           <summary>説明・本文</summary>
           <Field label="説明">

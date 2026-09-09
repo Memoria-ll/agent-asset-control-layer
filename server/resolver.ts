@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { assetBody } from './contracts.ts';
 import {
   type Asset,
   type Context,
@@ -108,6 +109,19 @@ export function resolveContext(
       else if (!requested.has(a.id))
         mark('excluded', 'オンデマンドAssetは明示選択時に読み込みます');
       else if (
+        a.skill &&
+        ((a.skill.executionMode === 'workflow' && !context.workflow) ||
+          (a.skill.executionMode === 'standalone' && !!context.workflow) ||
+          (a.skill.role && a.skill.role !== context.role) ||
+          (a.skill.taskType && a.skill.taskType !== context.taskType))
+      )
+        mark('unavailable', 'Skillの実行モード・Role・Task Typeが一致しません');
+      else if (
+        a.skill?.executionPermission === 'workflow-development' &&
+        !assets.find((w) => w.id === context.workflow)?.workflow?.developmentCapable
+      )
+        mark('unavailable', 'Skillの実行にはDevelopment-capable Workflowが必要です');
+      else if (
         a.compatibility === 'unsupported' ||
         (a.compatibility === 'claude-only' && context.runtime !== 'claude') ||
         (a.compatibility === 'codex-only' && context.runtime !== 'codex')
@@ -134,7 +148,7 @@ export function resolveContext(
         if (binding) reasons.push('Project bindingを適用');
         if (requested.has(a.id)) reasons.push('明示選択・scope一致、または必要な依存Asset');
       }
-      return { asset: a, status, reasons, estimatedTokens: tokenEstimate(a.content) };
+      return { asset: a, status, reasons, estimatedTokens: tokenEstimate(assetBody(a)) };
     })
     .sort((a, b) => compare(a.asset, b.asset) || a.asset.id.localeCompare(b.asset.id, 'en'));
   const get = (id: string) => entries.find((e) => e.asset.id === id);
@@ -232,8 +246,8 @@ export function resolveContext(
   for (const id of options.requested ?? [])
     if (get(id)?.status !== 'included') errors.push(`Required Assetが解決されません: ${id}`);
   const content = final
-    .filter((a) => a.content)
-    .map((a) => `## ${a.name} [${a.id}@${a.revision}]\n\n${a.content}`)
+    .filter((a) => assetBody(a))
+    .map((a) => `## ${a.name} [${a.id}@${a.revision}]\n\n${assetBody(a)}`)
     .join('\n\n');
   return {
     context,

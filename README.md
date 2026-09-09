@@ -2,7 +2,7 @@
 
 A local-first control layer for the knowledge, rules, workflows, and safeguards used by AI development tools.
 
-> **Status:** early-stage. There is nothing to install yet — the MVP is being built in the open.
+**Status:** local Core, browser UI, and MCP are runnable from source. The VS Code extension is not implemented.
 
 ## Why this exists
 
@@ -333,13 +333,25 @@ the same canonical assets and resolution semantics through compatible interfaces
 
 ## Installation
 
-Not available yet. Installation instructions will be added once the MVP is usable.
+Use Node.js 24 or newer:
 
-The planned local setup consists of:
+```sh
+npm ci
+npm run build
+npm start
+```
+
+Open `http://localhost:4780`. The MCP Streamable HTTP endpoint is `http://localhost:4780/mcp`.
+For stdio clients, run `npm run mcp` while the Core service is running. Data is stored in `.aacl-data` by default; set `AACL_DATA_DIR` to choose another location. `PORT` overrides port 4780.
+
+Run `npm run check` for the build and Core/MCP tests. For browser tests, install Chromium with `npx playwright install chromium`, then run `npm run test:ui`. Browser tests use port 4781 and a separate temporary data directory.
+
+See [Core contracts](docs/core-contracts.md) for Skill / Role / Task Type settings, structured review proposals, per-asset cost metrics, and revision comparison APIs.
+
+The local implementation consists of:
 
 - a **Core service** that manages and resolves assets
 - a **Core UI** for asset management, preview, history, and diagnostics
-- a **VS Code extension** that acts as the everyday development workbench
 - runtime-facing interfaces, including MCP where supported, for AI development tools
 
 The first version targets local, single-user use. Remote and team deployments come later and are

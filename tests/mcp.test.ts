@@ -103,6 +103,67 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
   });
   assert.equal(decision.status, 200);
   assert.ok(core.state().assets.some((a) => a.id === 'intake-guidance'));
+  const nextReview = core.requestReview({
+    journalIds: [journal.id],
+    reason: 'Structured MCP review',
+  });
+  const nextProposal = await call('aacl_review_submit', {
+    id: nextReview.id,
+    reason: 'Clarify output',
+    proposedBy: 'test-runtime',
+    items: [
+      {
+        operation: {
+          op: 'upsert',
+          expectedRevision: 0,
+          asset: {
+            id: 'mcp-skill',
+            name: 'MCP Skill',
+            type: 'skill',
+            skill: { completionCriteria: ['Checked'], expectedOutput: ['Report'] },
+          },
+        },
+        proposedScope: {},
+        proposedRelations: { dependencies: [], conflicts: [] },
+        reason: 'An explicit output is needed',
+        evidence: { journalIds: [journal.id], explanation: 'The intake report was missing' },
+      },
+    ],
+  });
+  assert.equal(nextProposal.items[0].evidenceMode, 'per-item');
+  assert.ok(!core.state().assets.some((a) => a.id === 'mcp-skill'));
+  const approved = await fetch(`${base}/api/reviews/${nextReview.id}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-AACL-Token': state.humanToken },
+    body: JSON.stringify({ approve: true }),
+  });
+  assert.equal(approved.status, 200);
+  const history = await call('aacl_asset_history', { id: 'mcp-skill' });
+  assert.equal(history.revisions[0].skill.completionCriteria[0], 'Checked');
+  assert.equal(history.changesets[0].proposalItems[0].reason, 'An explicit output is needed');
+  const diff = await call('aacl_asset_diff', { id: 'mcp-skill', from: 0, to: 1 });
+  assert.ok(diff.fields.some((f: any) => f.path === 'skill'));
+  const httpDiff = await fetch(`${base}/api/assets/mcp-skill/diff?from=0&to=1`);
+  assert.deepEqual(await httpDiff.json(), diff);
+  assert.equal((await fetch(`${base}/api/assets/mcp-skill/diff?from=missing&to=1`)).status, 400);
+  const skillRun = await call('aacl_session_start', { skillId: 'mcp-skill' });
+  const skillHandoff = await call('aacl_context_handoff', { runId: skillRun.id });
+  assert.deepEqual(skillHandoff.expectedOutput, ['Report']);
+  const noEvidence = await client.callTool({
+    name: 'aacl_workflow_transition',
+    arguments: { runId: skillRun.id, expectedVersion: 2, kind: 'complete' },
+  });
+  assert.equal(noEvidence.isError, true);
+  await call('aacl_workflow_transition', {
+    runId: skillRun.id,
+    expectedVersion: 2,
+    kind: 'complete',
+    criteria: { Checked: 'Verified' },
+    artifacts: { Report: 'report.md' },
+  });
+  const assetMetrics = await call('aacl_asset_metrics', {});
+  assert.equal(assetMetrics.find((m: any) => m.assetId === 'mcp-skill').snapshots, 2);
+  assert.deepEqual(await (await fetch(`${base}/api/metrics/assets`)).json(), assetMetrics);
   const advisory = await call('aacl_session_start', { command: 'Implement without a workflow' });
   const denied = await client.callTool({
     name: 'aacl_context_handoff',

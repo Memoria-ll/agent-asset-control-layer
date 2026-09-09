@@ -9,7 +9,7 @@ import {
   Terminal,
   ChevronRight,
 } from 'lucide-react';
-import type { Asset, Run } from '../server/domain.ts';
+import type { Asset } from '../server/domain.ts';
 import type { Overview } from './api.ts';
 import { Badge, Empty, Field, Json, Modal, relativeDate, CopyButton, statusLabel } from './ui.tsx';
 
@@ -280,7 +280,7 @@ export function Runs({
                   {run.context.model ? ` · ${run.context.model}` : ''}
                 </p>
                 <ul className="criteria-list">
-                  {stage?.completionCriteria.map((c) => (
+                  {run.requirements.completionCriteria.map((c) => (
                     <li key={c}>
                       <Check size={15} />
                       {c}
@@ -429,7 +429,7 @@ function TransitionModal({
   onClose,
   onSave,
 }: {
-  run: Run;
+  run: Overview['runs'][number];
   edge: { to?: string; kind: string };
   onClose: () => void;
   onSave: (body: unknown) => Promise<unknown>;
@@ -437,11 +437,14 @@ function TransitionModal({
   const stage = run.workflow?.workflow?.stages.find((s) => s.id === run.stage);
   const transition = stage?.transitions.find((t) => t.to === edge.to && t.kind === edge.kind);
   const criteria = ['advance', 'complete'].includes(edge.kind)
-    ? [
-        ...(stage?.completionCriteria ?? []),
-        ...(edge.kind === 'complete' ? (run.workflow?.workflow?.completionCriteria ?? []) : []),
-      ]
+    ? run.requirements.completionCriteria
     : [];
+  const requiredArtifacts = [
+    ...new Set([
+      ...(transition?.requiredArtifacts ?? []),
+      ...(['advance', 'complete'].includes(edge.kind) ? run.requirements.expectedOutput : []),
+    ]),
+  ];
   const [evidence, setEvidence] = useState<Record<string, string>>({});
   const [artifacts, setArtifacts] = useState<Record<string, string>>(run.artifacts);
   const [note, setNote] = useState('');
@@ -493,7 +496,7 @@ function TransitionModal({
             />
           </Field>
         ))}
-        {transition?.requiredArtifacts.map((a) => (
+        {requiredArtifacts.map((a) => (
           <Field key={a} label={`成果物 · ${a}`}>
             <input
               required

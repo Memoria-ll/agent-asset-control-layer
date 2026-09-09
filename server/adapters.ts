@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Core } from './core.ts';
+import { assetBody } from './contracts.ts';
 import { contextSchema, idSchema, DomainError } from './domain.ts';
 
 export function bootstrap(endpoint = 'http://localhost:4780/mcp') {
@@ -32,7 +33,7 @@ export function materialize(core: Core, input: unknown) {
     if (a.type === 'skill')
       files.push({
         path: `${skillRoot}/${a.id}/SKILL.md`,
-        content: `---\nname: ${a.id}\ndescription: ${JSON.stringify(a.description || a.name)}\n---\n\n${a.content}\n`,
+        content: `---\nname: ${a.id}\ndescription: ${JSON.stringify(a.description || a.name)}\n---\n\n${assetBody(a)}\n`,
       });
     if (a.type === 'workflow')
       files.push({

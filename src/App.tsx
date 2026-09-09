@@ -30,6 +30,8 @@ import { assetTypes } from '../server/domain.ts';
 import { api, fetchState, type Overview } from './api.ts';
 import { Badge, Empty, Modal, Json, relativeDate } from './ui.tsx';
 import { AssetEditor } from './AssetEditor.tsx';
+import { ContractDetails } from './AssetContracts.tsx';
+import { AssetHistory } from './AssetHistory.tsx';
 import { Launcher, Runs, WorkflowFlow } from './RunViews.tsx';
 import { ContextView } from './ContextView.tsx';
 import { Diagnostics, History, JournalModal, Journals } from './Operations.tsx';
@@ -854,6 +856,7 @@ function AssetDetail({
       </div>
       {tab === 'content' && (
         <>
+          <ContractDetails asset={asset} />
           <pre className="context-content">{asset.content || '本文はありません。'}</pre>
           {asset.workflow && <Json value={asset.workflow} />}
           {asset.capability && <Json value={asset.capability} />}
@@ -873,6 +876,9 @@ function AssetDetail({
             projectId: asset.projectId,
           }}
         />
+      )}
+      {tab === 'history' && (
+        <AssetHistory key={`${asset.id}:${asset.revision}`} assetId={asset.id} />
       )}
       {tab === 'history' &&
         history.map((c) => {
