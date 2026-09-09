@@ -28,6 +28,8 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
   const change = (key: keyof Context, value: string) => {
     const next = { ...context, [key]: value || undefined };
     if (key === 'workflow') {
+      const owner = data.assets.find((a) => a.id === value)?.projectId;
+      if (owner) next.project = owner;
       delete next.stage;
       delete next.role;
       delete next.taskType;
@@ -396,6 +398,28 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
       </div>
       {bundle && (
         <Modal title="生成されたRuntimeファイル" onClose={() => setBundle(null)} wide>
+          <div className="callout">
+            <strong>配置して使う手順</strong>
+            <ol className="help-steps">
+              <li>
+                作業するプロジェクトのルート
+                {context.project
+                  ? `（${data.projects.find((p) => p.id === context.project)?.root}）`
+                  : ''}
+                を基準に、表示された相対パスで各ファイルを保存します。ダウンロード後はフォルダーも作成してください。
+              </li>
+              <li>
+                AIにAACL-BOOTSTRAP.mdとAACL-CONTEXT.mdを読むよう依頼します。aacl-manifest.jsonは生成条件とAssetの版を確認するための記録です。
+              </li>
+              <li>
+                Runtime &amp;
+                MCPの接続案内でAIを接続します。生成したWorkflowの起動と工程の遷移には、動作中のCoreとMCP接続が必要です。
+              </li>
+            </ol>
+            <p>
+              通常はMCPから最新の引き継ぎを取得すれば、ファイル生成は不要です。生成ファイルは選択時点の内容を明示的に渡すときに使います。Assetを更新したら再生成し、既存の設定や手書きのSkillと同じパスの場合は内容を確認して配置してください。
+            </p>
+          </div>
           <div className="button-row wrap">
             {bundle.files.map((f, i) => (
               <button

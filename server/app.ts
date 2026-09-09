@@ -85,6 +85,7 @@ export function createApp(core: Core, discovery = discoverModels) {
   app.post('/api/journals', (req, res) => res.json(core.addJournal(req.body)));
   app.post('/api/reviews', (req, res) => res.json(core.requestReview(req.body)));
   app.get('/api/reviews/:id', (req, res) => res.json(core.reviewBundle(req.params.id)));
+  app.get('/api/reviews/:id/preview', (req, res) => res.json(core.reviewPreview(req.params.id)));
   app.post('/api/reviews/:id/proposal', (req, res) =>
     res.json(core.submitReview(req.params.id, req.body)),
   );
@@ -94,10 +95,13 @@ export function createApp(core: Core, discovery = discoverModels) {
     res.json(core.decideReview(req.params.id, req.body.approve));
   });
   app.post('/api/rollback', (req, res) => res.json(core.rollback(req.body)));
-  app.post('/api/materialize', (req, res) => res.json(materialize(core, req.body)));
-  app.get('/api/bootstrap', (_req, res) => res.type('text/markdown').send(bootstrap()));
+  const endpoint = (req: express.Request) => `${req.protocol}://${req.get('host')}/mcp`;
+  app.post('/api/materialize', (req, res) =>
+    res.json(materialize(core, { endpoint: endpoint(req), ...req.body })),
+  );
+  app.get('/api/bootstrap', (req, res) => res.type('text/markdown').send(bootstrap(endpoint(req))));
   app.post('/mcp', async (req, res, next) => {
-    const server = createMcpServer(core);
+    const server = createMcpServer(core, endpoint(req));
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

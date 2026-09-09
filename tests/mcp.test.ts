@@ -42,12 +42,25 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
   const read = await client.readResource({ uri: 'aacl://bootstrap' });
   assert.ok('text' in read.contents[0]);
   assert.match(read.contents[0].text, /Advisory/);
+  assert.ok(read.contents[0].text.includes(`${base}/mcp`));
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, JSON.stringify(result));
     return JSON.parse((result.content as { text: string }[])[0].text);
   };
-  let run = await call('aacl_session_start', { command: '/issue-development #100' });
+  assert.ok((await call('aacl_bootstrap', {})).content.includes(`${base}/mcp`));
+  const generated = await call('aacl_materialize', { runtime: 'codex' });
+  assert.ok(
+    generated.files
+      .find((f: any) => f.path === 'AACL-BOOTSTRAP.md')
+      .content.includes(`${base}/mcp`),
+  );
+  assert.ok((await (await fetch(`${base}/api/bootstrap`)).text()).includes(`${base}/mcp`));
+  let run = await call('aacl_session_start', {
+    command: '/issue-development #100',
+    instruction: 'Keep the requested directory.',
+  });
+  assert.equal(run.instruction, '#100\n\nKeep the requested directory.');
   assert.equal(run.stage, 'intake');
   const handoff = await call('aacl_context_handoff', {
     runId: run.id,
@@ -57,6 +70,9 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
   });
   assert.equal(handoff.developmentAllowed, true);
   assert.equal(handoff.workflowRevision, 1);
+  assert.equal(handoff.version, run.version + 1);
+  assert.equal(handoff.task, run.instruction);
+  assert.deepEqual(handoff.expectedOutput, ['brief']);
   const journal = await call('aacl_journal_append', {
     snapshotId: handoff.snapshotId,
     kind: 'missing-support',
@@ -191,6 +207,8 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
     }),
   );
   try {
+    const bootstrapResult = await stdio.callTool({ name: 'aacl_bootstrap', arguments: {} });
+    assert.ok((bootstrapResult.content as { text: string }[])[0].text.includes(`${base}/mcp`));
     const runs = await stdio.callTool({ name: 'aacl_run_list', arguments: {} });
     assert.ok((runs.content as { text: string }[])[0].text.includes(run.id));
   } finally {

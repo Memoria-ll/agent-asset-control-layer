@@ -69,11 +69,14 @@ export function prepareProposal(state: State, assets: Asset[], review: Review, i
     const relations = target
       ? { dependencies: target.dependencies, conflicts: target.conflicts }
       : null;
-    if (
-      !isDeepStrictEqual(item.proposedScope, target?.scope ?? null) ||
-      !isDeepStrictEqual(item.proposedRelations, relations)
-    )
-      fail('Proposed Scope / Relationが変更内容と一致しません');
+    if (!isDeepStrictEqual(item.proposedScope, target?.scope ?? null))
+      fail(
+        `proposedScopeが変更内容と一致しません。期待値: ${JSON.stringify(target?.scope ?? null)}。入力値: ${JSON.stringify(item.proposedScope)}。${target?.projectId ? '保存先のprojectIdに合わせてproposedScope.projectを指定してください。' : ''}`,
+      );
+    if (!isDeepStrictEqual(item.proposedRelations, relations))
+      fail(
+        `proposedRelationsが変更内容と一致しません。期待値: ${JSON.stringify(relations)}。入力値: ${JSON.stringify(item.proposedRelations)}`,
+      );
     const id = op.op === 'upsert' ? op.asset.id : op.id;
     const observedScopes = [
       ...new Map(

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Plus, FolderGit2, Plug, Download, ArrowUpRight } from 'lucide-react';
 import type { Overview } from './api.ts';
 import { RuntimeConfigEditor } from './RuntimeConfigEditor.tsx';
+import { ProjectOverlayEditor } from './ProjectOverlayEditor.tsx';
 import { Badge, CopyButton, Empty, Field, Modal } from './ui.tsx';
 
 type Mutate = (route: string, body: unknown, method?: string) => Promise<any>;
@@ -75,7 +76,6 @@ export function Projects({ data, mutate }: { data: Overview; mutate: Mutate }) {
   const [root, setRoot] = useState('');
   const [name, setName] = useState('');
   const [edit, setEdit] = useState('');
-  const [overlay, setOverlay] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   return (
@@ -123,13 +123,6 @@ export function Projects({ data, mutate }: { data: Overview; mutate: Mutate }) {
                 className="button"
                 onClick={() => {
                   setEdit(p.id);
-                  setOverlay(
-                    JSON.stringify(
-                      { disabled: p.disabled, overrides: p.overrides, bindings: p.bindings },
-                      null,
-                      2,
-                    ),
-                  );
                   setError('');
                 }}
               >
@@ -204,40 +197,12 @@ export function Projects({ data, mutate }: { data: Overview; mutate: Mutate }) {
         </Modal>
       )}
       {edit && (
-        <Modal title="Project overlay" onClose={() => setEdit('')}>
-          <p className="muted">
-            disabledはAsset ID配列、overridesは置換元ID→置換先ID、bindingsはAsset ID→scopeです。
-          </p>
-          <textarea
-            className="mono"
-            rows={16}
-            value={overlay}
-            onChange={(e) => setOverlay(e.target.value)}
-          />
-          {error && <div className="error">{error}</div>}
-          <div className="modal-actions">
-            <button className="button" onClick={() => setEdit('')}>
-              キャンセル
-            </button>
-            <button
-              className="button primary"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await mutate(`/projects/${edit}/overlay`, JSON.parse(overlay), 'PUT');
-                  setEdit('');
-                } catch (e) {
-                  setError((e as Error).message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Overlayを保存
-            </button>
-          </div>
-        </Modal>
+        <ProjectOverlayEditor
+          project={data.projects.find((p) => p.id === edit)!}
+          data={data}
+          onClose={() => setEdit('')}
+          onSave={(overlay) => mutate(`/projects/${edit}/overlay`, overlay, 'PUT')}
+        />
       )}
     </>
   );
@@ -288,7 +253,7 @@ export function ImportModal({
               const file = e.target.files?.[0];
               if (file) {
                 setContent(await file.text());
-                setName(file.name.replace(/\.md$/, ''));
+                setName((current) => current || file.name.replace(/\.md$/, ''));
               }
             }}
           />
@@ -327,7 +292,7 @@ export function ImportModal({
           />
         </Field>
         <p className="muted small-text">
-          単純なname / description frontmatterを取り込みます。scopeやbindingは本文から推測しません。
+          名前は画面の入力値を使います。先頭メタデータからdescriptionを取り込み、nameは使いません。scopeやbindingは本文から推測しません。
         </p>
         {error && <div className="error">{error}</div>}
         <div className="modal-actions">

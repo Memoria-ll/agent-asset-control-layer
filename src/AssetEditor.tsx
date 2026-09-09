@@ -70,6 +70,7 @@ export function AssetEditor({
     ),
   );
   const [error, setError] = useState('');
+  const [addingRole, setAddingRole] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (key: string, value: unknown) => setForm((f: any) => ({ ...f, [key]: value }));
   const choicesFor = (dimension: string): Choice[] => {
@@ -95,7 +96,7 @@ export function AssetEditor({
       data.assets.filter((a) => a.type === (dimension === 'taskType' ? 'task-type' : dimension)),
     );
   };
-  return (
+  const editor = (
     <Modal title={asset ? `Assetを編集 · ${asset.id}` : '新しいAsset'} onClose={onClose} wide>
       <form
         onSubmit={async (e) => {
@@ -171,7 +172,12 @@ export function AssetEditor({
           </Field>
         </div>
         {form.type === 'workflow' && (
-          <WorkflowEditor value={definition} assets={data.assets} onChange={setDefinition} />
+          <WorkflowEditor
+            value={definition}
+            assets={data.assets}
+            onChange={setDefinition}
+            onCreateRole={() => setAddingRole(true)}
+          />
         )}
         <AssetContractEditor value={form} assets={data.assets} onChange={set} />
         <details className="form-section" open={form.type !== 'workflow'}>
@@ -309,5 +315,39 @@ export function AssetEditor({
         </div>
       </form>
     </Modal>
+  );
+  return (
+    <>
+      {editor}
+      {addingRole && (
+        <AssetEditor
+          type="role"
+          data={data}
+          onClose={() => setAddingRole(false)}
+          onSave={async (body) => {
+            if (
+              (body as { operations: { asset: AssetInput }[] }).operations[0].asset.type !== 'role'
+            )
+              throw new Error(
+                'この画面では担当Roleを追加してください。種別をroleに戻してください。',
+              );
+            const result = await onSave(body);
+            const id = (body as { operations: { asset: AssetInput }[] }).operations[0].asset.id;
+            setDefinition((current) => ({
+              ...current,
+              entryRole: data.assets.some((a) => a.type === 'role' && a.id === current.entryRole)
+                ? current.entryRole
+                : id,
+              stages: current.stages.map((s) =>
+                data.assets.some((a) => a.type === 'role' && a.id === s.role)
+                  ? s
+                  : { ...s, role: id },
+              ),
+            }));
+            return result;
+          }}
+        />
+      )}
+    </>
   );
 }

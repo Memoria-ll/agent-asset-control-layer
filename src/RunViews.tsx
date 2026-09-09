@@ -9,8 +9,8 @@ import {
   Terminal,
   ChevronRight,
 } from 'lucide-react';
-import type { Asset } from '../server/domain.ts';
-import type { Overview } from './api.ts';
+import type { Asset, Snapshot } from '../server/domain.ts';
+import { api, type Overview } from './api.ts';
 import { Badge, Empty, Field, Json, Modal, relativeDate, CopyButton, statusLabel } from './ui.tsx';
 
 export function WorkflowFlow({
@@ -57,7 +57,9 @@ export function Launcher({
 }) {
   const [selected, setSelected] = useState(workflowId ?? '');
   const [instruction, setInstruction] = useState('');
-  const [project, setProject] = useState('');
+  const [project, setProject] = useState(
+    data.assets.find((a) => a.id === workflowId)?.projectId ?? '',
+  );
   const [runtime, setRuntime] = useState('');
   const [model, setModel] = useState('');
   const [error, setError] = useState('');
@@ -93,7 +95,14 @@ export function Launcher({
         }}
       >
         <Field label="Workflow / Skill">
-          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+          <select
+            value={selected}
+            onChange={(e) => {
+              setSelected(e.target.value);
+              const owner = data.assets.find((a) => a.id === e.target.value)?.projectId;
+              if (owner) setProject(owner);
+            }}
+          >
             <option value="">Advisory / Preparation</option>
             <optgroup label="Workflows">
               {data.assets
@@ -208,8 +217,10 @@ export function Runs({
   const run = data.runs.find((r) => r.id === selected) ?? data.runs[0];
   const [transition, setTransition] = useState<{ to?: string; kind: string } | null>(null);
   const [handoff, setHandoff] = useState<unknown>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState('');
   const stage = run?.workflow?.workflow?.stages.find((s) => s.id === run.stage);
+  const project = data.projects.find((p) => p.id === run?.context.project);
   if (!run)
     return (
       <Empty
@@ -257,9 +268,28 @@ export function Runs({
             <Badge
               tone={run.status === 'active' ? 'blue' : run.status === 'completed' ? 'green' : ''}
             >
-              {statusLabel(run.status)}
+              {run.status === 'active'
+                ? run.runtimeHandoffAt
+                  ? 'AIが引き継ぎを取得済み'
+                  : 'AIへの依頼待ち'
+                : statusLabel(run.status)}
             </Badge>
           </div>
+          {project && (
+            <p className="path-text">
+              Project: {project.name} · {project.root}
+            </p>
+          )}
+          {run.instruction && <pre className="context-content">{run.instruction}</pre>}
+          {run.status === 'active' && (
+            <div className="callout">
+              {run.runtimeHandoffAt
+                ? 'AIから引き継ぎ情報の取得がありました。実際の作業状況は、依頼先のAIで確認してください。'
+                : '「AIへの依頼をコピー」で依頼文を取得し、AACLに接続したAIへ渡してください。'}
+              {run.lastHandoff?.delivery === 'host-inject' &&
+                ' 手動で引き継ぎ情報を取得済みです。手動で取得した内容は、必要に応じてAIへ渡してください。'}
+            </div>
+          )}
           {run.workflow ? (
             <WorkflowFlow workflow={run.workflow} current={run.stage} />
           ) : (
@@ -342,7 +372,7 @@ export function Runs({
                 {run.status === 'active' && (
                   <CopyButton
                     label="AIへの依頼をコピー"
-                    text={`AACLの実行 ${run.id} を引き継いでください。aacl_run_listで現在のStageを確認し、aacl_context_handoffでContextを取得してください。${run.workflow?.workflow?.developmentCapable ? '開発操作の前にaction=developmentで権限を確認してください。' : 'Advisory Modeの範囲で進めてください。'}定義された成果物・完了条件を確認して進行し、終了時にJournalを残してください。`}
+                    text={`AACLの実行 ${run.id} を引き継いでください。${project ? `\nProject: ${project.name} (${project.id})\n作業フォルダー（Coreが動くOS上のパス）: ${project.root}\n` : '\n作業フォルダーは未登録です。作業対象を確認してください。\n'}今回の指示: ${run.instruction}\naacl_run_listで現在のStageを確認し、aacl_context_handoffでContextを取得してください。${run.workflow?.workflow?.developmentCapable ? '開発操作の前にaction=developmentで権限を確認してください。' : 'Advisory Modeの範囲で進めてください。'}引き継ぎのversionを次の遷移のexpectedVersionに指定してください。定義された成果物・完了条件を確認して進行し、終了時にJournalを残してください。`}
                   />
                 )}
                 <div className="button-row wrap">
@@ -376,6 +406,49 @@ export function Runs({
             </section>
           </div>
           {error && <div className="error">{error}</div>}
+          <section className="panel">
+            <div className="panel-head">
+              <h3>記録した成果物</h3>
+            </div>
+            <div className="panel-body">
+              {Object.entries(run.artifacts).length ? (
+                Object.entries(run.artifacts).map(([name, value]) => (
+                  <div key={name}>
+                    <h4>{name}</h4>
+                    <pre className="context-content">{value}</pre>
+                    <CopyButton text={value} label="成果物をコピー" />
+                  </div>
+                ))
+              ) : (
+                <p className="muted">成果物はまだ記録されていません。</p>
+              )}
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-head">
+              <h3>過去のContext</h3>
+            </div>
+            <div className="panel-body button-row wrap">
+              {run.snapshotIds.map((id, i) => {
+                const saved = data.snapshots.find((s) => s.id === id);
+                return (
+                  <button
+                    key={id}
+                    className="button"
+                    onClick={async () => {
+                      try {
+                        setSnapshot(await api<Snapshot>(`/snapshots/${encodeURIComponent(id)}`));
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
+                    Snapshot {i + 1} · {saved?.stage ?? 'Advisory'}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
           <section className="panel">
             <div className="panel-head">
               <h3>実行履歴</h3>
@@ -413,6 +486,24 @@ export function Runs({
           onClose={() => setTransition(null)}
           onSave={(body) => mutate(`/runs/${run.id}/transition`, body)}
         />
+      )}
+      {snapshot && (
+        <Modal title="保存されたContext" wide onClose={() => setSnapshot(null)}>
+          <p>
+            {snapshot.id} · {snapshot.createdAt}
+          </p>
+          <p>
+            {snapshot.project?.name} {snapshot.project?.root}
+          </p>
+          <h3>今回の指示</h3>
+          <pre className="context-content">{snapshot.task}</pre>
+          <h3>渡したContext</h3>
+          <pre className="context-content">{snapshot.resolution.content}</pre>
+          <details>
+            <summary>適用理由・成果物を含む全データ</summary>
+            <Json value={snapshot} />
+          </details>
+        </Modal>
       )}
       {handoff && (
         <Modal title="Runtime handoff" wide onClose={() => setHandoff(null)}>

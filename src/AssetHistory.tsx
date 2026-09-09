@@ -11,12 +11,10 @@ const display = (value: unknown) =>
 export function RevisionDiff({ assetId, from, to }: { assetId: string; from: number; to: number }) {
   const [result, setResult] = useState<Diff | null>(null);
   const [error, setError] = useState('');
-  const [limit, setLimit] = useState(1000);
   useEffect(() => {
     let active = true;
     setResult(null);
     setError('');
-    setLimit(1000);
     api<Diff>(`/assets/${encodeURIComponent(assetId)}/diff?from=${from}&to=${to}`)
       .then((r) => {
         if (active) setResult(r);
@@ -40,6 +38,10 @@ export function RevisionDiff({ assetId, from, to }: { assetId: string; from: num
         差分を読み込み中…
       </p>
     );
+  return <DiffView key={`${assetId}:${from}:${to}`} result={result} />;
+}
+export function DiffView({ result, compact = false }: { result: Diff; compact?: boolean }) {
+  const [limit, setLimit] = useState(1000);
   const added = result.content.lines.filter((l) => l.kind === 'added').length;
   const removed = result.content.lines.filter((l) => l.kind === 'removed').length;
   const visible = new Set<number>();
@@ -61,30 +63,33 @@ export function RevisionDiff({ assetId, from, to }: { assetId: string; from: num
         <Badge>設定 {result.fields.length}項目</Badge>
       </div>
       {result.fields.length > 0 && (
-        <div className="table-scroll">
-          <table className="field-diff">
-            <thead>
-              <tr>
-                <th>項目</th>
-                <th>変更前</th>
-                <th>変更後</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.fields.map((f) => (
-                <tr key={f.path}>
-                  <th>{f.path}</th>
-                  <td>
-                    <pre>{display(f.before)}</pre>
-                  </td>
-                  <td>
-                    <pre>{display(f.after)}</pre>
-                  </td>
+        <details open={!compact}>
+          <summary>設定の差分 · {result.fields.length}項目</summary>
+          <div className="table-scroll">
+            <table className="field-diff">
+              <thead>
+                <tr>
+                  <th>項目</th>
+                  <th>変更前</th>
+                  <th>変更後</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {result.fields.map((f) => (
+                  <tr key={f.path}>
+                    <th>{f.path}</th>
+                    <td>
+                      <pre>{display(f.before)}</pre>
+                    </td>
+                    <td>
+                      <pre>{display(f.after)}</pre>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
       {added > 0 || removed > 0 ? (
         <>

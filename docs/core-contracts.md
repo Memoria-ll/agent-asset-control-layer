@@ -79,6 +79,14 @@ Diagnostics画面でWorkflow・revision・Stage・Roleを絞り込めます。�
 
 ## 検証と残る範囲
 
+2026年9月9日の試用対応では、次の契約を追加しています。
+
+- `workflow.stages[].expectedOutput`は工程で必要な成果物名の配列です。省略した既存の工程には成果物条件を追加しません。指定した工程ではSkillの成果物と合わせて、進行・完了時に記録を求めます。
+- `aacl_context_handoff`は更新後の`version`と、プロジェクトの`id`・`name`・`root`を持つ`project`を返します。未登録の作業場所では`project`は`null`です。`root`はCoreが動くOS上のパスです。
+- 新しいSnapshotは作成時の`project`を保存します。既存のSnapshotにこのフィールドを補完する処理はありません。
+- 実行の`lastHandoff`は現在工程での最後の取得方法を、`runtimeHandoffAt`はAIからの取得日時を記録します。手動取得はAIからの取得記録を消しません。工程を遷移・再試行すると両方を解除します。AIによる作業開始を示す記録ではありません。
+- `GET /api/reviews/:id/preview`は、提案の`expectedRevision`に対応する変更前Asset、提案する変更後Asset、本文と設定の差分を返します。変更後Assetのrevision `0`は未保存の提案を表します。承認時には従来どおり現在のrevisionを検証します。
+
 `npm run check`で型検査・ビルド・Core/MCPのテスト、`npm run test:ui`でブラウザ操作を検証します。テストデータは一時ディレクトリに分離します。
 
 この追加は全44項目の再監査や完了宣言ではありません。診断のConflict / Shadowing / Unreachable網羅、Resolutionの`degraded`、その他Asset Typeの追加の固有契約、Hook / Guardrail、VS Code Extensionは今回の変更に含みません。

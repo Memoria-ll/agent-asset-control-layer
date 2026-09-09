@@ -49,10 +49,12 @@ export function TextList({
 export function WorkflowEditor({
   value,
   assets,
+  onCreateRole,
   onChange: onValueChange,
 }: {
   value: Definition;
   assets: Asset[];
+  onCreateRole?: () => void;
   onChange: (value: Definition) => void;
 }) {
   const [selected, setSelected] = useState(0);
@@ -150,7 +152,17 @@ export function WorkflowEditor({
       <p className="small-text muted">
         Stageを選んで編集 · 実線は「次へ」、点線は差し戻し・再試行・却下
       </p>
-      {!roles.length && <p className="error">先にRole Assetを登録してください。</p>}
+      {!roles.length && (
+        <p className="error">担当Roleを追加してください。Workflowの入力は保持されます。</p>
+      )}
+      {onCreateRole && (
+        <button type="button" className="button small" onClick={onCreateRole}>
+          Roleを追加
+        </button>
+      )}
+      <p className="callout">
+        遷移先がない工程でWorkflowを完了します。確認工程から差し戻す場合は、成功時に進む「完了確認」工程を追加し、その工程には遷移先を設定しません。
+      </p>
       <div className="workflow-canvas" aria-label="Stage接続図">
         <div style={{ width, height: 174, position: 'relative' }}>
           <svg width={width} height="174" aria-hidden="true" className="workflow-edges">
@@ -328,6 +340,11 @@ export function WorkflowEditor({
               </select>
             </Field>
           </div>
+          <TextList
+            label="Stageの成果物"
+            value={stage.expectedOutput ?? []}
+            onChange={(expectedOutput) => changeStage({ ...stage, expectedOutput })}
+          />
           <TextList
             label="Stage完了条件"
             value={stage.completionCriteria}
