@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import type { Overview } from './api.ts';
 import type { Review, Journal, ChangeSet } from '../server/domain.ts';
-import { Badge, CopyButton, Empty, Field, Json, Modal, relativeDate } from './ui.tsx';
+import { Badge, CopyButton, Empty, Field, Json, Modal, relativeDate, statusLabel } from './ui.tsx';
 
 type Mutate = (route: string, body: unknown) => Promise<any>;
 export function JournalModal({
@@ -167,7 +167,7 @@ export function Journals({
               />
             ))
           ) : (
-            <Empty title="観測を、次の改善につなげる">
+            <Empty title="Journalはまだありません">
               実行後にJournalを記録すると、Workflowごとに知見を振り返れます。
             </Empty>
           )}
@@ -190,7 +190,7 @@ export function Journals({
                   <Badge
                     tone={r.status === 'pending' ? 'amber' : r.status === 'approved' ? 'green' : ''}
                   >
-                    {r.status}
+                    {statusLabel(r.status)}
                   </Badge>
                   <span className="small-text muted">{r.journalIds.length} journals</span>
                 </div>
@@ -199,7 +199,7 @@ export function Journals({
           ) : (
             <div className="aside-note">
               <ScanLine size={22} />
-              <h3>改善を始めるのは、あなた。</h3>
+              <h3>Reviewの開始と承認</h3>
               <p>
                 Journalを選択してReviewを開始します。接続したAI
                 Runtimeが提案し、内容を確認してから承認できます。
@@ -320,7 +320,9 @@ function ReviewModal({
   return (
     <Modal title={`Journal Review · ${review.id.slice(-12)}`} onClose={onClose} wide>
       <div className="section-head compact">
-        <Badge tone={review.status === 'pending' ? 'amber' : 'blue'}>{review.status}</Badge>
+        <Badge tone={review.status === 'pending' ? 'amber' : 'blue'}>
+          {statusLabel(review.status)}
+        </Badge>
         <CopyButton
           text={`AACLの ${review.id} をaacl_review_getで読み、JournalとSnapshotを分析してaacl_review_submitで改善提案を提出してください。観測scopeと提案scopeを分離し、根拠と理由を示してください。`}
           label="AIへの依頼をコピー"

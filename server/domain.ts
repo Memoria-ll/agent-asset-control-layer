@@ -6,6 +6,12 @@ export const idSchema = z
     /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/,
     'IDは英数字・ドット・ハイフン・アンダースコアで指定してください',
   );
+// Model identifiers are opaque Runtime values, not file or Asset identifiers.
+export const modelIdSchema = z
+  .string()
+  .min(1)
+  .max(250)
+  .regex(/^[^\s\x00-\x1f\x7f]+$/, 'Model IDに空白や制御文字は使えません');
 export const dimensions = [
   'project',
   'team',
@@ -179,12 +185,19 @@ export const configSchema = z
       z.object({ id: idSchema, provider: idSchema, name: z.string().min(1) }).strict(),
     ),
     runtimes: z.array(
-      z.object({ id: idSchema, name: z.string().min(1), provider: idSchema }).strict(),
+      z
+        .object({
+          id: idSchema,
+          name: z.string().min(1),
+          provider: idSchema,
+          endpoint: z.string().url().optional(),
+        })
+        .strict(),
     ),
     models: z.array(
       z
         .object({
-          id: idSchema,
+          id: modelIdSchema,
           name: z.string().min(1),
           provider: idSchema,
           account: idSchema.optional(),
@@ -196,7 +209,7 @@ export const configSchema = z
         .object({
           role: idSchema,
           workflow: idSchema.optional(),
-          model: idSchema,
+          model: modelIdSchema,
           runtime: idSchema,
         })
         .strict(),

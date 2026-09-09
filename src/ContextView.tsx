@@ -5,13 +5,12 @@ import {
   Download,
   RefreshCw,
   FileCode2,
-  Layers,
   ArrowRight,
 } from 'lucide-react';
 import type { Context, Resolution } from '../server/domain.ts';
 import type { Overview } from './api.ts';
 import { api } from './api.ts';
-import { Badge, CopyButton, DownloadButton, Empty, Field, Modal } from './ui.tsx';
+import { Badge, CopyButton, DownloadButton, Empty, Field, Modal, statusLabel } from './ui.tsx';
 
 export function ContextView({ data, initial = {} }: { data: Overview; initial?: Context }) {
   const [context, setContext] = useState<Context>(initial);
@@ -23,7 +22,9 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
   const [bundle, setBundle] = useState<{ files: { path: string; content: string }[] } | null>(null);
   const [fileIndex, setFileIndex] = useState(0);
   const workflow = data.assets.find((a) => a.id === context.workflow);
-  const stage = workflow?.workflow?.stages.find((s) => s.id === context.stage);
+  const stage = workflow?.workflow?.stages.find(
+    (s) => s.id === (context.stage ?? workflow.workflow?.entryStage),
+  );
   const change = (key: keyof Context, value: string) => {
     const next = { ...context, [key]: value || undefined };
     if (key === 'workflow') {
@@ -73,7 +74,18 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
         <aside className="panel context-controls">
           <div className="panel-head">
             <h3>解決する条件</h3>
-            <Layers size={16} />
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="条件をリセット"
+              title="条件をリセット"
+              onClick={() => {
+                setContext({});
+                setRequested([]);
+              }}
+            >
+              <RefreshCw size={16} />
+            </button>
           </div>
           <div className="panel-body">
             <Field label="Workflow">
@@ -153,11 +165,18 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
             <Field label="Model">
               <select value={context.model ?? ''} onChange={(e) => change('model', e.target.value)}>
                 <option value="">Bindingに従う</option>
-                {data.config.models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
+                {data.config.models
+                  .filter(
+                    (m) =>
+                      !context.runtime ||
+                      data.config.runtimes.find((r) => r.id === context.runtime)?.provider ===
+                        m.provider,
+                  )
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
               </select>
             </Field>
             <Field label="Project">
@@ -180,28 +199,38 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                 placeholder="src/components"
               />
             </Field>
-            <Field label="オンデマンドAsset">
-              <select
-                multiple
-                value={requested}
-                onChange={(e) => setRequested([...e.target.selectedOptions].map((o) => o.value))}
-              >
+            <fieldset className="context-skills">
+              <legend>
+                追加で読み込むSkill <Badge>{requested.length}</Badge>
+              </legend>
+              <div className="choice-list">
                 {data.assets
                   .filter((a) => a.activation === 'on-demand' || a.type === 'skill')
                   .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
+                    <label key={a.id} className={requested.includes(a.id) ? 'checked' : ''}>
+                      <input
+                        type="checkbox"
+                        checked={requested.includes(a.id)}
+                        onChange={(e) =>
+                          setRequested(
+                            e.target.checked
+                              ? [...requested, a.id]
+                              : requested.filter((id) => id !== a.id),
+                          )
+                        }
+                      />
+                      <span>{a.name}</span>
+                    </label>
                   ))}
-              </select>
-            </Field>
+              </div>
+            </fieldset>
           </div>
         </aside>
         <div className="context-result">
           <div className="context-summary">
             <div>
               <span className="eyebrow">RESOLVED CONTEXT</span>
-              <h2>必要な知識を、必要な実行へ。</h2>
+              <h2>適用されるContext</h2>
               <p>明示した条件から、適用するAssetとその理由を確認できます。</p>
             </div>
             <div className="context-total">
@@ -298,7 +327,7 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                                     : ''
                               }
                             >
-                              {e.status}
+                              {statusLabel(e.status)}
                             </Badge>
                             <span className="token-count">~{e.estimatedTokens} t</span>
                           </summary>

@@ -23,14 +23,36 @@ MCP: `http://localhost:4780/mcp`
 ## 最初の操作
 
 1. Workflows画面の「スターターを追加」を押します。6 Stageの`issue-development`、6つのRole、Task Type、Rule、単独レビューSkillを登録します。初期状態は空で、自動登録しません。
-2. Assetsから内容・複合scope・依存関係・priorityなどを編集します。Workflow定義はJSONで編集できます。新規Workflowは、参照するRoleを先に登録してください。
+2. Assetsから内容・複合scope・依存関係・priorityなどを編集します。Scopeと依存関係は候補から選択でき、直接入力はEnterで追加します。Workflowは接続図のStageを選び、Role・遷移・必要成果物・完了条件をフォームで編集します。新規Workflowは、参照するRoleを先に登録してください。
 3. Context PreviewでWorkflow / Stage / Role / Project / Runtime / Modelを指定し、適用・除外理由を確認します。
 4. 「新しい実行」からWorkflowと追加指示を指定します。選択しなければAdvisory Modeになります。
-5. Runtime & MCPに表示された接続先をClaude / Codexに登録します。CoreがRunを開始しただけではAIの実作業は始まりません。接続先AIにRun IDを渡し、`aacl_context_handoff`から引き継がせます。
+5. Runtime & MCPに表示された接続先をClaude / Codexに登録します。CoreがRunを開始しただけではAIの実作業は始まりません。実行画面の「AIへの依頼をコピー」を接続先AIへ渡し、`aacl_context_handoff`から引き継がせます。
 6. Stageの完了根拠と成果物を登録して進行し、実行後にJournalを記録します。
 7. Journalを選択してReviewを開始します。「AIへの依頼をコピー」を接続先AIへ渡してください。AIは`aacl_review_get`で根拠を読み、`aacl_review_submit`で提案を提出します。UIの「承認して反映」で初めてAssetを変更します。
 
-ModelのIDやRole bindingはRuntime & MCP画面でユーザーが登録します。Model名を推測して自動選択しません。Accountは識別用metadataのみで、APIキーを保存しません。
+Runtime & MCPの「モデルを自動認識」から候補を取得し、選択して登録できます。Role bindingはフォームで指定し、「設定を保存」で反映します。Provider / Account / Runtimeの構成は「詳細設定」から編集できます。認識だけではModel登録やRoleへの割り当てを変更しません。Accountは識別用metadataのみで、APIキーを保存しません。
+
+進行中のRunにはWorkflows画面の「続きを開く」から戻れます。Asset検索は `/` または `Ctrl / Cmd + K` でフォーカスし、Escapeで検索を解除できます。
+
+## モデルの自動認識
+
+| 接続先      | 取得方法                                                         | 認識されない場合                                        |
+| ----------- | ---------------------------------------------------------------- | ------------------------------------------------------- |
+| Codex       | ローカルCLIの`account/read`と`model/list`。既存ログインを利用    | Coreと同じ環境で`codex login`後に再取得                 |
+| Claude Code | `claude auth status`と、CLIのSDK初期化応答のモデル名・エイリアス | Coreと同じ環境で`claude auth login`後に再取得           |
+| Ollama      | `GET /api/tags`のインストール済みモデル                          | Ollamaサーバーを起動。既定URLは`http://127.0.0.1:11434` |
+| LM Studio   | `GET /v1/models`のサーバー提供モデル                             | Local Serverを起動。既定URLは`http://127.0.0.1:1234`    |
+| llama.cpp   | `GET /v1/models`のサーバー提供モデル                             | llama-serverを起動。既定URLは`http://127.0.0.1:8080`    |
+
+CodexはOpenAI用カタログ、Claude Codeはインストール済みCLIが返す候補を使用します。モデルをハードコードせず、接続先から取得できた値を表示します。Claude CodeのエイリアスはRuntime側で解釈され、具体的なモデルはログイン・契約・CLIバージョンによって変わります。利用権限を試す推論リクエストは送信しません。
+
+CLIはPATHと`~/.local/bin`から探します。`AACL_CODEX_BIN` / `AACL_CLAUDE_BIN`で実行ファイルの絶対パスを指定できます。認識はCoreの動くOS・ユーザーの環境を対象とし、WindowsとWSLのログインは自動共有しません。検証環境はCodex CLI 0.151.0、Claude Code 2.1.177です。Claude Codeの認識はSDKのcontrol protocolに依存し、未対応バージョンでは取得エラーを表示します。
+
+ローカルサーバーのURLは認識画面で変更できます。`AACL_OLLAMA_URL` / `AACL_LMSTUDIO_URL` / `AACL_LLAMACPP_URL`でも既定値を指定できます。localhostまたはプライベートIPに限定し、リダイレクトを追いません。WSLからWindowsのサーバーへ接続する場合は、Windows側で公開したIP・ポートを指定してください。`llama3.2:latest`や`org/model.gguf`などのIDを保持し、登録したRuntime URLとModel情報はHandoffにも含めます。
+
+認識時にタスク入力・モデルの推論・モデルのダウンロードは実行しません。ログイン情報はCLIが管理し、Coreにはコピーしません。ログイン自体は各CLIで行います。
+
+取得契約: [Codex App Server](https://learn.chatgpt.com/docs/app-server)、[Claude Code CLI](https://code.claude.com/docs/en/cli-reference)、[Claude SDK初期化](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/client.py)、[Ollama](https://docs.ollama.com/api/tags)、[LM Studio](https://lmstudio.ai/docs/developer/openai-compat/models)、[llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/server)。
 
 ## MCP接続
 
@@ -149,6 +171,6 @@ npm run test:ui            # 実ブラウザの操作フローとモバイル幅
 
 ## 現時点の境界
 
-要求v13から、コアの一連の操作が動く実装を優先しています。VS Code拡張、Tauriデスクトップシェル、Workflowの図形編集、外部モデルの直接実行、外部MCPへのproxy / 接続probe、Hooks / OS Guardrails、AI自動選択、semantic duplicate検出は含みません。Token数は文字種からの推定で、モデル別tokenizerによる実測ではありません。Providerの価格を使った金額計算も行いません。
+要求v13から、コアの一連の操作が動く実装を優先しています。VS Code拡張、Tauriデスクトップシェル、外部モデルの直接実行、外部MCPへのproxy / 接続probe、Hooks / OS Guardrails、AI自動選択、semantic duplicate検出は含みません。Workflow編集は接続図とフォームで行い、自由配置・ドラッグによる接続は未実装です。Token数は文字種からの推定で、モデル別tokenizerによる実測ではありません。Providerの価格を使った金額計算も行いません。
 
 主なコードは`server/domain.ts`（契約）、`server/resolver.ts`（決定論的解決）、`server/core.ts`（状態・承認）、`server/store.ts`（保存・回復・Git）、`server/mcp.ts`（MCP）、`src/`（UI）に分かれています。

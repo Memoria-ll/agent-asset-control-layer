@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import type { Asset, Run } from '../server/domain.ts';
 import type { Overview } from './api.ts';
-import { Badge, Empty, Field, Json, Modal, relativeDate, CopyButton } from './ui.tsx';
+import { Badge, Empty, Field, Json, Modal, relativeDate, CopyButton, statusLabel } from './ui.tsx';
 
 export function WorkflowFlow({
   workflow,
@@ -23,19 +23,21 @@ export function WorkflowFlow({
   onSelect?: (id: string) => void;
 }) {
   const stages = workflow.workflow?.stages ?? [];
+  const Node = onSelect ? 'button' : 'div';
   return (
     <div className="workflow-flow">
       {stages.map((s, i) => (
         <div key={s.id} className="flow-segment">
-          <button
+          <Node
             className={`flow-node ${current === s.id ? 'selected' : ''}`}
-            onClick={() => onSelect?.(s.id)}
+            onClick={onSelect ? () => onSelect(s.id) : undefined}
+            aria-current={current === s.id ? 'step' : undefined}
             title={`${s.name}: ${s.role}`}
           >
             <span className="stage-number">{String(i + 1).padStart(2, '0')}</span>
             <strong>{s.name}</strong>
             <span className="mono">{s.role}</span>
-          </button>
+          </Node>
           {i < stages.length - 1 && <ArrowRight className="flow-arrow" size={17} />}
         </div>
       ))}
@@ -194,13 +196,15 @@ export function Runs({
   mutate,
   onLaunch,
   onJournal,
+  initialRunId = '',
 }: {
   data: Overview;
   mutate: (route: string, body: unknown) => Promise<any>;
   onLaunch: () => void;
   onJournal: (snapshot: string) => void;
+  initialRunId?: string;
 }) {
-  const [selected, setSelected] = useState('');
+  const [selected, setSelected] = useState(initialRunId);
   const run = data.runs.find((r) => r.id === selected) ?? data.runs[0];
   const [transition, setTransition] = useState<{ to?: string; kind: string } | null>(null);
   const [handoff, setHandoff] = useState<unknown>(null);
@@ -253,7 +257,7 @@ export function Runs({
             <Badge
               tone={run.status === 'active' ? 'blue' : run.status === 'completed' ? 'green' : ''}
             >
-              {run.status}
+              {statusLabel(run.status)}
             </Badge>
           </div>
           {run.workflow ? (
@@ -290,13 +294,21 @@ export function Runs({
                         key={`${t.to}:${t.kind}`}
                         className={`button ${t.kind === 'advance' ? 'primary' : ''}`}
                         onClick={() => setTransition(t)}
+                        title={run.workflow?.workflow?.stages.find((s) => s.id === t.to)?.name}
                       >
                         {t.kind === 'advance' ? <ArrowRight size={14} /> : <RotateCcw size={14} />}
                         {t.kind === 'advance'
                           ? '次のStageへ'
                           : t.kind === 'retry'
                             ? '再実行'
-                            : '差し戻す'}
+                            : t.kind === 'reject'
+                              ? '却下して戻す'
+                              : '差し戻す'}
+                        {t.kind !== 'retry' && (
+                          <span className="transition-target">
+                            {run.workflow?.workflow?.stages.find((s) => s.id === t.to)?.name}
+                          </span>
+                        )}
                       </button>
                     ))}
                     {(!stage || stage.transitions.length === 0) && (
@@ -327,6 +339,12 @@ export function Runs({
               <div className="panel-body">
                 <p className="muted">現在のStageとAssetを解決し、委譲用Contextを取得します。</p>
                 <code className="inline-code">{run.id}</code>
+                {run.status === 'active' && (
+                  <CopyButton
+                    label="AIへの依頼をコピー"
+                    text={`AACLの実行 ${run.id} を引き継いでください。aacl_run_listで現在のStageを確認し、aacl_context_handoffでContextを取得してください。${run.workflow?.workflow?.developmentCapable ? '開発操作の前にaction=developmentで権限を確認してください。' : 'Advisory Modeの範囲で進めてください。'}定義された成果物・完了条件を確認して進行し、終了時にJournalを残してください。`}
+                  />
+                )}
                 <div className="button-row wrap">
                   <button
                     disabled={run.status !== 'active'}

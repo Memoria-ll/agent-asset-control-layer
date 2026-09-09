@@ -7,9 +7,11 @@ import { Core } from './core.ts';
 import { DomainError } from './domain.ts';
 import { createMcpServer } from './mcp.ts';
 import { materialize, bootstrap } from './adapters.ts';
+import { discoveryInput, discoveryService, discoverModels } from './discovery.ts';
 
-export function createApp(core: Core) {
+export function createApp(core: Core, discovery = discoverModels) {
   const app = express();
+  const discover = discoveryService(discovery);
   const humanToken = randomBytes(32).toString('hex');
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -60,6 +62,9 @@ export function createApp(core: Core) {
     res.json(core.updateOverlay(req.params.id, req.body)),
   );
   app.put('/api/config', (req, res) => res.json(core.updateConfig(req.body)));
+  app.post('/api/models/discover', async (req, res) =>
+    res.json(await discover(discoveryInput.parse(req.body))),
+  );
   app.post('/api/resolve', (req, res) => res.json(core.preview(req.body)));
   app.post('/api/runs', (req, res) => res.json(core.startRun(req.body)));
   app.post('/api/runs/:id/transition', (req, res) =>

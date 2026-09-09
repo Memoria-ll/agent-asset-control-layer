@@ -3,6 +3,8 @@ import type { Asset, AssetInput } from '../server/domain.ts';
 import { assetTypes, dimensions, inputOf } from '../server/domain.ts';
 import type { Overview } from './api.ts';
 import { Field, Modal } from './ui.tsx';
+import { TokenPicker, type Choice } from './TokenPicker.tsx';
+import { WorkflowEditor } from './WorkflowEditor.tsx';
 
 export function AssetEditor({
   asset,
@@ -37,8 +39,8 @@ export function AssetEditor({
         },
   );
   const role = data.assets.find((a) => a.type === 'role')?.id ?? 'orchestrator';
-  const [definition, setDefinition] = useState(
-    JSON.stringify(
+  const [definition, setDefinition] = useState<NonNullable<AssetInput['workflow']>>(
+    structuredClone(
       asset?.workflow ?? {
         developmentCapable: true,
         entryRole: role,
@@ -56,8 +58,6 @@ export function AssetEditor({
           },
         ],
       },
-      null,
-      2,
     ),
   );
   const [capability, setCapability] = useState(
@@ -70,11 +70,29 @@ export function AssetEditor({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (key: string, value: unknown) => setForm((f: any) => ({ ...f, [key]: value }));
-  const csv = (text: string) =>
-    text
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+  const choicesFor = (dimension: string): Choice[] => {
+    const items = (items: { id: string; name: string }[]) =>
+      items.map((a) => ({ id: a.id, label: a.name }));
+    if (dimension === 'project') return items(data.projects);
+    if (dimension === 'provider') return items(data.config.providers);
+    if (dimension === 'runtime') return items(data.config.runtimes);
+    if (dimension === 'model') return items(data.config.models);
+    if (dimension === 'stage') {
+      const workflows = data.assets.filter(
+        (a) => a.workflow && (!form.scope.workflow?.length || form.scope.workflow.includes(a.id)),
+      );
+      return [
+        ...new Map(
+          workflows.flatMap((w) =>
+            w.workflow!.stages.map((s) => [s.id, { id: s.id, label: s.name }] as const),
+          ),
+        ).values(),
+      ];
+    }
+    return items(
+      data.assets.filter((a) => a.type === (dimension === 'taskType' ? 'task-type' : dimension)),
+    );
+  };
   return (
     <Modal title={asset ? `Assetを編集 · ${asset.id}` : '新しいAsset'} onClose={onClose} wide>
       <form
@@ -85,7 +103,7 @@ export function AssetEditor({
           try {
             const next = {
               ...form,
-              ...(form.type === 'workflow' ? { workflow: JSON.parse(definition) } : {}),
+              ...(form.type === 'workflow' ? { workflow: definition } : {}),
               ...(form.type === 'capability' ? { capability: JSON.parse(capability) } : {}),
             };
             if (form.type !== 'workflow') delete next.workflow;
@@ -146,34 +164,27 @@ export function AssetEditor({
             </select>
           </Field>
         </div>
-        <Field label="説明">
-          <input
-            value={form.description}
-            onChange={(e) => set('description', e.target.value)}
-            placeholder="このAssetの用途を短く説明"
-          />
-        </Field>
-        <Field label="本文（Markdown）">
-          <textarea
-            rows={7}
-            value={form.content}
-            onChange={(e) => set('content', e.target.value)}
-            placeholder="AIに渡す手順・責務・知識を記述してください。"
-          />
-        </Field>
         {form.type === 'workflow' && (
-          <Field
-            label="Workflow定義（JSON）"
-            hint="Stage・Role・遷移・完了条件を定義します。Roleは先に登録してください。"
-          >
-            <textarea
-              className="mono"
-              rows={15}
-              value={definition}
-              onChange={(e) => setDefinition(e.target.value)}
+          <WorkflowEditor value={definition} assets={data.assets} onChange={setDefinition} />
+        )}
+        <details className="form-section" open={form.type !== 'workflow'}>
+          <summary>説明・本文</summary>
+          <Field label="説明">
+            <input
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+              placeholder="このAssetの用途を短く説明"
             />
           </Field>
-        )}
+          <Field label="本文（Markdown）">
+            <textarea
+              rows={7}
+              value={form.content}
+              onChange={(e) => set('content', e.target.value)}
+              placeholder="AIに渡す手順・責務・知識を記述してください。"
+            />
+          </Field>
+        </details>
         {form.type === 'capability' && (
           <Field
             label="Capability定義（JSON）"
@@ -190,21 +201,21 @@ export function AssetEditor({
         <details className="form-section" open={!!asset}>
           <summary>適用条件 · Scope</summary>
           <p className="muted small-text">
-            異なる条件はAND、カンマで区切った同じ条件の値はORです。空欄は制限なし。
+            異なる条件はAND、同じ条件の複数値はORです。候補から選ぶか、Enterで追加できます。
           </p>
           <div className="form-grid">
             {dimensions.map((d) => (
               <Field key={d} label={d}>
-                <input
-                  value={(form.scope[d] ?? []).join(', ')}
-                  onChange={(e) => {
-                    const values = csv(e.target.value);
+                <TokenPicker
+                  value={form.scope[d] ?? []}
+                  choices={choicesFor(d)}
+                  onChange={(values) => {
                     const scope = { ...form.scope };
                     if (values.length) scope[d] = values;
                     else delete scope[d];
                     set('scope', scope);
                   }}
-                  placeholder={d === 'role' ? 'implementer, reviewer' : '制限なし'}
+                  placeholder="指定なし · 全体に適用"
                 />
               </Field>
             ))}
@@ -229,15 +240,21 @@ export function AssetEditor({
               </select>
             </Field>
             <Field label="Dependencies">
-              <input
-                value={form.dependencies.join(', ')}
-                onChange={(e) => set('dependencies', csv(e.target.value))}
+              <TokenPicker
+                value={form.dependencies}
+                choices={data.assets
+                  .filter((a) => a.id !== form.id)
+                  .map((a) => ({ id: a.id, label: a.name }))}
+                onChange={(values) => set('dependencies', values)}
               />
             </Field>
             <Field label="Conflicts">
-              <input
-                value={form.conflicts.join(', ')}
-                onChange={(e) => set('conflicts', csv(e.target.value))}
+              <TokenPicker
+                value={form.conflicts}
+                choices={data.assets
+                  .filter((a) => a.id !== form.id)
+                  .map((a) => ({ id: a.id, label: a.name }))}
+                onChange={(values) => set('conflicts', values)}
               />
             </Field>
             <Field label="Compatibility">

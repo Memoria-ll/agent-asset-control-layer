@@ -647,6 +647,9 @@ export class Core {
         workflowRevision: snapshot.workflowRevision,
         stage: run.stage,
         role: snapshot.resolution.context.role ?? null,
+        runtime:
+          state.config.runtimes.find((r) => r.id === snapshot.resolution.context.runtime) ?? null,
+        model: state.config.models.find((m) => m.id === snapshot.resolution.context.model) ?? null,
         mode: run.mode,
         developmentAllowed: !!run.workflow?.workflow?.developmentCapable,
         delivery: req.delivery,

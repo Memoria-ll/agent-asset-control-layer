@@ -1,0 +1,812 @@
+/* Shared controls and reading hierarchy. Keep explanatory copy concise. */
+:root {
+  color: #26354d;
+  --muted: #63748b;
+}
+.muted {
+  color: #65758c;
+}
+.small-text {
+  font-size: 12px;
+}
+.page-heading p {
+  font-size: 13px;
+  color: #66758c;
+}
+.eyebrow {
+  color: #6e7e96;
+}
+.nav-group {
+  color: #7c8ba1;
+  font-size: 10px;
+}
+.nav-item {
+  color: #61718a;
+  min-height: 43px;
+}
+.nav-item.active {
+  color: #3454ca;
+}
+.nav-item[aria-current='page'] {
+  box-shadow: inset 3px 0 #5875df;
+}
+.button {
+  min-height: 38px;
+  font-size: 12px;
+}
+.button.small {
+  min-height: 32px;
+  font-size: 11px;
+}
+.button:disabled {
+  opacity: 0.58;
+}
+.field > label {
+  font-size: 12px;
+  color: #4d617d;
+}
+input:not([type='checkbox']),
+select,
+textarea {
+  font-size: 13px;
+  color: #344c6c;
+  min-height: 40px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: #8190a7;
+}
+.field small {
+  font-size: 11px;
+  color: #6e7e94;
+}
+.badge {
+  font-size: 11px;
+  color: #64738a;
+}
+.badge.blue {
+  color: #3f5eac;
+}
+.badge.green {
+  color: #287c5d;
+}
+.badge.amber {
+  color: #886019;
+}
+.badge.red {
+  color: #ad444b;
+}
+.badge.purple {
+  color: #8054a6;
+}
+.panel-head h3 {
+  font-size: 14px;
+}
+.tabs {
+  gap: 24px;
+}
+.tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  min-height: 48px;
+  color: #687994;
+}
+.tabs button.active {
+  color: #3658c7;
+}
+.tabs button span {
+  font-size: 10px;
+}
+.section-head h2 {
+  font-size: 17px;
+}
+.workflow-card h3 {
+  font-size: 17px;
+}
+.workflow-card p,
+.starter-card p {
+  font-size: 12px;
+  color: #6c7c94;
+}
+.workflow-card-meta {
+  font-size: 11px;
+  color: #6e7f9a;
+}
+.workflow-card-footer code {
+  font-size: 11px;
+  color: #637798;
+}
+.workflow-card-footer {
+  gap: 10px;
+}
+.workflow-card-footer code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-launch {
+  flex-shrink: 0;
+}
+.create-workflow-card strong {
+  font-size: 13px;
+  color: #62748f;
+}
+.create-workflow-card span {
+  font-size: 11px;
+  color: #7e8ea5;
+}
+.flow-node {
+  min-width: 128px;
+  padding: 15px 13px;
+}
+.flow-node strong {
+  font-size: 12px;
+  color: #435d7f;
+}
+.flow-node .mono {
+  font-size: 10px;
+  max-width: 140px;
+  color: #6e82a1;
+}
+.flow-node[aria-current='step'] {
+  box-shadow: 0 0 0 1px #c9d5f4;
+}
+.stage-number {
+  font-size: 10px;
+  color: #8092b2;
+}
+.stage-detail h3,
+.stage-detail strong {
+  font-size: 13px;
+  color: #435e80;
+}
+.stage-detail p,
+.stage-detail > div > span:not(.eyebrow) {
+  font-size: 12px;
+  color: #6a7d9b;
+  line-height: 1.7;
+}
+.stage-detail > div:last-child {
+  display: block;
+}
+.guidance-card h3 {
+  font-size: 13px;
+  color: #526b8d;
+}
+.guidance-card p {
+  font-size: 11px;
+  color: #7788a1;
+}
+.asset-name-button strong {
+  font-size: 13px;
+  color: #435a7a;
+}
+.asset-name-button small {
+  font-size: 11px;
+  color: #7e8da5;
+}
+th {
+  font-size: 11px;
+  color: #7586a0;
+}
+td {
+  font-size: 12px;
+}
+.scope-pills > span {
+  font-size: 10px;
+  color: #5e7596;
+}
+.empty h3 {
+  color: #536c8e;
+}
+.empty p {
+  color: #72849e;
+  font-size: 12px;
+}
+.context-summary p,
+.export-bar p {
+  font-size: 12px;
+  color: #6a7d9a;
+}
+.context-meta > span:not(.badge) {
+  font-size: 11px;
+  color: #7588a7;
+}
+.context-meta strong {
+  color: #486586;
+}
+.resolution-entry strong {
+  color: #456081;
+  font-size: 13px;
+}
+.resolution-entry .small-text {
+  font-size: 11px;
+}
+.resolution-reasons p {
+  color: #597497;
+  font-size: 12px;
+}
+.resolution-entry summary::after {
+  content: '+';
+  color: #6f82a0;
+  font-size: 18px;
+  padding-left: 2px;
+}
+.resolution-entry[open] summary::after {
+  content: '−';
+}
+.context-content {
+  color: #405a7e;
+  font-size: 13px;
+}
+.code {
+  color: #4f698f;
+  font-size: 12px;
+}
+.run-item strong {
+  font-size: 12px;
+}
+.run-item div > span {
+  font-size: 10px;
+  color: #7084a2;
+}
+.criteria-list li {
+  color: #5d7599;
+  font-size: 12px;
+}
+.transition-target {
+  font-size: 10px;
+  padding-left: 7px;
+  border-left: 1px solid currentColor;
+  opacity: 0.78;
+}
+.timeline-row strong {
+  font-size: 12px;
+}
+.timeline-row p {
+  font-size: 11px;
+  color: #7c8da6;
+}
+.journal-card p {
+  font-size: 13px;
+  color: #536985;
+}
+.review-card p {
+  font-size: 12px;
+  color: #6b809e;
+}
+.aside-note h3 {
+  font-size: 14px;
+  color: #597196;
+}
+.aside-note p {
+  font-size: 12px;
+  color: #6e84a7;
+}
+.history-row strong {
+  font-size: 13px;
+}
+.history-row p {
+  font-size: 11px;
+  color: #7185a5;
+}
+.callout {
+  font-size: 12px;
+  color: #60799f;
+}
+.global-search {
+  position: relative;
+}
+.global-search input {
+  width: 185px;
+  padding: 9px 28px 9px 11px;
+  min-height: 36px;
+  border: 1px solid #e0e7f1;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.global-search input:focus {
+  border-color: #8099ec;
+  background: #fff;
+}
+.global-search kbd {
+  margin-left: -31px;
+  pointer-events: none;
+}
+.global-search:has(.search-clear) kbd {
+  visibility: hidden;
+}
+.search-clear {
+  position: absolute;
+  right: 4px;
+  background: none;
+  border: 0;
+  width: 26px;
+  height: 26px;
+  color: #6a7d9b;
+  font-size: 19px;
+}
+.workspace-overview {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 0 23px;
+}
+.workspace-overview > div,
+.workspace-overview > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 23px 24px;
+  min-width: 0;
+}
+.workspace-overview > :not(:last-child) {
+  border-right: 1px solid var(--line);
+}
+.workspace-overview svg {
+  color: #8297ba;
+  flex-shrink: 0;
+}
+.workspace-overview strong {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+}
+.workspace-overview span:not(.status-dot) {
+  color: #7286a5;
+  font-size: 12px;
+}
+.workspace-overview button {
+  border: 0;
+  background: none;
+  text-align: left;
+  border-radius: 0 10px 10px 0;
+}
+.workspace-overview button:hover {
+  background: #f2f5ff;
+}
+.workspace-overview button svg:last-child {
+  margin-left: auto;
+}
+.resume-run {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  width: 100%;
+  gap: 18px;
+  padding: 20px 24px;
+  border: 1px solid #d5dff7;
+  border-radius: 10px;
+  background: #edf2ff;
+  margin: 0 0 24px;
+}
+.resume-run:hover {
+  border-color: #8ea7e5;
+  background: #e9efff;
+}
+.resume-icon {
+  display: grid;
+  place-items: center;
+  height: 42px;
+  width: 42px;
+  border-radius: 10px;
+  background: #fff;
+  color: #506dd7;
+  flex-shrink: 0;
+}
+.resume-run .grow > span {
+  display: block;
+  font-size: 10px;
+  color: #6381bc;
+  margin-bottom: 5px;
+}
+.resume-run strong {
+  display: block;
+  font-size: 14px;
+  color: #365284;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.resume-run small {
+  display: block;
+  font-size: 11px;
+  color: #6a82aa;
+  margin-top: 7px;
+}
+.resume-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #4565bd;
+  white-space: nowrap;
+}
+.token-input {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid #dfe6f1;
+  border-radius: 7px;
+  min-height: 43px;
+  background: #fff;
+}
+.token-input:focus-within {
+  border-color: #8da6e9;
+  box-shadow: 0 0 0 2px #eef2ff;
+}
+.token-input input {
+  flex: 1;
+  min-width: 100px;
+  width: 120px;
+  border: 0;
+  padding: 5px;
+  min-height: 28px;
+  font-size: 12px;
+}
+.token-input input:focus-visible {
+  outline: none;
+}
+.input-token {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #edf2ff;
+  color: #4563a9;
+  border: 1px solid #dce5fa;
+  border-radius: 5px;
+  padding: 4px 5px 4px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.input-token button {
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 0;
+  color: #6c83b3;
+  border-radius: 3px;
+  padding: 3px;
+}
+.input-token button:hover {
+  background: #d8e3fb;
+}
+.token-choices {
+  margin-top: 7px;
+}
+.token-choices summary {
+  color: #697f9f;
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+.token-choices summary span {
+  color: #92a1b8;
+  margin-left: 4px;
+}
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 210px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.choice-list label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 7px 8px;
+  color: #627b9a;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.choice-list label:hover {
+  background: #f4f7fd;
+}
+.choice-list label.checked {
+  background: #edf2ff;
+  border-color: #dce6fa;
+  color: #385daa;
+}
+.choice-list input[type='checkbox'] {
+  margin: 0;
+  width: 15px;
+  height: 15px;
+}
+.context-skills {
+  border: 0;
+  padding: 0;
+  margin: 0 0 10px;
+  min-width: 0;
+}
+.context-skills legend {
+  font-size: 11px;
+  color: #4d617d;
+  padding: 0;
+  margin-bottom: 10px;
+}
+.context-skills legend .badge {
+  margin-left: 5px;
+}
+.context-skills .choice-list label {
+  font-size: 11px;
+}
+.runtime-editor {
+  overflow: visible;
+}
+.runtime-editor > .panel-head {
+  border-radius: 10px 10px 0 0;
+}
+.runtime-editor .section-head p {
+  margin: 0;
+  font-size: 13px;
+}
+.runtime-editor .empty {
+  padding: 35px 20px;
+}
+.config-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.config-item:last-child {
+  border: 0;
+}
+.config-item strong {
+  display: block;
+  font-size: 14px;
+  color: #425f84;
+  overflow-wrap: anywhere;
+}
+.config-item small {
+  display: block;
+  color: #7286a5;
+  font-size: 12px;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+}
+.config-assigned-model {
+  color: #4e6ba0;
+  font-size: 12px;
+  max-width: 170px;
+  overflow-wrap: anywhere;
+}
+.config-save-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 17px 21px;
+  background: #f9fbff;
+  border-top: 1px solid #e3eaf5;
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 -5px 15px #2d4e8b04;
+}
+.config-save-bar > span {
+  font-size: 12px;
+  color: #6c819f;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 1180px) {
+  .workspace-overview > div,
+  .workspace-overview > button {
+    padding: 19px 16px;
+    gap: 9px;
+  }
+  .workspace-overview span:not(.status-dot) {
+    font-size: 11px;
+  }
+  .workspace-overview strong {
+    font-size: 22px;
+  }
+  .stage-detail {
+    grid-template-columns: 1.3fr 1fr;
+  }
+  .stage-detail > div:last-child {
+    grid-column: 1/-1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 13px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .stage-detail > div:last-child .eyebrow {
+    margin: 0 12px 0 0;
+  }
+}
+@media (max-width: 950px) {
+  .workspace-overview {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .workspace-overview > :nth-child(2) {
+    border-right: 0;
+  }
+  .workspace-overview > :nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+  .context-skills {
+    grid-column: 1/-1;
+    margin-top: 10px;
+  }
+  .context-skills .choice-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 650px) {
+  .nav-item {
+    min-height: 43px;
+  }
+  .global-search {
+    display: flex;
+  }
+  .global-search > svg,
+  .global-search kbd {
+    display: none;
+  }
+  .global-search input {
+    width: 112px;
+    font-size: 10px;
+    min-height: 32px;
+    padding: 6px 22px 6px 8px;
+  }
+  .topbar-actions {
+    gap: 7px;
+  }
+  .topbar .user-avatar {
+    display: none;
+  }
+  .breadcrumbs {
+    gap: 5px;
+    font-size: 9px;
+  }
+  .workspace-overview > div,
+  .workspace-overview > button {
+    padding: 15px 12px;
+    gap: 8px;
+  }
+  .workspace-overview svg {
+    width: 15px;
+  }
+  .workspace-overview strong {
+    font-size: 20px;
+  }
+  .workspace-overview span:not(.status-dot) {
+    font-size: 11px;
+  }
+  .workspace-overview button svg:last-child {
+    display: none;
+  }
+  .resume-run {
+    padding: 16px 13px;
+    gap: 11px;
+  }
+  .resume-icon {
+    width: 31px;
+    height: 34px;
+  }
+  .resume-action {
+    font-size: 10px;
+  }
+  .resume-action svg {
+    width: 13px;
+  }
+  .resume-run strong {
+    font-size: 12px;
+  }
+  .resume-run small {
+    font-size: 10px;
+  }
+  .page-heading p {
+    font-size: 11px;
+  }
+  .button {
+    font-size: 11px;
+    min-height: 36px;
+  }
+  .button.small {
+    font-size: 10px;
+  }
+  .workflow-card h3 {
+    font-size: 16px;
+  }
+  .workflow-card p {
+    font-size: 12px;
+  }
+  .workflow-card-meta {
+    font-size: 10px;
+  }
+  .stage-detail h3,
+  .stage-detail strong {
+    font-size: 11px;
+  }
+  .stage-detail p,
+  .stage-detail > div > span:not(.eyebrow) {
+    font-size: 11px;
+  }
+  .guidance-card h3 {
+    font-size: 11px;
+  }
+  .guidance-card p {
+    font-size: 10px;
+  }
+  .tabs {
+    gap: 18px;
+  }
+  .tabs button {
+    font-size: 11px;
+  }
+  .context-content {
+    font-size: 12px;
+    padding: 14px;
+  }
+  .context-controls .panel-body {
+    grid-template-columns: 1fr;
+  }
+  .context-skills .choice-list {
+    grid-template-columns: 1fr;
+  }
+  .resolution-entry summary {
+    gap: 7px;
+  }
+  .resolution-entry strong {
+    font-size: 12px;
+  }
+  .resolution-entry .badge {
+    font-size: 10px;
+  }
+  .token-count {
+    min-width: 30px;
+  }
+  .runtime-editor .section-head {
+    flex-wrap: wrap;
+  }
+  .config-item {
+    gap: 9px;
+    flex-wrap: wrap;
+  }
+  .config-item .asset-icon {
+    display: none;
+  }
+  .config-item .grow {
+    flex-basis: 60%;
+  }
+  .config-item strong {
+    font-size: 13px;
+  }
+  .config-item small {
+    font-size: 11px;
+  }
+  .config-assigned-model {
+    max-width: none;
+  }
+  .config-save-bar {
+    flex-wrap: wrap;
+    padding: 14px;
+    gap: 10px;
+  }
+  .config-save-bar > .button-row {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .config-save-bar > span {
+    font-size: 11px;
+  }
+}

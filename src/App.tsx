@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import {
   Workflow,
   Layers,
@@ -13,8 +13,6 @@ import {
   ChevronRight,
   ArrowUpRight,
   ArrowRight,
-  Box,
-  Command,
   LayoutGrid,
   List,
   ShieldCheck,
@@ -50,14 +48,14 @@ const nav: { id: string; label: string; icon: ComponentType<{ size?: number }>; 
     { id: 'settings', label: 'Runtime & MCP', icon: Plug },
   ];
 const descriptions: Record<string, string> = {
-  workflows: '繰り返す開発の進め方を定義し、必要なときに起動する。',
+  workflows: 'Workflowの作成・編集・実行。',
   runs: 'Workflowの進行と、実行時に渡されたContextを確認する。',
-  assets: 'あなたの開発方針と知識を、一つの場所で管理する。',
+  assets: 'Role・Skill・Ruleなどの登録と編集。',
   context: 'AIに渡るContextを、実行前に確認する。',
-  journals: '実行から得た観測を、承認できる改善提案へ。',
-  history: '何を変えたか。その理由と、根拠まで辿る。',
+  journals: '実行の観測記録と、改善提案の確認・承認。',
+  history: '変更内容・理由・根拠の確認と復元。',
   diagnostics: 'Contextの量と実行の品質を、同じWorkflowで比較する。',
-  projects: '共有する知識と、Project固有の方針をつなぐ。',
+  projects: 'Projectの登録と、固有のAsset・適用条件の設定。',
   settings: '使うRuntime・Modelと、その割り当てを管理する。',
 };
 export function App() {
@@ -73,10 +71,37 @@ export function App() {
   const [context, setContext] = useState<Context>({});
   const [toast, setToast] = useState('');
   const [help, setHelp] = useState(false);
+  const [selectedRun, setSelectedRun] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const reloadSequence = useRef(0);
   const reload = useCallback(async () => {
+    const sequence = ++reloadSequence.current;
     const d = await fetchState();
-    setData(d);
-    setError('');
+    if (sequence === reloadSequence.current) {
+      setData(d);
+      setError('');
+    }
+  }, []);
+  useEffect(() => {
+    const shortcut = (e: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return;
+      const element = e.target as HTMLElement;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (
+        e.key === '/' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !element.closest('input,textarea,select,[contenteditable=true]')
+      ) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', shortcut);
+    return () => window.removeEventListener('keydown', shortcut);
   }, []);
   useEffect(() => {
     void reload().catch((e) => setError(e.message));
@@ -137,7 +162,7 @@ export function App() {
           <div className="workspace-avatar">P</div>
           <div>
             <strong>Personal workspace</strong>
-            <span>Local-first control plane</span>
+            <span>ローカル環境</span>
           </div>
           <Badge>LOCAL</Badge>
         </div>
@@ -147,6 +172,9 @@ export function App() {
               {n.group && <div className="nav-group">{n.group}</div>}
               <button
                 className={`nav-item ${page === n.id ? 'active' : ''}`}
+                aria-label={n.label}
+                aria-current={page === n.id ? 'page' : undefined}
+                title={n.label}
                 onClick={() => go(n.id)}
               >
                 <n.icon size={18} />
@@ -197,9 +225,16 @@ export function App() {
             <label className="global-search">
               <Search size={15} />
               <input
+                ref={searchRef}
                 aria-label="Assetを検索"
                 placeholder="Assetを検索…"
                 value={query}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setQuery('');
+                    searchRef.current?.blur();
+                  }
+                }}
                 onChange={(e) => {
                   setQuery(e.target.value);
                   if (page !== 'assets') {
@@ -209,6 +244,19 @@ export function App() {
                 }}
               />
               <kbd>/</kbd>
+              {query && (
+                <button
+                  type="button"
+                  className="search-clear"
+                  aria-label="検索をクリア"
+                  onClick={() => {
+                    setQuery('');
+                    searchRef.current?.focus();
+                  }}
+                >
+                  ×
+                </button>
+              )}
             </label>
             <span className="user-avatar">P</span>
           </div>
@@ -216,9 +264,6 @@ export function App() {
         <main>
           <div className="page-heading">
             <div>
-              <div className="eyebrow">
-                {page === 'workflows' ? 'YOUR DEVELOPMENT, DEFINED.' : 'AGENT ASSET CONTROL LAYER'}
-              </div>
               <h1>{activeNav.label}</h1>
               <p>{descriptions[page]}</p>
             </div>
@@ -268,11 +313,18 @@ export function App() {
               onPreview={preview}
               install={() => mutate('/starter', {})}
               onCreate={() => setEdit({ type: 'workflow' })}
+              onOpenRun={(id) => {
+                setSelectedRun(id);
+                go('runs');
+              }}
+              onReviews={() => go('journals')}
             />
           )}
           {page === 'assets' && <Assets data={data} query={query} onDetail={setDetail} />}
           {page === 'runs' && (
             <Runs
+              key={selectedRun}
+              initialRunId={selectedRun}
               data={data}
               mutate={mutate}
               onLaunch={() => setLaunch({})}
@@ -289,13 +341,6 @@ export function App() {
           {page === 'diagnostics' && <Diagnostics data={data} />}
           {page === 'projects' && <Projects data={data} mutate={mutate} />}
           {page === 'settings' && <Settings data={data} mutate={mutate} />}
-          <footer>
-            <span>
-              <ShieldCheck size={13} />
-              あなたの方針。あなたのデータ。
-            </span>
-            <span>Local-first · User-owned · Explicit by design</span>
-          </footer>
         </main>
       </div>
       {launch && (
@@ -305,6 +350,7 @@ export function App() {
           onClose={() => setLaunch(null)}
           onLaunch={async (body) => {
             const run = await mutate('/runs', body);
+            setSelectedRun(run.id);
             go('runs');
             return run;
           }}
@@ -369,8 +415,7 @@ export function App() {
             </li>
           </ol>
           <div className="callout">
-            Workflow定義はJSONで編集できます。VS
-            Code拡張とデスクトップシェルは今回の実装範囲外です。
+            Workflowの接続図からStageを選び、担当Role・遷移先・完了条件を編集できます。
           </div>
         </Modal>
       )}
@@ -384,6 +429,8 @@ function Workflows({
   onPreview,
   install,
   onCreate,
+  onOpenRun,
+  onReviews,
 }: {
   data: Overview;
   onLaunch: (id: string) => void;
@@ -391,6 +438,8 @@ function Workflows({
   onPreview: (ctx: Context) => void;
   install: () => Promise<unknown>;
   onCreate: () => void;
+  onOpenRun: (id: string) => void;
+  onReviews: () => void;
 }) {
   const workflows = data.assets.filter((a) => a.type === 'workflow');
   const [selectedId, setSelectedId] = useState('');
@@ -400,6 +449,8 @@ function Workflows({
     selected?.workflow?.stages.find((s) => s.id === stageId) ?? selected?.workflow?.stages[0];
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const activeRuns = data.runs.filter((r) => r.status === 'active');
+  const pendingReviews = data.reviews.filter((r) => r.status === 'pending');
   const starter = async () => {
     setBusy(true);
     try {
@@ -412,71 +463,51 @@ function Workflows({
   };
   return (
     <>
-      <section className="workflow-banner">
-        <div>
-          <Badge tone="blue">
-            <Workflow size={12} />
-            WORKFLOW-FIRST
-          </Badge>
-          <h2>
-            いつもの開発を、
-            <br />
-            ひとつのWorkflowに。
-          </h2>
-          <p>
-            進め方、役割、必要な知識。
-            <br />
-            あなたが定義し、Coreがつなぎます。
-          </p>
-          <div className="banner-command">
-            <Command size={15} />
-            <code>/issue-development</code>
-            <span>#123</span>
-            <ArrowRight size={16} />
-          </div>
-        </div>
-        <div className="banner-visual" aria-hidden="true">
-          <div className="orbit orbit-one" />
-          <div className="orbit orbit-two" />
-          <div className="visual-center">
-            <Workflow size={31} />
-            <span>Workflow</span>
-          </div>
-          <div className="visual-node vn1">
-            <Box size={16} />
-            <span>Assets</span>
-          </div>
-          <div className="visual-node vn2">
-            <FileCode2 size={16} />
-            <span>Context</span>
-          </div>
-          <div className="visual-node vn3">
-            <BookOpen size={16} />
-            <span>Journal</span>
-          </div>
-          <div className="visual-dot vd1" />
-          <div className="visual-dot vd2" />
-        </div>
-        <div className="banner-stats">
+      {workflows.length > 0 && (
+        <div className="workspace-overview">
           <div>
-            <strong>{workflows.length.toString().padStart(2, '0')}</strong>
+            <Workflow size={18} />
+            <strong>{workflows.length}</strong>
             <span>Workflows</span>
           </div>
           <div>
-            <strong>{data.assets.length.toString().padStart(2, '0')}</strong>
-            <span>Canonical assets</span>
+            <Layers size={18} />
+            <strong>{data.assets.length}</strong>
+            <span>Assets</span>
           </div>
           <div>
-            <strong>
-              {data.runs
-                .filter((r) => r.status === 'active')
-                .length.toString()
-                .padStart(2, '0')}
-            </strong>
-            <span>Active executions</span>
+            <span className={`status-dot ${activeRuns.length ? 'active' : ''}`} />
+            <strong>{activeRuns.length}</strong>
+            <span>実行中</span>
           </div>
+          <button type="button" onClick={onReviews}>
+            <BookOpen size={18} />
+            <strong>{pendingReviews.length}</strong>
+            <span>承認待ち</span>
+            <ChevronRight size={14} />
+          </button>
         </div>
-      </section>
+      )}
+      {activeRuns[0] && (
+        <button type="button" className="resume-run" onClick={() => onOpenRun(activeRuns[0].id)}>
+          <span className="resume-icon">
+            <Play size={19} />
+          </span>
+          <div className="grow">
+            <span>進行中の実行</span>
+            <strong>{activeRuns[0].title}</strong>
+            <small>
+              {activeRuns[0].workflow?.name ?? 'Advisory'} ·{' '}
+              {activeRuns[0].workflow?.workflow?.stages.find((s) => s.id === activeRuns[0].stage)
+                ?.name ?? '質問・調査・検討'}
+            </small>
+          </div>
+          <span className="resume-action">
+            続きを開く
+            <ArrowRight size={16} />
+          </span>
+        </button>
+      )}
       <div className="section-head">
         <div className="button-row">
           <h2>My workflows</h2>
@@ -530,7 +561,7 @@ function Workflows({
                     <div className="asset-icon workflow">
                       <Workflow size={22} />
                     </div>
-                    <Badge tone="green">{w.enabled ? 'Ready' : 'Disabled'}</Badge>
+                    <Badge tone={w.enabled ? 'green' : ''}>{w.enabled ? '有効' : '無効'}</Badge>
                   </div>
                   <h3>{w.name}</h3>
                   <p>{w.description || 'ユーザー定義の開発Workflow'}</p>
@@ -544,10 +575,12 @@ function Workflows({
                   <code>/{w.id}</code>
                   <button
                     aria-label={`${w.name}を起動`}
-                    className="launch-icon"
+                    className="button small primary workflow-launch"
+                    disabled={!w.enabled && !w.mandatory}
                     onClick={() => onLaunch(w.id)}
                   >
                     <Play size={14} fill="currentColor" />
+                    起動する
                   </button>
                 </div>
               </article>
@@ -555,7 +588,7 @@ function Workflows({
             <button className="create-workflow-card compact-card" onClick={onCreate}>
               <Plus size={23} />
               <strong>新しいWorkflow</strong>
-              <span>あなたの進め方を追加</span>
+              <span>Stage・Role・遷移を設定</span>
             </button>
           </div>
           {selected && (

@@ -13,6 +13,27 @@ import { useState } from 'react';
 export function Badge({ children, tone = '' }: { children: ReactNode; tone?: string }) {
   return <span className={`badge ${tone}`}>{children}</span>;
 }
+export function statusLabel(value: string) {
+  return (
+    (
+      {
+        active: '実行中',
+        completed: '完了',
+        cancelled: '中止',
+        'awaiting-proposal': '提案待ち',
+        pending: '承認待ち',
+        approved: '承認済み',
+        rejected: '却下',
+        included: '適用',
+        excluded: '対象外',
+        overridden: '置き換え',
+        disabled: '無効',
+        unavailable: '利用不可',
+        conflict: '競合',
+      } as Record<string, string>
+    )[value] ?? value
+  );
+}
 export function Empty({
   title,
   children,

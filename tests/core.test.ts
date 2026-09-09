@@ -31,6 +31,25 @@ const upsert = (core: Core, asset: ReturnType<typeof assetSchema.parse>, expecte
     operations: [{ op: 'upsert', asset, expectedRevision }],
   });
 
+test('native local model IDs and endpoints persist and reach runtime handoff', (t) => {
+  const { core } = fixture(t, true);
+  const config = core.overview().config;
+  config.providers.push({ id: 'ollama', name: 'Ollama' });
+  config.runtimes.push({
+    id: 'ollama',
+    name: 'Ollama',
+    provider: 'ollama',
+    endpoint: 'http://127.0.0.1:11434',
+  });
+  config.models.push({ id: 'org/llama3.2:latest', name: 'Local Llama', provider: 'ollama' });
+  config.bindings.push({ role: 'orchestrator', model: 'org/llama3.2:latest', runtime: 'ollama' });
+  core.updateConfig(config);
+  const run = core.startRun({ command: '/issue-development test' });
+  const handoff = core.handoff(run.id, { action: 'development' });
+  assert.equal(handoff.model?.id, 'org/llama3.2:latest');
+  assert.equal(handoff.runtime?.endpoint, 'http://127.0.0.1:11434');
+});
+
 test('scope uses AND across dimensions, OR within them, and directory boundaries', () => {
   assert.equal(
     scopeMatches(

@@ -1,18 +1,16 @@
 import { useState } from 'react';
-import { Plus, FolderGit2, Plug, Save, Download, ArrowUpRight } from 'lucide-react';
+import { Plus, FolderGit2, Plug, Download, ArrowUpRight } from 'lucide-react';
 import type { Overview } from './api.ts';
-import { Badge, CopyButton, Empty, Field, Json, Modal } from './ui.tsx';
+import { RuntimeConfigEditor } from './RuntimeConfigEditor.tsx';
+import { Badge, CopyButton, Empty, Field, Modal } from './ui.tsx';
 
 type Mutate = (route: string, body: unknown, method?: string) => Promise<any>;
 export function Settings({ data, mutate }: { data: Overview; mutate: Mutate }) {
-  const [config, setConfig] = useState(JSON.stringify(data.config, null, 2));
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
   const endpoint = `${location.origin}/mcp`;
   return (
     <>
-      <section className="panel">
+      <RuntimeConfigEditor data={data} onSave={(config) => mutate('/config', config, 'PUT')} />
+      <section className="panel margin-top">
         <div className="panel-head">
           <h3>
             <Plug size={17} />
@@ -67,77 +65,6 @@ export function Settings({ data, mutate }: { data: Overview; mutate: Mutate }) {
           <p className="small-text muted">
             Coreは状態管理とContext提供を担当します。Modelと外部MCPツールの呼び出しは接続先Runtimeが担当します。
           </p>
-        </div>
-      </section>
-      <section className="panel margin-top">
-        <div className="panel-head">
-          <h3>Provider / Account / Model / Role binding</h3>
-          <Badge>ユーザー定義</Badge>
-        </div>
-        <div className="panel-body">
-          <p className="muted">
-            モデルIDと利用方針を明示登録してください。Accountは識別用で、APIキーは保存しません。
-          </p>
-          <details>
-            <summary>設定例を見る</summary>
-            <Json
-              value={{
-                providers: [{ id: 'openai', name: 'OpenAI' }],
-                accounts: [{ id: 'personal', provider: 'openai', name: 'Personal' }],
-                runtimes: [{ id: 'codex', name: 'Codex', provider: 'openai' }],
-                models: [
-                  {
-                    id: 'your-model-id',
-                    name: '利用するモデル',
-                    provider: 'openai',
-                    account: 'personal',
-                  },
-                ],
-                bindings: [
-                  {
-                    role: 'implementer',
-                    workflow: 'issue-development',
-                    model: 'your-model-id',
-                    runtime: 'codex',
-                  },
-                ],
-              }}
-            />
-          </details>
-          <Field label="Runtime設定（JSON）">
-            <textarea
-              className="mono"
-              rows={19}
-              value={config}
-              onChange={(e) => {
-                setConfig(e.target.value);
-                setSaved(false);
-              }}
-            />
-          </Field>
-          {error && <div className="error">{error}</div>}
-          <div className="button-row">
-            <button
-              className="button primary"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                setError('');
-                try {
-                  await mutate('/config', JSON.parse(config), 'PUT');
-                  setSaved(true);
-                } catch (e) {
-                  setError((e as Error).message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              <Save size={15} />
-              設定を保存
-            </button>
-            {saved && <Badge tone="green">保存しました</Badge>}
-          </div>
         </div>
       </section>
     </>
