@@ -1,5 +1,119 @@
 import { test, expect } from '@playwright/test';
 
+test('Skill forms, structured review evidence, revision diff and asset costs work together', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto('/#assets');
+  await page.getByRole('button', { name: 'Assetを作成', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('名前', { exact: true }).fill('確認用Skill');
+  await dialog.getByLabel('ID', { exact: true }).fill('contract-ui-skill');
+  await dialog.getByLabel('種別', { exact: true }).selectOption('skill');
+  await dialog.getByLabel('本文（Markdown）').fill('対象を確認する。\n結果を記録する。');
+  await dialog.getByLabel('実行モード', { exact: true }).selectOption('standalone');
+  await dialog.getByRole('button', { name: '期待する成果物を追加', exact: true }).click();
+  await dialog.getByLabel('期待する成果物 1', { exact: true }).fill('確認レポート');
+  await dialog.getByRole('button', { name: 'Skillの完了条件を追加', exact: true }).click();
+  await dialog.getByLabel('Skillの完了条件 1', { exact: true }).fill('結果を確認した');
+  await page.screenshot({ path: 'test-results/skill-contract-editor.png', fullPage: true });
+  await dialog.getByRole('button', { name: 'Assetを保存', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name: 'Executions', exact: true }).click();
+  await page.getByRole('button', { name: '新しい実行', exact: true }).first().click();
+  await dialog.getByLabel('Workflow / Skill', { exact: true }).selectOption('contract-ui-skill');
+  await dialog.getByLabel('今回の指示').fill('Skill契約の実行検証');
+  await dialog.getByRole('button', { name: '実行を開始', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Skill契約の実行検証', exact: true }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: '実行を完了', exact: true }).click();
+  await expect(dialog.getByLabel('成果物 · 確認レポート')).toBeVisible();
+  await dialog.getByLabel('成果物 · 確認レポート').fill('reports/check.md');
+  await dialog.getByLabel('結果を確認した', { exact: true }).fill('結果と根拠を照合済み');
+  await dialog.getByRole('button', { name: '確定する', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole('button', { name: 'Journalを記録', exact: true }).click();
+  await dialog.getByLabel('観測したこと').fill('Skillの記録手順に対象の説明が足りなかった');
+  await dialog.getByRole('button', { name: 'Journalを保存', exact: true }).click();
+  await page.getByRole('button', { name: 'Journal & Reviews', exact: true }).click();
+  await page.getByRole('checkbox', { name: /Skillの記録手順/ }).check();
+  await page.getByRole('button', { name: /選択した1件をReview/ }).click();
+  await page.getByRole('button', { name: 'Reviewを開始', exact: true }).click();
+  const before = await (await page.request.get('/api/state')).json();
+  const journal = before.journals.find(
+    (j: any) => j.observation === 'Skillの記録手順に対象の説明が足りなかった',
+  );
+  const asset = before.assets.find((a: any) => a.id === 'contract-ui-skill');
+  const { revision, updatedAt, ...input } = asset;
+  await dialog.getByText('JSON提案を取り込む', { exact: true }).click();
+  await dialog.locator('textarea').fill(
+    JSON.stringify({
+      reason: '対象の説明を追加',
+      proposedBy: 'browser-runtime',
+      items: [
+        {
+          operation: {
+            op: 'upsert',
+            expectedRevision: revision,
+            asset: {
+              ...input,
+              content: '対象と範囲を確認する。\n結果を記録する。',
+              scope: { team: ['research'] },
+            },
+          },
+          proposedScope: { team: ['research'] },
+          proposedRelations: { dependencies: [], conflicts: [] },
+          reason: '調査チームの観測に基づく範囲指定',
+          evidence: {
+            journalIds: [journal.id],
+            explanation: '対象が曖昧だったというJournalを根拠にする',
+          },
+        },
+      ],
+    }),
+  );
+  await dialog.getByRole('button', { name: '提案を取り込む', exact: true }).click();
+  await expect(
+    dialog.getByRole('heading', { name: 'Observed scope · 観測した範囲' }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole('heading', { name: 'Proposed scope · 提案する範囲' }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByText('対象が曖昧だったというJournalを根拠にする', { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: 'test-results/structured-proposal.png', fullPage: true });
+  await dialog.getByRole('button', { name: '承認して反映', exact: true }).click();
+  await expect(dialog.getByText('承認済み', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '閉じる', exact: true }).click();
+  await page.getByRole('button', { name: 'Assets', exact: true }).click();
+  await page.getByText('確認用Skill', { exact: true }).click();
+  await dialog.getByRole('button', { name: /変更履歴/ }).click();
+  await expect(dialog.getByLabel('比較元', { exact: true })).toHaveValue('1');
+  await expect(dialog.getByLabel('比較先', { exact: true })).toHaveValue('2');
+  await expect(dialog.locator('.diff-line.added')).toContainText('対象と範囲を確認する。');
+  await expect(dialog.locator('.field-diff')).toContainText('scope.team');
+  await page.screenshot({ path: 'test-results/asset-revision-diff.png', fullPage: true });
+  await dialog.getByLabel('比較元', { exact: true }).selectOption('2');
+  await dialog.getByLabel('比較先', { exact: true }).selectOption('1');
+  await expect(dialog.locator('.diff-line.added')).toContainText('対象を確認する。');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/asset-diff-mobile.png', fullPage: true });
+  await dialog.getByRole('button', { name: '閉じる', exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
+  const costs = page.getByRole('region', { name: 'Asset別Context Cost' });
+  await costs.getByLabel('CostのWorkflow').selectOption('advisory');
+  await expect(costs.getByRole('row').filter({ hasText: 'contract-ui-skill · r1' })).toBeVisible();
+  await expect(costs.getByRole('row').filter({ hasText: 'contract-ui-skill · r2' })).toHaveCount(0);
+  await costs.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/asset-context-cost.png', fullPage: true });
+  expect(errors).toEqual([]);
+});
+
 test('UI: starter, scoped asset, preview, workflow, journal, proposal approval and history', async ({
   page,
 }) => {
@@ -90,7 +204,11 @@ test('UI: starter, scoped asset, preview, workflow, journal, proposal approval a
   await expect(review.getByText('承認済み', { exact: true })).toBeVisible();
   await review.getByRole('button', { name: '閉じる' }).click();
   await page.getByRole('button', { name: 'Change History', exact: true }).click();
-  await expect(page.getByText('journal-review', { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole('button', { name: /仕様策定で説明不足が観測されたため/ })
+      .getByText('journal-review', { exact: true }),
+  ).toBeVisible();
   await page.getByRole('button', { name: /仕様策定で説明不足が観測されたため/ }).click();
   await expect(page.getByRole('dialog').getByText('clarify-target', { exact: true })).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: '閉じる' }).click();

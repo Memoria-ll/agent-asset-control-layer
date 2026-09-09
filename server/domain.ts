@@ -83,6 +83,30 @@ export const assetTypes = [
   'capability',
   'template',
 ] as const;
+const contractList = z.array(z.string().trim().min(1)).max(100).default([]);
+export const skillSchema = z
+  .object({
+    executionMode: z.enum(['standalone', 'workflow', 'both']).default('both'),
+    role: idSchema.optional(),
+    taskType: idSchema.optional(),
+    expectedOutput: contractList,
+    completionCriteria: contractList,
+    executionPermission: z.enum(['read-only', 'workflow-development']).default('read-only'),
+  })
+  .strict();
+export const roleSchema = z
+  .object({
+    responsibilities: contractList,
+    expectedOutput: contractList,
+  })
+  .strict();
+export const taskTypeSchema = z
+  .object({
+    objective: z.string().trim().default(''),
+    qualityCriteria: contractList,
+    constraints: contractList,
+  })
+  .strict();
 export const assetSchema = z
   .object({
     id: idSchema,
@@ -102,6 +126,9 @@ export const assetSchema = z
       .default('portable'),
     activation: z.enum(['auto', 'on-demand']).default('auto'),
     workflow: workflowSchema.optional(),
+    skill: skillSchema.optional(),
+    role: roleSchema.optional(),
+    taskType: taskTypeSchema.optional(),
     capability: z
       .object({
         provider: z.string().min(1),
@@ -114,6 +141,22 @@ export const assetSchema = z
   })
   .strict()
   .superRefine((a, ctx) => {
+    for (const [key, type] of [
+      ['skill', 'skill'],
+      ['role', 'role'],
+      ['taskType', 'task-type'],
+    ] as const)
+      if (a[key] && a.type !== type)
+        ctx.addIssue({ code: 'custom', path: [key], message: `${key}は${type} Asset専用です` });
+    if (
+      a.skill?.executionMode === 'standalone' &&
+      a.skill.executionPermission === 'workflow-development'
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['skill'],
+        message: '開発権限が必要なSkillはWorkflow内で実行してください',
+      });
     if (a.type === 'workflow' && !a.workflow)
       ctx.addIssue({ code: 'custom', message: 'Workflow定義が必要です' });
     if (a.type !== 'workflow' && a.workflow)
@@ -241,6 +284,7 @@ export type Run = {
   context: Context;
   runtimeSelection?: Pick<Context, 'model' | 'runtime' | 'provider'>;
   skillId?: string;
+  skill?: Asset;
   createdAt: string;
   updatedAt: string;
   snapshotIds: string[];
@@ -275,15 +319,54 @@ export const operationSchema = z.discriminatedUnion('op', [
     .object({ op: z.literal('delete'), id: idSchema, expectedRevision: z.number().int().min(1) })
     .strict(),
 ]);
+export const proposalItemSchema = z
+  .object({
+    operation: operationSchema,
+    proposedScope: scopeSchema.nullable(),
+    proposedRelations: z
+      .object({ dependencies: z.array(idSchema), conflicts: z.array(idSchema) })
+      .strict()
+      .nullable(),
+    reason: z.string().trim().min(1).max(20000),
+    evidence: z
+      .object({
+        journalIds: z.array(z.string().min(1)).min(1),
+        snapshotIds: z.array(z.string().min(1)).default([]),
+        explanation: z.string().trim().min(1).max(20000),
+      })
+      .strict(),
+  })
+  .strict();
+export const reviewSubmissionShape = {
+  reason: z.string().trim().min(1),
+  proposedBy: z.string().min(1),
+  operations: z.array(operationSchema).max(100).optional(),
+  items: z.array(proposalItemSchema).max(100).optional(),
+};
+export type ProposalItem = z.infer<typeof proposalItemSchema> & {
+  id: string;
+  observedScopes: Context[];
+  evidenceMode: 'per-item' | 'legacy-review';
+  changeKinds: string[];
+};
 export type ChangeSet = {
   id: string;
   createdAt: string;
   origin: string;
   summary: string;
   actor: string;
-  changes: { id: string; before: Asset | null; after: Asset | null; kind: string }[];
+  changes: {
+    id: string;
+    before: Asset | null;
+    after: Asset | null;
+    kind: string;
+    proposalItemId?: string;
+    kinds?: string[];
+  }[];
   reviewId?: string;
   sourceJournals: string[];
+  sourceSnapshots?: string[];
+  proposalItems?: ProposalItem[];
   observedScopes: Context[];
   approvedAt: string;
   gitCommit?: string;
@@ -298,6 +381,7 @@ export type Review = {
   status: 'awaiting-proposal' | 'pending' | 'approved' | 'rejected';
   reason: string;
   operations: Operation[];
+  items?: ProposalItem[];
   observedScopes: Context[];
   proposedBy?: string;
   changeSetId?: string;

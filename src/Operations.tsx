@@ -11,6 +11,9 @@ import {
 import type { Overview } from './api.ts';
 import type { Review, Journal, ChangeSet } from '../server/domain.ts';
 import { Badge, CopyButton, Empty, Field, Json, Modal, relativeDate, statusLabel } from './ui.tsx';
+import { ProposalDetails, changeLabel } from './ProposalDetails.tsx';
+import { RevisionDiff } from './AssetHistory.tsx';
+import { AssetCosts } from './AssetCosts.tsx';
 
 type Mutate = (route: string, body: unknown) => Promise<any>;
 export function JournalModal({
@@ -303,7 +306,7 @@ function ReviewModal({
   onClose: () => void;
 }) {
   const [proposal, setProposal] = useState(
-    '{\n  "reason": "観測と提案の対応、scopeを選んだ理由",\n  "proposedBy": "external-runtime",\n  "operations": []\n}',
+    '{\n  "reason": "観測と提案の対応、scopeを選んだ理由",\n  "proposedBy": "external-runtime",\n  "items": []\n}',
   );
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -324,7 +327,7 @@ function ReviewModal({
           {statusLabel(review.status)}
         </Badge>
         <CopyButton
-          text={`AACLの ${review.id} をaacl_review_getで読み、JournalとSnapshotを分析してaacl_review_submitで改善提案を提出してください。観測scopeと提案scopeを分離し、根拠と理由を示してください。`}
+          text={`AACLの ${review.id} をaacl_review_getで読み、JournalとSnapshotを分析してaacl_review_submitのitemsで改善提案を提出してください。変更ごとにoperation、proposedScope、proposedRelations、reason、evidence（journalIds/snapshotIds/explanation）を指定してください。根拠はReview対象のIDに限定し、観測範囲と提案範囲を区別してください。`}
           label="AIへの依頼をコピー"
         />
       </div>
@@ -377,10 +380,15 @@ function ReviewModal({
       ) : (
         <>
           <div className="change-summary">
-            {['upsert', 'delete'].map((op) => (
-              <Badge key={op}>
-                {op === 'upsert' ? 'Added / Updated / Binding change' : 'Removed'} ·{' '}
-                {review.operations.filter((o) => o.op === op).length}
+            {(review.items
+              ? [...new Set(review.items.flatMap((i) => i.changeKinds))]
+              : ['upsert', 'delete']
+            ).map((kind) => (
+              <Badge key={kind}>
+                {changeLabel(kind)} ·{' '}
+                {review.items
+                  ? review.items.filter((i) => i.changeKinds.includes(kind)).length
+                  : review.operations.filter((o) => o.op === kind).length}
               </Badge>
             ))}
             <span className="muted small-text">提案者: {review.proposedBy}</span>
@@ -392,15 +400,23 @@ function ReviewModal({
               <div className="proposal-change" key={i}>
                 <h3>
                   {op.op === 'upsert' ? op.asset.name : op.id}{' '}
-                  <Badge>
-                    {op.op === 'delete'
-                      ? 'removed'
-                      : data.assets.some((a) => a.id === op.asset.id)
-                        ? 'updated / binding change'
-                        : 'added'}
-                  </Badge>
+                  {!review.items && (
+                    <Badge>
+                      {op.op === 'delete'
+                        ? 'removed'
+                        : op.expectedRevision > 0
+                          ? 'updated / binding change'
+                          : 'added'}
+                    </Badge>
+                  )}
                 </h3>
-                <Json value={op} />
+                {review.items?.[i] && (
+                  <ProposalDetails item={review.items[i]} journals={data.journals} />
+                )}
+                <details>
+                  <summary>変更内容のデータ</summary>
+                  <Json value={op} />
+                </details>
               </div>
             ))
           )}
@@ -508,16 +524,13 @@ export function History({ data, mutate }: { data: Overview; mutate: Mutate }) {
                   {c.kind}
                 </Badge>
               </div>
-              <div className="diff-grid">
-                <div>
-                  <div className="diff-label removed">Before · r{c.before?.revision ?? '—'}</div>
-                  <Json value={c.before} />
-                </div>
-                <div>
-                  <div className="diff-label added">After · r{c.after?.revision ?? '—'}</div>
-                  <Json value={c.after} />
-                </div>
-              </div>
+              {selected.proposalItems?.find((i) => i.id === c.proposalItemId) && (
+                <ProposalDetails
+                  item={selected.proposalItems.find((i) => i.id === c.proposalItemId)!}
+                  journals={data.journals}
+                />
+              )}
+              <ChangeDiff change={c} />
             </div>
           ))}
           {confirm ? (
@@ -559,6 +572,23 @@ export function History({ data, mutate }: { data: Overview; mutate: Mutate }) {
         </Modal>
       )}
     </>
+  );
+}
+function ChangeDiff({ change }: { change: ChangeSet['changes'][number] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        差分を見る · r{change.before?.revision ?? '—'} → r{change.after?.revision ?? '—'}
+      </summary>
+      {open && (
+        <RevisionDiff
+          assetId={change.id}
+          from={change.before?.revision ?? 0}
+          to={change.after?.revision ?? 0}
+        />
+      )}
+    </details>
   );
 }
 export function Diagnostics({ data }: { data: Overview }) {
@@ -618,6 +648,7 @@ export function Diagnostics({ data }: { data: Overview }) {
           </Empty>
         )}
       </section>
+      <AssetCosts data={data} />
       <section className="panel margin-top">
         <div className="panel-head">
           <h3>Workflow / revision別の観測</h3>

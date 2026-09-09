@@ -5,6 +5,9 @@ import { z } from 'zod';
 import { Store } from './store.ts';
 import { resolveContext } from './resolver.ts';
 import { starterAssets } from './starter.ts';
+import { pinnedSkill, runRequirements } from './contracts.ts';
+import { assetHistory, assetDiff, changeKinds } from './history.ts';
+import { prepareProposal } from './proposals.ts';
 import {
   assetSchema,
   configSchema,
@@ -42,6 +45,8 @@ function validateReferences(assets: Asset[]) {
   };
   for (const a of assets) {
     a.dependencies.forEach((id) => get(id));
+    if (a.skill?.role) get(a.skill.role, 'role');
+    if (a.skill?.taskType) get(a.skill.taskType, 'task-type');
     for (const s of a.workflow?.stages ?? []) {
       get(s.role, 'role');
       if (s.taskType) get(s.taskType, 'task-type');
@@ -61,7 +66,11 @@ export class Core {
       assets,
       projects: state.projects,
       config: state.config,
-      runs: state.runs,
+      runs: state.runs.map((run) => ({
+        ...run,
+        skill: pinnedSkill(run, state.snapshots),
+        requirements: runRequirements(run, state.snapshots),
+      })),
       journals: state.journals,
       reviews: state.reviews,
       changesets: state.changesets,
@@ -73,6 +82,7 @@ export class Core {
       })),
       diagnostics: this.diagnostics(),
       metrics: this.metrics(),
+      assetMetrics: this.assetMetrics(),
     };
   }
   private finishHistory(change: ChangeSet) {
@@ -109,6 +119,8 @@ export class Core {
       actor: meta.actor,
       changes: [],
       sourceJournals: meta.review?.journalIds ?? [],
+      sourceSnapshots: meta.review?.snapshotIds ?? [],
+      proposalItems: meta.review?.items ? structuredClone(meta.review.items) : undefined,
       observedScopes: meta.review?.observedScopes ?? [],
       approvedAt: now(),
       reviewId: meta.review?.id,
@@ -158,7 +170,17 @@ export class Core {
           JSON.stringify(before.conflicts) !== JSON.stringify(after.conflicts))
       )
         kind = 'binding-changed';
-      change.changes.push({ id, before, after, kind });
+      const item = meta.review?.items?.find(
+        (i) => (i.operation.op === 'upsert' ? i.operation.asset.id : i.operation.id) === id,
+      );
+      change.changes.push({
+        id,
+        before,
+        after,
+        kind,
+        kinds: changeKinds(before, after),
+        proposalItemId: item?.id,
+      });
     }
     validateReferences(assets);
     state.changesets.unshift(change);
@@ -399,6 +421,14 @@ export class Core {
       catalog = [...assets.filter((a) => a.id !== workflow.id), workflow];
     } else {
       guard(!ctx.stage, 'WORKFLOW_REQUIRED', 'Stageの指定にはWorkflowが必要です');
+      for (const skill of assets.filter((a) => requested.includes(a.id) && a.skill))
+        for (const key of ['role', 'taskType'] as const) {
+          const value = skill.skill![key];
+          if (value) {
+            guard(!ctx[key] || ctx[key] === value, 'SKILL_CONTEXT', `Skillの${key}が一致しません`);
+            ctx[key] = value;
+          }
+        }
       if (ctx.role) requested.push(ctx.role);
       if (ctx.taskType) requested.push(ctx.taskType);
     }
@@ -418,9 +448,11 @@ export class Core {
   }
   private snapshot(state: State, assets: Asset[], run: Run, context?: Context): Snapshot {
     const base = context ?? run.context;
+    const skill = pinnedSkill(run, state.snapshots);
+    if (run.skillId) guard(skill, 'SKILL_REVISION', '起動時のSkill revisionが見つかりません');
     const resolution = this.resolution(
       state,
-      assets,
+      skill ? [...assets.filter((a) => a.id !== skill.id), skill] : assets,
       { ...base, workflow: run.workflow?.id, stage: run.stage ?? undefined },
       run.skillId ? [run.skillId] : [],
       run.workflow,
@@ -481,11 +513,12 @@ export class Core {
             'Workflowが存在しません',
           )
         : null;
-      if (skillId)
-        requireValue(
-          assets.find((a) => a.id === skillId && a.type === 'skill'),
-          'Skillが存在しません',
-        );
+      const skill = skillId
+        ? requireValue(
+            assets.find((a) => a.id === skillId && a.type === 'skill'),
+            'Skillが存在しません',
+          )
+        : undefined;
       const run: Run = {
         id: uid('run'),
         title: instruction || workflow?.name || skillId || 'Advisory session',
@@ -502,6 +535,7 @@ export class Core {
           provider: req.context.provider,
         },
         skillId,
+        skill: skill ? structuredClone(skill) : undefined,
         createdAt: now(),
         updatedAt: now(),
         snapshotIds: [],
@@ -538,6 +572,22 @@ export class Core {
       );
       guard(run.status === 'active', 'RUN_FINISHED', '終了済みRunは変更できません');
       const from = run.stage;
+      if (['advance', 'complete'].includes(req.kind)) {
+        const needed = runRequirements(run, state.snapshots);
+        Object.assign(run.artifacts, req.artifacts);
+        guard(
+          needed.completionCriteria.every((c) => !!req.criteria[c]?.trim()),
+          'COMPLETION_CRITERIA',
+          `完了条件の根拠を入力してください: ${needed.completionCriteria.filter((c) => !req.criteria[c]).join(', ')}`,
+        );
+        guard(
+          needed.expectedOutput.every((a) => !!run.artifacts[a]?.trim()),
+          'ARTIFACTS',
+          `必要な成果物: ${needed.expectedOutput.filter((a) => !run.artifacts[a]).join(', ')}`,
+        );
+        for (const [key, value] of Object.entries(req.criteria))
+          run.criteria[`${run.stage ?? 'skill'}:${key}`] = value;
+      }
       if (req.kind === 'cancel') run.status = 'cancelled';
       else if (!run.workflow) {
         guard(
@@ -553,19 +603,6 @@ export class Core {
           'Stageが見つかりません',
         );
         Object.assign(run.artifacts, req.artifacts);
-        if (['advance', 'complete'].includes(req.kind)) {
-          const needed = [
-            ...stage.completionCriteria,
-            ...(req.kind === 'complete' ? def.completionCriteria : []),
-          ];
-          guard(
-            needed.every((c) => !!req.criteria[c]?.trim()),
-            'COMPLETION_CRITERIA',
-            `完了条件の根拠を入力してください: ${needed.filter((c) => !req.criteria[c]).join(', ')}`,
-          );
-          for (const [key, value] of Object.entries(req.criteria))
-            run.criteria[`${run.stage}:${key}`] = value;
-        }
         if (req.kind === 'complete') {
           guard(stage.transitions.length === 0, 'TRANSITION', '最終Stageでのみ完了できます');
           run.status = 'completed';
@@ -639,6 +676,7 @@ export class Core {
       run.updatedAt = now();
       run.version++;
       const stage = run.workflow?.workflow?.stages.find((s) => s.id === run.stage);
+      const skill = pinnedSkill(run, state.snapshots);
       return {
         runId,
         snapshotId: snapshot.id,
@@ -660,7 +698,14 @@ export class Core {
           type: a.type,
         })),
         artifacts: run.artifacts,
-        completionCriteria: stage?.completionCriteria ?? [],
+        ...runRequirements(run, state.snapshots),
+        skill: skill
+          ? {
+              id: skill.id,
+              revision: skill.revision,
+              contract: skill.skill ?? null,
+            }
+          : null,
         possibleTransitions: stage?.transitions ?? [],
         estimatedTokens: snapshot.resolution.estimatedTokens,
       };
@@ -734,18 +779,10 @@ export class Core {
       diagnostics: this.diagnostics(),
       provenance: state.changesets,
       instructions:
-        'JournalとSnapshotを意味的に解釈し、観測scopeと提案Asset.scopeを区別してください。理由と根拠を添えaacl_review_submitに提案してください。既存AssetはexpectedRevisionを指定します。変更不要ならoperationsを空にしてください。承認はユーザーがUIで行います。',
+        'JournalとSnapshotを解釈し、aacl_review_submitのitemsで提案してください。各itemにoperation、proposedScope、proposedRelations（dependencies/conflicts）、reason、evidence（journalIds/snapshotIds/explanation）が必要です。Scope/Relationは変更後Assetと一致させ、削除時はnullにします。観測scopeは根拠からCoreが導出します。根拠IDはこのReviewの対象に限定します。既存AssetはexpectedRevisionを指定します。変更不要ならitemsを空にします。承認はユーザーがUIで行います。',
     };
   }
   submitReview(id: string, input: unknown) {
-    const req = z
-      .object({
-        reason: z.string().trim().min(1),
-        proposedBy: z.string().min(1),
-        operations: z.array(operationSchema).max(100),
-      })
-      .strict()
-      .parse(input);
     return this.store.transaction((state, assets) => {
       const review = requireValue(
         state.reviews.find((r) => r.id === id),
@@ -756,6 +793,7 @@ export class Core {
         'REVIEW_STATE',
         'このReviewには提案を送信できません',
       );
+      const req = prepareProposal(state, assets, review, input);
       // Validate the complete proposed result on a copy. Never mutate canonical assets here.
       if (req.operations.length)
         this.apply(structuredClone(state), structuredClone(assets), req.operations, {
@@ -888,6 +926,76 @@ export class Core {
       summary: `Native Markdownを取り込み: ${name}`,
       operations: [{ op: 'upsert', asset, expectedRevision: 0 }],
     });
+  }
+  assetHistory(id: string) {
+    idSchema.parse(id);
+    const { state, assets } = this.state();
+    return assetHistory(state, assets, id);
+  }
+  assetDiff(id: string, input: unknown) {
+    const req = z
+      .object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative() })
+      .strict()
+      .parse(input);
+    guard(req.from || req.to, 'DIFF_REVISION', '比較には少なくとも1つのrevisionが必要です');
+    const history = this.assetHistory(id);
+    const version = (revision: number) =>
+      revision === 0
+        ? null
+        : requireValue(
+            history.revisions.find((a) => a.revision === revision),
+            `revision ${revision}が見つかりません`,
+          );
+    return assetDiff(version(req.from), version(req.to));
+  }
+  assetMetrics() {
+    const { state } = this.state();
+    type Group = {
+      assetId: string;
+      name: string;
+      type: string;
+      assetRevision: number;
+      workflow: string;
+      workflowRevision: number | null;
+      stage: string;
+      role: string;
+      snapshots: number;
+      estimatedTokens: number;
+    };
+    const groups = new Map<string, Group>();
+    for (const s of state.snapshots)
+      for (const a of s.resolution.assets) {
+        const entry = s.resolution.entries.find(
+          (e) => e.asset.id === a.id && e.asset.revision === a.revision,
+        );
+        if (!entry || entry.status !== 'included') continue;
+        const key = JSON.stringify([
+          a.id,
+          a.revision,
+          s.workflowId,
+          s.workflowRevision,
+          s.stage,
+          s.resolution.context.role,
+        ]);
+        const group = groups.get(key) ?? {
+          assetId: a.id,
+          name: a.name,
+          type: a.type,
+          assetRevision: a.revision,
+          workflow: s.workflowId ?? 'advisory',
+          workflowRevision: s.workflowRevision,
+          stage: s.stage ?? '—',
+          role: s.resolution.context.role ?? '—',
+          snapshots: 0,
+          estimatedTokens: 0,
+        };
+        group.snapshots++;
+        group.estimatedTokens += entry.estimatedTokens;
+        groups.set(key, group);
+      }
+    return [...groups.values()]
+      .map((g) => ({ ...g, averageTokens: Math.round(g.estimatedTokens / g.snapshots) }))
+      .sort((a, b) => b.estimatedTokens - a.estimatedTokens || a.assetId.localeCompare(b.assetId));
   }
   diagnostics() {
     const { state, assets } = this.state();

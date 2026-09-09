@@ -56,6 +56,16 @@ export function createApp(core: Core, discovery = discoverModels) {
   });
   app.post('/api/starter', (_req, res) => res.json(core.installStarter()));
   app.post('/api/assets/change', (req, res) => res.json(core.changeAssets(req.body)));
+  app.get('/api/assets/:id/history', (req, res) => res.json(core.assetHistory(req.params.id)));
+  app.get('/api/assets/:id/diff', (req, res) =>
+    res.json(
+      core.assetDiff(req.params.id, {
+        from: req.query.from === undefined || req.query.from === '' ? NaN : Number(req.query.from),
+        to: req.query.to === undefined || req.query.to === '' ? NaN : Number(req.query.to),
+      }),
+    ),
+  );
+  app.get('/api/metrics/assets', (_req, res) => res.json(core.assetMetrics()));
   app.post('/api/import', (req, res) => res.json(core.importNative(req.body)));
   app.post('/api/projects', (req, res) => res.json(core.initProject(req.body)));
   app.put('/api/projects/:id/overlay', (req, res) =>
