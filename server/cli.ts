@@ -6,7 +6,11 @@ import { bundlePathSchema } from './domain.ts';
 
 const base = process.env.AACL_API_URL ?? 'http://127.0.0.1:4780';
 async function api(route: string, data?: unknown) {
-  const stateResponse = await fetch(`${base}/api/state`);
+  const stateResponse = await fetch(`${base}/api/state`).catch(() => {
+    throw new Error(
+      `AACL Coreへ接続できません（${base}）。Coreを起動し、AACL_API_URLを確認してください。`,
+    );
+  });
   if (!stateResponse.ok) throw new Error('Coreへ接続できません');
   const state = (await stateResponse.json()) as { humanToken: string };
   const response = await fetch(`${base}/api${route}`, {
@@ -106,18 +110,23 @@ function exportFiles(root: string, files: { path: string; content: string }[]) {
 try {
   if (command === 'onboarding' || command === 'onboard')
     console.log(JSON.stringify(await onboardingCli(args), null, 2));
-  else if (command === 'init')
+  else if (command === 'mcp') {
+    if (args.length) throw new Error('使い方: aacl mcp');
+    await import('./stdio.ts');
+  } else if (command === 'init') {
+    if (args.length > 2) throw new Error('使い方: aacl init [path] [name]');
+    const root = path.resolve(args[0] ?? '.');
     console.log(
       JSON.stringify(
         await api('/projects', {
-          root: path.resolve(args[0] ?? '.'),
-          name: args[1] ?? path.basename(path.resolve(args[0] ?? '.')),
+          root,
+          name: args[1] ?? path.basename(root),
         }),
         null,
         2,
       ),
     );
-  else if (command === 'start')
+  } else if (command === 'start')
     console.log(JSON.stringify(await api('/runs', { command: args.join(' ') }), null, 2));
   else if (command === 'export-bundle') {
     const [inputFile, output] = args;
@@ -141,7 +150,7 @@ try {
   } else if (command === 'export') {
     const [runtime, workflow, output] = args;
     if (!['codex', 'claude', 'cursor', 'other'].includes(runtime) || !output)
-      throw new Error('使い方: npm run cli -- export codex issue-development ./generated');
+      throw new Error('使い方: aacl export codex issue-development ./generated');
     const result = (await api('/materialize', { runtime, context: { workflow } })) as {
       files: { path: string; content: string }[];
     };
@@ -152,9 +161,9 @@ try {
   } else if (command === 'status') console.log(JSON.stringify(await api('/health'), null, 2));
   else {
     console.log(
-      'aacl Core CLI\n  init [path] [name]\n  start /workflow additional instruction\n  export <codex|claude|cursor|other> <workflow> <new-directory>\n  export-bundle input.json <new-directory>\n  onboarding <discover|connect|import|get|list|plan|verify|organize|cutover|restore> [id] [input.json]\n  status\nCoreを先に起動してください。',
+      'aacl Core CLI\n  init [path] [name]  対象Projectを登録（path省略時は現在のディレクトリ）\n  mcp                 稼働中のCoreへ標準入出力で接続\n  start /workflow additional instruction\n  export <codex|claude|cursor|other> <workflow> <new-directory>\n  export-bundle input.json <new-directory>\n  onboarding <discover|connect|import|get|list|plan|verify|organize|cutover|restore> [id] [input.json]\n  status\nCoreを先に起動してください。initを再実行すると既存のProject IDを返します。',
     );
-    if (command) process.exitCode = 1;
+    if (command && command !== '--help' && command !== '-h') process.exitCode = 1;
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

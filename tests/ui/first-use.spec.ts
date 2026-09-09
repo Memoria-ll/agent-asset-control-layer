@@ -92,7 +92,7 @@ test('project Workflow preserves draft while adding a Role, previews, starts and
 test('Markdown name and project overlay selections survive save and reopen', async ({ page }) => {
   await write(page, '/starter', {});
   await page.goto('/#assets');
-  await page.getByRole('button', { name: 'インポート', exact: true }).click();
+  await page.getByRole('button', { name: 'アセットインポート', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('ID', { exact: true }).fill('named-import-rule');
   await dialog.getByLabel('名前', { exact: true }).fill('画面で指定した名前');

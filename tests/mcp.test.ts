@@ -222,6 +222,39 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
       await stdio.close();
     }
   }
+  // The installed CLI must also work from a target project with its own TypeScript settings.
+  const installedStdio = new Client({ name: 'stdio-installed-test', version: '1' });
+  const installedProtocolErrors: Error[] = [];
+  installedStdio.onerror = (error) => installedProtocolErrors.push(error);
+  const clientRoot = path.join(dir, 'client project');
+  fs.mkdirSync(clientRoot);
+  // A target project's TypeScript configuration must not control the installed CLI.
+  fs.writeFileSync(path.join(clientRoot, 'tsconfig.json'), '{"extends":"./missing.json"}');
+  await installedStdio.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [path.resolve('bin/aacl.mjs'), 'mcp'],
+      cwd: clientRoot,
+      env: {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            (pair): pair is [string, string] => pair[1] !== undefined,
+          ),
+        ),
+        AACL_URL: `${base}/mcp`,
+      },
+      stderr: 'pipe',
+    }),
+  );
+  try {
+    const bootstrapResult = await installedStdio.callTool({ name: 'aacl_bootstrap', arguments: {} });
+    assert.ok((bootstrapResult.content as { text: string }[])[0].text.includes(`${base}/mcp`));
+    const runs = await installedStdio.callTool({ name: 'aacl_run_list', arguments: {} });
+    assert.ok((runs.content as { text: string }[])[0].text.includes(run.id));
+    assert.deepEqual(installedProtocolErrors, [], 'stdout must contain only MCP protocol messages');
+  } finally {
+    await installedStdio.close();
+  }
 });
 test('HTTP rejects foreign Origin, host rebinding and unauthenticated human mutations', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aacl-http-'));

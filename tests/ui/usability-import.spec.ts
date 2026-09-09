@@ -43,7 +43,7 @@ async function state(page: Page): Promise<Overview> {
 
 async function openImport(page: Page) {
   await page.goto('/#assets');
-  await page.getByRole('button', { name: 'インポート', exact: true }).click();
+  await page.getByRole('button', { name: 'アセットインポート', exact: true }).click();
   return page.getByRole('dialog');
 }
 

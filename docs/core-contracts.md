@@ -1,6 +1,6 @@
 # Coreの追加契約
 
-開発要件v15のうち、Skill / Role / Task Typeの固有設定、Journal Review Proposal、Asset別Context Cost、revision比較の実装仕様です。会話による操作、段階的なSkill取得、任意のモデル指定、初回分類と出力は[運用ガイド](mcp-operations.md)を参照してください。VS Code Extensionは含みません。
+開発要件v16のうち、Skill / Role / Task Typeの固有設定、Journal Review Proposal、Asset別Context Cost、revision比較の実装仕様です。会話による操作、段階的なSkill取得、任意のモデル指定、初回分類と出力は[運用ガイド](mcp-operations.md)を参照してください。VS Code Extensionは含みません。
 
 ## Asset Typeごとの設定
 

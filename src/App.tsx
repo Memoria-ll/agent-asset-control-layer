@@ -292,7 +292,7 @@ export function App() {
               {page === 'assets' && (
                 <>
                   <button className="button" onClick={() => setImporting(true)}>
-                    インポート
+                    アセットインポート
                   </button>
                   <button className="button primary" onClick={() => setEdit({})}>
                     <Plus size={15} />

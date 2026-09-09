@@ -1,8 +1,8 @@
-# Agent Asset Control Layer — 開発要件 v15
+# Agent Asset Control Layer — 開発要件 v16
 
-2026年9月9日更新。[総合改善インプット](docs/integrated-improvement-input-2026-09-09.md)、[利用方針更新](docs/mcp-first-onboarding-and-asset-relations.md)、[Skill・Workflow・モデル・出力の設計](docs/skill-workflow-model-and-export-design.md)を反映しています。
+2026年9月10日更新。v15を基礎に、[総合改善インプット](docs/integrated-improvement-input-2026-09-09.md)、[利用方針更新](docs/mcp-first-onboarding-and-asset-relations.md)、[Skill・Workflow・モデル・出力の設計](docs/skill-workflow-model-and-export-design.md)、[初回利用対応](docs/first-use-fixes.md)、[Core追加契約](docs/core-contracts.md)、[MCP運用ガイド](docs/mcp-operations.md)、[改善実装確認表](docs/improvement-implementation-2026-09-09.md)を照合し、詳細な運用契約と監査結果を追補しています。
 
-## v15の運用契約
+## v16の運用契約
 
 日常操作は会話とMCP（AI向けのツール接続）で完結できるものとします。人間用UIの閲覧・編集機能も維持します。以下は初回導入と日常操作についての規範です。後続の既存節を読む場合も、この運用契約を適用します。
 
@@ -2042,3 +2042,109 @@ User-defined Development Philosophy
 ```
 
 最終的に育つのは「AACL自身の独自思想」ではなく、**ユーザー自身の開発方法**である。
+
+---
+
+## 49. 2026年9月9日資料から昇格した詳細契約
+
+この節は、既存の抽象的なMVP要件を、実装・検証可能な運用契約へ具体化する。外部の試用レポートは観測根拠であり、それ自体を実装済みの証拠や正本とはしない。
+
+### 49.1 Onboardingの状態と安全な遷移
+
+既存Runtime資産の導入は、次の状態を持つ一つの再開可能なOperationとして保存する。
+
+```text
+discover → import → connect → verify → organize → cutover
+                                                  ↓
+                                               restore
+```
+
+- `discover`は、対象Runtime、root、候補ファイル、hash、除外理由、未対応理由を保存する。一般的なプロジェクト説明用の`README.md` / `README.*`は既定候補に含めず、再利用対象として明示された場合だけ候補にする。
+- `import`は、候補の原文、相対配置、補助ファイル、出所を保存する。未分類内容は`other`かつ無効状態で保持し、黙って捨てない。
+- `connect`は、Codex / Claude / Cursorの既存設定を保持したまま、AACLの接続情報と案内を追加する。設定本文と認証情報はAsset本文や通常のMCP応答へ取り込まない。
+- `verify`は、実際のMCP読み取りと保存・更新の証跡を分けて記録する。接続設定を配置しただけで、接続済みまたは権限済みとは判定しない。
+- `organize`は、AIの分類根拠、原文IDから出力Asset IDへの対応、出力ごとのscope / relation、未変換部分を一括変更として保存する。一つの原文をWorkflow・Role・Skillへ分割できる。
+- `cutover`は、全候補のsource hash、分類、出力、未対応部分、接続依存を事前検証し、未確定または未変換の部分があれば元の自動読込を停止しない。
+- `restore`は、後続編集を上書きしない。共有接続や後続Operationがある場合は依存関係を示して順序を要求する。中断後は記録済みの一時状態から再開し、完成品でないバックアップを公開しない。
+- 各状態の再送は同じoperation / request identityで冪等に扱う。同名だけで資産を統合せず、root・Runtime・relative path・source hash等を使って同一性を判断する。
+
+### 49.2 Native connectionの契約
+
+- 対応Runtimeは`codex`、`claude`、`cursor`を明示的に区別する。未知Runtime、未対応構文、既存の非互換定義、競合するAACL定義では、変更前のファイルを一切書き換えず、理由を返す。
+- 既存のJSON / TOML、無関係な設定、認証ヘッダー、後続編集を保持する。原文のhash、変更前後のhash、mode、backupの状態を復元検証に使う。
+- 設定書き込み、退避、復元は原子的に行い、プロセス終了、容量不足、シンボリックリンク、任意のhard link、staging内容の変更を安全側に倒して処理する。
+- 同じ接続を複数の導入が共有する場合、先行Operationの復元は後続依存を壊さない。`CONNECTION_IN_USE`、`CONNECTION_BUSY`等の状態と、先に復元すべきOperationを返す。
+- stdio MCPでは標準出力をMCPプロトコル専用とする。npm等の起動ログを混在させず、案内する起動方法もこの契約を満たす。
+
+### 49.3 ClassificationとAsset relation
+
+- Runtimeのフォルダー名、拡張子、配置先だけでSkill / Workflow / Roleを確定しない。原文の実際の責務をAIが判断し、Coreは承認された分類結果を保存・検証する。
+- Skill間relationは`required`、`conditional`、`reference`を区別する。禁止・否定の記述はrelationを生成しない。manual relationと本文から抽出したrelationは出所と記述位置を分けて保持する。
+- 本文変更時は抽出relationを更新し、手動relationを保持する。`required` relationの循環は拒否し、資料参照の循環とは区別する。
+- SkillはRole、Model、Workflow、開発権限を選択しない。担当、委譲、Stage、差し戻し、完了制御はWorkflow側で定義する。`skill.steps`による新規の工程制御保存は拒否し、旧データは非実行の互換読み込みに限る。
+
+### 49.4 Progressive Skill loadingとModel semantics
+
+- 初期ContextにはRule本文とSkillのID、description、revision、取得方法だけを含める。Skill本文、補助ファイル、参照先は必要時に個別取得する。
+- 候補提示、本文のinspect / fetch、実行時のuse報告を別イベントとして保存する。候補やinspectだけで本文使用または実行開始とは扱わない。
+- 個別取得はWorkflow / Stage / RoleのExecution Snapshotに固定したAsset revisionから行う。候補一覧で見たdescriptionと後で取得する本文のrevisionがずれないようにする。
+- Model指定は任意とする。未指定時はAACLから起動引数へモデルを補わず、Runtimeの標準設定に任せる。requested model、actual model、actual runtime、unknown modelを別々に保存する。
+- mandatoryなmodel / runtime条件は、開始・工程進行・完了の各時点で満たされたことを検証できなければ成功扱いにしない。実モデルが不明でも、genericな作業を続行できるか、条件付きAssetを適用できないかを明示する。
+
+### 49.5 Runtime lifecycleとHandoff
+
+- Runtime lifecycleは、少なくとも`prepared`、`handoff-awaiting`、`started`、`resumed`、`result`、`failed`、`waiting-user`を区別する。Handoff取得はAIの作業開始を意味しない。
+- attempt、request identity、expected current versionを用いて、同じ依頼の二重送信を防ぐ。再送、再開、失敗復帰は対象RunとStageに結び付ける。
+- read-onlyのRun / Context previewは、Run version、Snapshot、履歴を変更しない。実際のhandoff acquisitionや状態更新は別操作とし、更新後のcurrent versionを返す。
+- Workflowの完了可否は「次の遷移がないこと」から独立させる。review不合格時は実装へ戻れる。差し戻し後は下流の成果物と完了根拠を無効化し、再取得する。
+- 改訂後の再開は旧Runと関連付けた新Runとする。旧Snapshot、承認、完了根拠を変更または無条件コピーしない。再利用する成果物と再確認する根拠を明示する。
+
+### 49.6 AuthoringとExport
+
+- 実行や架空のJournalなしに、ユーザー依頼を根拠とする初期Workflow / Asset提案を作成できる。Journal由来の改善提案とはoriginと根拠を区別する。
+- 組み込みのauthoring / export支援は同じclassification契約を使う。作成、承認、変更履歴の入口を持つが、ユーザーの開発方針を自動確定しない。
+- Exportは一時点の正本、relation、設定、revision、hash、出力先、未対応事項を固定したmanifest付きbundleとする。相対参照と補助ファイルを保ち、衝突する出力先を黙って上書きしない。
+- standalone exportはCoreなしでWorkflowの工程・Role・成果物・差し戻し・完了を扱える。connected exportはMCP依存を明示する。いずれもlive Core endpoint、認証情報、秘密設定を生成物へ複製しない。
+- 生成・案内のすべての経路は現在有効な接続endpointを使い、既定portを固定値として埋め込まない。
+
+### 49.7 Settings、Journal、UIとMetrics
+
+- Project Overlay、Model binding、Runtime設定など、適用結果を変える設定は、変更前後、理由、実施者、revision、復元情報を持つ。復元は新しいChange Setとして記録し、過去Snapshotは当時の設定を保持する。
+- Journalは`observedAt`と`createdAt`を分け、準備、閲覧、handoff、実試行、結果、失敗、判断待ちを混同しない。Journal、Snapshot、Review、Change Setを同じWorkflow / revision / Stage / Role / Modelから辿れるようにする。
+- 実行一覧はProject、Workflow、Skill、status、Stage、更新時刻で検索できる。近接時刻のSnapshotも、IDまたは連番、十分な時刻精度、取得種別で区別する。Change Historyには内部IDやhashとは別に、人間が目的を識別できる要約を表示する。
+- Workflow中心UIでは、Stage、遷移、Role / Model binding、必要Asset、実行、Journal、Review、Change Setを確認する。Project-owned WorkflowからPreview / Launchへ進む場合は所有Projectを引き継ぐ。
+- Workflow編集中にRoleが不足した場合は、入力内容を保持したままRole作成へ移動し、作成後に編集を再開できる。OverlayやProposalの対象は名前付き候補から選べ、承認前に本文・設定差分とWorkflowのStage / 遷移 / 完了構造を確認できる。
+- MetricsはWorkflow / revision / Stage / Role / Project / Model / Runtime / Asset / settingsの差分を比較可能にする。Context costの減少だけから品質改善を認定しない。
+
+### 49.8 導入・出力の上限
+
+製品契約として固定する場合、onboarding / exportは、1ファイル200KB、bundle 2MB、1回の探索20MB、最大200ファイル、最大100 Asset等の上限を公開し、上限超過時は変更を確定しない。探索root数など別の上限を追加する場合は、実装定数と同じ値を要件へ反映する。
+
+---
+
+## 50. 2026年9月10日時点の資料監査メモ（非規範）
+
+この節は、資料の内容が本要件に含まれているか、また実装を独立に確認できるかを記録する。`実装面あり`は関連するコード・型・公開操作の存在を示すだけで、全分岐の正しさやテスト成功を意味しない。`要追加検証`は、提示されたシンボル一覧だけでは断定できないことを示す。
+
+| 資料                                               | 要件への反映                                                                 | 実装監査の結論                                                                                                               |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `docs/first-use-fixes.md`                          | §21、§24、§35、§37、および§49.5・§49.7へ反映。UI導線の細部も明文化           | Backendの基盤は実装面あり。Project継承、Role追加時の入力保持、名前優先、UI表示は要追加検証                                   |
+| `docs/core-contracts.md`                           | §11、§13、§35、§36、および§49.3〜§49.7へ反映                                 | Skill / Role / Task Type、Proposal、History / Diff、Costの実装面あり。全validation分岐と公開経路は要追加検証                 |
+| `docs/mcp-operations.md`                           | §14、§21、§27、§28、§30〜§32、および§49.1〜§49.8へ反映                       | MCP、onboarding、native connection、export、managementの操作面は実装面あり。冪等性・競合・秘密情報非公開の全契約は要追加検証 |
+| `docs/mcp-first-onboarding-and-asset-relations.md` | §27、§30〜§34、§49.1〜§49.3へ反映                                            | 導入・relationの機構は実装面あり。「Skill内の構造化工程」は後続設計で撤回され、要件には採用しない                            |
+| `docs/skill-workflow-model-and-export-design.md`   | §11、§14〜§17、§26、§49.3〜§49.6へ反映                                       | progressive loading、model、authoring、exportの基盤は実装面あり。未知モデル継続、全出力完全性、秘密情報除外は要追加検証      |
+| `docs/improvement-implementation-2026-09-09.md`    | I-02〜I-13を§49と既存§11〜§41へ反映                                          | 対応表に挙げた実装面は存在するが、資料の「テスト成功」記述だけでは独立証明にならない。UIと実Runtimeは要追加検証              |
+| `docs/integrated-improvement-input-2026-09-09.md`  | I-02〜I-13を§49へ反映。I-01のREADME変更は監査対象外                          | 方針・確認条件の資料であり、実装証拠ではない。主なBackend機構は実装面あり、実利用シナリオの完遂は要追加検証                  |
+| 外部の初回利用・操作性レポート                     | 観測根拠として参照。推奨のうちREADME除外、stdio契約、UI確認条件等を§49へ反映 | レポートの観測自体は実装証拠ではない。READMEは本監査の対象外                                                                 |
+
+### 50.1 現時点で未確定の重要事項
+
+- UIのWorkflow中心表示、完了根拠、名前付き候補、Project継承、Role作成後の編集復帰が、要求どおり全経路で動くか。
+- `aacl init` / `aacl mcp`の公開CLI配線、現在有効なendpointの全生成経路、stdio stdoutの純粋性。
+- onboardingの全状態遷移、再送・中断・復元・共有接続依存の原子性と冪等性。
+- `required` / `conditional` / `reference` / prohibition、manual / extracted relation、cycle判定の全validation。
+- requested / actual / unknown modelの開始・進行・完了時の扱いと、Runtime側で強制できない制約の表示。
+- standalone exportの実生成物をCoreなしで実行できること、manifest・hash・credential除外・参照保持の全経路。
+- 実際の複数モデルによる開発、長期・大量データ運用、外部Runtimeが独自に行うOS操作の強制。
+
+上記は、未確認であることを実装済みと解釈しないための監査境界である。実装を完了扱いにするには、該当するCore / MCP / UI / Runtimeテストと、必要な実操作の結果を追加する。

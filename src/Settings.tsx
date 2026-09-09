@@ -44,18 +44,16 @@ export function Settings({ data, mutate }: { data: Overview; mutate: Mutate }) {
           </div>
           <details className="form-section">
             <summary>stdio bridgeを使う</summary>
-            <p>Coreを起動したまま、プロジェクトの絶対パスを指定します。</p>
+            <p>
+              Coreを起動し、aaclコマンドをインストールしてから設定します。作業場所の指定は不要です。
+            </p>
             <pre className="code">
               {JSON.stringify(
                 {
                   mcpServers: {
                     aacl: {
-                      command: 'node',
-                      args: [
-                        '--import',
-                        '/absolute/path/to/aacl/node_modules/tsx/dist/loader.mjs',
-                        '/absolute/path/to/aacl/server/stdio.ts',
-                      ],
+                      command: 'aacl',
+                      args: ['mcp'],
                       env: { AACL_URL: endpoint },
                     },
                   },
@@ -139,6 +137,18 @@ export function Projects({ data, mutate }: { data: Overview; mutate: Mutate }) {
           <Plus size={15} />
           Projectを登録
         </button>
+      </div>
+      <div className="callout">
+        <p>
+          Coreが動作しているOSの端末で対象Projectへ移動し、<code>aacl init</code>
+          を実行すると登録できます。
+          <code> aacl init /path/to/project</code>で対象を指定することもできます。
+        </p>
+        <pre className="code">{'cd my-project\naacl init'}</pre>
+        <p>
+          Project IDは対象Projectの<code>.aacl/project.json</code>
+          に保存し、Coreが登録して管理します。 再実行すると既存のProject IDを返します。
+        </p>
       </div>
       <div className="project-grid">
         {data.projects.map((p) => (
@@ -323,6 +333,10 @@ export function ImportModal({
           }
         }}
       >
+        <p className="muted">
+          Markdownファイルまたは貼り付けた本文を、1件の有効なアセットとして保存します。
+          既存の開発環境からの導入・整理は、MCPで接続したAIに依頼できます。
+        </p>
         <Field label="Markdownファイル">
           <input
             type="file"

@@ -4,9 +4,13 @@ AACLでは、既存資産の取り込みと最初の整理を済ませた後、W
 
 ## 最初の接続と既存資産の導入
 
-Coreを起動し、`http://localhost:4780/mcp`へRuntimeを接続します。標準入出力の接続を使う場合は、Coreの起動後に`npm --silent run mcp`を使います。`--silent`はnpmの起動ログがMCPの標準出力へ混ざることを防ぎます。接続先を変更する場合は`AACL_URL`を設定します。Runtimeごとの接続設定案は`aacl_onboarding_plan`で取得できます。
+Coreを起動し、対象Projectのディレクトリで`aacl init`を実行します。対象を指定する場合は`aacl init /path/to/project`を使います。Project自身の`.aacl/project.json`をCoreへ登録し、再実行時も同じProject IDを返します。CLIのインストール手順は[README](../README.ja.md#始める)を参照してください。
 
-`aacl_onboarding_connect`または`npm run cli -- onboarding connect <id> input.json`では、ユーザーの導入依頼に基づいてCodex・Claude・Cursorの接続設定と案内ファイルを配置できます。元の設定値と認証情報を保持します。退避した設定本文は非公開のファイルに保存し、MCP応答や資産本文へ渡しません。未対応の構文や既存定義との競合は、変更せずに通知します。設定を配置しただけでは接続済みと判定しません。
+`http://localhost:4780/mcp`へRuntimeを接続します。標準入出力の接続を使う場合は、Coreの起動後に`aacl mcp`を使います。コマンドは`aacl`、引数は`["mcp"]`で、作業場所の指定は不要です。接続先を変更する場合は`AACL_URL`を設定します。Runtimeごとの接続設定案は`aacl_onboarding_plan`で取得できます。
+
+開発用にインストール前のコマンドを使う場合は、Coreの起動後に`npm --silent run mcp`も利用できます。`--silent`はnpmの起動ログがMCPの標準出力へ混ざることを防ぎます。
+
+`aacl_onboarding_connect`または`aacl onboarding connect <id> input.json`では、ユーザーの導入依頼に基づいてCodex・Claude・Cursorの接続設定と案内ファイルを配置できます。元の設定値と認証情報を保持します。退避した設定本文は非公開のファイルに保存し、MCP応答や資産本文へ渡しません。未対応の構文や既存定義との競合は、変更せずに通知します。設定を配置しただけでは接続済みと判定しません。
 
 導入操作は、保存された導入IDを使って再開します。以下のツール名は公開MCPツールです。各ツールの入力形式はMCPのツール一覧から取得できます。
 
@@ -59,7 +63,7 @@ Skillは本文と補助ファイルをまとめて保存します。`aacl_asset_
 
 一度に探索する根は32か所、取り込む資産は100件、1資産のファイルは200件までです。本文・各補助ファイルは20万バイト、1資産全体は200万バイト、探索全体は2,000万バイトまでです。未対応ファイルを含むSkillを、補助ファイルが欠けたまま切り替えることはできません。バックアップはCoreのデータディレクトリー内に保存します。
 
-CLIからも`npm run cli -- onboarding discover input.json`を使えます。その後の操作は`onboarding import <id>`などで指定します。`connect`、`verify`、`organize`は`userRequest`を含む入力ファイルを渡します。CLIの接続確認も実際のMCP接続を使用します。既に接続済みの場合、接続設定の再配置は不要です。
+CLIからも`aacl onboarding discover input.json`を使えます。その後の操作は`aacl onboarding import <id>`などで指定します。`connect`、`verify`、`organize`は`userRequest`を含む入力ファイルを渡します。CLIの接続確認も実際のMCP接続を使用します。既に接続済みの場合、接続設定の再配置は不要です。
 
 ## 初めてWorkflowを作る
 
@@ -151,7 +155,7 @@ Runtimeの接続先は認証情報を含む可能性があるため、両モー�
 ファイルへ書き出す場合は入力を`export-input.json`に保存し、次のコマンドを使います。出力先はまだ存在しないディレクトリーを指定します。Coreは出力を取得するときに起動しておきます。生成したプログラムは出力処理では実行しません。
 
 ```sh
-npm run cli -- export-bundle export-input.json ./exported-assets
+aacl export-bundle export-input.json ./exported-assets
 ```
 
 既存の配置へ統合する場合は、Runtimeがユーザーの指定先と差分を確認し、補助ファイルと参照を含めて配置・検証します。単独出力の生成には実Runtimeの起動やモデル実行の検証は含みません。従来の`export`コマンドは接続用のWorkflow起動ファイルを生成します。
