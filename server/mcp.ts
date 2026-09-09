@@ -4,7 +4,10 @@ import { Core } from './core.ts';
 import { contextSchema, idSchema, reviewSubmissionShape, requireValue } from './domain.ts';
 import { bootstrap, materialize } from './adapters.ts';
 
-export function createMcpServer(core: Core) {
+export function createMcpServer(
+  core: Core,
+  endpoint = `http://localhost:${process.env.PORT ?? '4780'}/mcp`,
+) {
   const server = new McpServer({ name: 'aacl', version: '0.1.0' });
   const register = (
     name: string,
@@ -101,7 +104,7 @@ export function createMcpServer(core: Core) {
   );
   register(
     'aacl_session_start',
-    'Start a user-requested session. Only explicitly selected workflows enter workflow mode; plain instructions remain advisory.',
+    'Start a user-requested session. Only explicitly selected workflows enter workflow mode; plain instructions remain advisory. A slash command may include trailing instructions; the separate instruction field is appended to them.',
     {
       command: z.string().default(''),
       workflowId: idSchema.optional(),
@@ -121,7 +124,7 @@ export function createMcpServer(core: Core) {
   );
   register(
     'aacl_context_handoff',
-    'Record an execution snapshot and prepare runtime-pull or host-inject context. Request action=development before repository mutation; the Core validates the selected workflow boundary.',
+    'Record an execution snapshot and prepare runtime-pull or host-inject context. Returns project (id, name, root on the Core host) and the updated run version; use that version as expectedVersion for the next transition. Re-read aacl_run_list if another operation updates the run. Request action=development before repository mutation; the Core validates the selected workflow boundary.',
     {
       runId: z.string(),
       context: contextSchema.default({}),
@@ -182,7 +185,7 @@ export function createMcpServer(core: Core) {
   );
   register(
     'aacl_review_submit',
-    'Submit items, each with operation, proposedScope, proposedRelations, reason and evidence referencing journals/snapshots from this review. Core derives observed scopes from evidence. For no change submit items: []. Legacy operations is accepted with review-level evidence; send exactly one format. Human approval is available only through the Core UI.',
+    'Submit items, each with operation, proposedScope, proposedRelations, reason and evidence referencing journals/snapshots from this review. For project-owned assets, proposedScope.project must be [asset.projectId], matching the scope added by the Core. Core derives observed scopes from evidence. For no change submit items: []. Legacy operations is accepted with review-level evidence; send exactly one format. Human approval is available only through the Core UI.',
     {
       id: z.string(),
       ...reviewSubmissionShape,
@@ -210,16 +213,16 @@ export function createMcpServer(core: Core) {
       requested: z.array(idSchema).default([]),
     },
     true,
-    (args) => materialize(core, args),
+    (args) => materialize(core, { ...args, endpoint }),
   );
   register('aacl_bootstrap', 'Get the stable, idempotent runtime contract.', {}, true, () => ({
-    content: bootstrap(),
+    content: bootstrap(endpoint),
   }));
   server.registerResource(
     'runtime-bootstrap',
     'aacl://bootstrap',
     { mimeType: 'text/markdown', description: 'AACL runtime integration contract' },
-    async (uri) => ({ contents: [{ uri: uri.href, text: bootstrap() }] }),
+    async (uri) => ({ contents: [{ uri: uri.href, text: bootstrap(endpoint) }] }),
   );
   server.registerResource(
     'workflow-catalog',

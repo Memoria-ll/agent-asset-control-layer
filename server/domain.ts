@@ -49,6 +49,7 @@ export const stageSchema = z
     taskType: idSchema.optional(),
     requiredAssets: z.array(idSchema).default([]),
     requiredCapabilities: z.array(idSchema).default([]),
+    expectedOutput: z.array(z.string().trim().min(1)).optional(),
     completionCriteria: z.array(z.string().min(1)).default([]),
     transitions: z
       .array(
@@ -269,6 +270,7 @@ export type Snapshot = {
   workflowRevision: number | null;
   stage: string | null;
   task: string;
+  project?: Pick<Project, 'id' | 'name' | 'root'> | null;
   resolution: Resolution;
   artifacts: Record<string, string>;
 };
@@ -288,6 +290,8 @@ export type Run = {
   createdAt: string;
   updatedAt: string;
   snapshotIds: string[];
+  lastHandoff?: { at: string; delivery: 'runtime-pull' | 'host-inject'; snapshotId: string };
+  runtimeHandoffAt?: string;
   events: { at: string; from: string | null; to: string | null; kind: string; note: string }[];
   artifacts: Record<string, string>;
   criteria: Record<string, string>;

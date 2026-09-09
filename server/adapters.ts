@@ -3,7 +3,7 @@ import { Core } from './core.ts';
 import { assetBody } from './contracts.ts';
 import { contextSchema, idSchema, DomainError } from './domain.ts';
 
-export function bootstrap(endpoint = 'http://localhost:4780/mcp') {
+export function bootstrap(endpoint = `http://localhost:${process.env.PORT ?? '4780'}/mcp`) {
   return `# AACL runtime bootstrap v1\n\nAACL is the canonical source for workflows and assets. MCP endpoint: ${endpoint}\n\nStart a session using aacl_session_start. A user-selected /workflow plus additional instructions explicitly starts that workflow. Without a workflow, stay in Advisory / Preparation Mode; do not begin repository modification or PR creation. Discover workflows with aacl_workflow_list; never infer or invent a selection.\n\nBefore execution or delegation, call aacl_context_handoff with the run ID and actual runtime/model. For repository modification request action=development; proceed only when developmentAllowed=true. Apply the returned context and completion criteria. The Core manages state; the external runtime invokes models and tools. Report transitions with aacl_workflow_transition, providing evidence and artifacts. Record observations with aacl_journal_append using the returned snapshot ID.\n\nJournal review is user-triggered in the Core UI. Read an existing review with aacl_review_get and submit proposed changes with aacl_review_submit. Human approval happens in the Core UI. Do not edit generated files as canonical assets.\n`;
 }
 export function materialize(core: Core, input: unknown) {
@@ -12,7 +12,10 @@ export function materialize(core: Core, input: unknown) {
       runtime: z.enum(['claude', 'codex']),
       context: contextSchema.default({}),
       requested: z.array(idSchema).default([]),
-      endpoint: z.string().url().default('http://localhost:4780/mcp'),
+      endpoint: z
+        .string()
+        .url()
+        .default(`http://localhost:${process.env.PORT ?? '4780'}/mcp`),
     })
     .strict()
     .parse(input);
@@ -38,7 +41,7 @@ export function materialize(core: Core, input: unknown) {
     if (a.type === 'workflow')
       files.push({
         path: `${skillRoot}/${a.id}/SKILL.md`,
-        content: `---\nname: ${a.id}\ndescription: ${JSON.stringify(a.description || a.name)}\n---\n\nThis is a generated AACL workflow launcher (${a.id}@${a.revision}).\nCall aacl_session_start with workflowId=${a.id} and the user's additional instruction. Then call aacl_context_handoff for the created run. Read AACL-BOOTSTRAP.md for the runtime contract.\n`,
+        content: `---\nname: ${a.id}\ndescription: ${JSON.stringify(a.description || a.name)}\n---\n\nThis is a generated AACL workflow launcher (${a.id}@${a.revision}).\nCall aacl_session_start with workflowId=${a.id}, context=${JSON.stringify(result.context.project ? { project: result.context.project } : {})}, and the user's additional instruction. Then call aacl_context_handoff for the created run. Use the returned project.root as the working directory on the Core host and the returned version as expectedVersion for the next transition. Read AACL-BOOTSTRAP.md for the runtime contract.\n`,
       });
   }
   files.push({
@@ -57,5 +60,11 @@ export function materialize(core: Core, input: unknown) {
         2,
       ) + '\n',
   });
-  return { runtime: req.runtime, files, estimatedTokens: result.estimatedTokens };
+  return {
+    runtime: req.runtime,
+    files,
+    usage:
+      'Save each file at its returned relative path beneath the target project root; create the parent directories after downloading. Ask the AI to read AACL-BOOTSTRAP.md and AACL-CONTEXT.md. The manifest records generated conditions and revisions. MCP can supply live context without these files; generated workflow launchers still require a running Core and MCP connection. Regenerate after changing canonical assets and review any existing file at the same path before replacing it.',
+    estimatedTokens: result.estimatedTokens,
+  };
 }

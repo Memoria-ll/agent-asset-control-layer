@@ -162,7 +162,9 @@ test('UI: starter, scoped asset, preview, workflow, journal, proposal approval a
     page.getByRole('heading', { name: '#123 ブラウザ操作を検証', exact: true }),
   ).toBeVisible();
   await page.getByRole('button', { name: '次のStageへ' }).click();
-  await page.getByLabel('受付・計画の結果を確認した').fill('対象Issueと要求範囲を確認した');
+  await page
+    .getByLabel('対象Issue、要求、対象範囲、対象外、受け入れ条件、検証方法、不明点を記載した')
+    .fill('対象Issueと要求範囲を確認した');
   await page.getByLabel('成果物 · brief').fill('docs/brief.md');
   await page.getByRole('button', { name: '確定する' }).click();
   await expect(page.getByRole('heading', { name: '仕様策定', exact: true })).toBeVisible();

@@ -458,6 +458,7 @@ export class Core {
       run.workflow,
     );
     guard(resolution.valid, 'CONTEXT_UNRESOLVED', resolution.errors.join('\n'));
+    const project = state.projects.find((p) => p.id === resolution.context.project);
     const snapshot: Snapshot = {
       id: uid('snapshot'),
       runId: run.id,
@@ -467,6 +468,7 @@ export class Core {
       workflowRevision: run.workflow?.revision ?? null,
       stage: run.stage,
       task: run.instruction,
+      project: project ? { id: project.id, name: project.name, root: project.root } : null,
       resolution,
       artifacts: structuredClone(run.artifacts),
     };
@@ -499,7 +501,7 @@ export class Core {
         guard(!workflowId && !skillId, 'LAUNCH', 'commandとIDを同時に指定できません');
         if (a.type === 'workflow') workflowId = a.id;
         else skillId = a.id;
-        instruction = match[2] ?? '';
+        instruction = [match[2], req.instruction].filter((text) => text?.trim()).join('\n\n');
       }
       guard(!(workflowId && skillId), 'LAUNCH', 'WorkflowとStandalone Skillの同時起動はできません');
       guard(
@@ -571,6 +573,12 @@ export class Core {
         'Runは更新されています。最新状態を読み直してください',
       );
       guard(run.status === 'active', 'RUN_FINISHED', '終了済みRunは変更できません');
+      if (!run.workflow)
+        guard(
+          ['complete', 'cancel'].includes(req.kind),
+          'WORKFLOW_REQUIRED',
+          'Advisory Modeでは開発Stageへ移行できません。Workflowを明示起動してください',
+        );
       const from = run.stage;
       if (['advance', 'complete'].includes(req.kind)) {
         const needed = runRequirements(run, state.snapshots);
@@ -623,6 +631,8 @@ export class Core {
       }
       run.version++;
       run.updatedAt = now();
+      delete run.lastHandoff;
+      delete run.runtimeHandoffAt;
       run.events.push({ at: now(), from, to: run.stage, kind: req.kind, note: req.note });
       if (run.status === 'active') {
         const { role, taskType, model, provider, runtime, ...context } = run.context;
@@ -675,11 +685,15 @@ export class Core {
       const snapshot = this.snapshot(state, assets, run, context);
       run.updatedAt = now();
       run.version++;
+      run.lastHandoff = { at: run.updatedAt, delivery: req.delivery, snapshotId: snapshot.id };
+      if (req.delivery === 'runtime-pull') run.runtimeHandoffAt = run.updatedAt;
       const stage = run.workflow?.workflow?.stages.find((s) => s.id === run.stage);
       const skill = pinnedSkill(run, state.snapshots);
       return {
         runId,
+        version: run.version,
         snapshotId: snapshot.id,
+        project: snapshot.project ?? null,
         task: run.instruction,
         workflowId: snapshot.workflowId,
         workflowRevision: snapshot.workflowRevision,
@@ -781,6 +795,29 @@ export class Core {
       instructions:
         'JournalとSnapshotを解釈し、aacl_review_submitのitemsで提案してください。各itemにoperation、proposedScope、proposedRelations（dependencies/conflicts）、reason、evidence（journalIds/snapshotIds/explanation）が必要です。Scope/Relationは変更後Assetと一致させ、削除時はnullにします。観測scopeは根拠からCoreが導出します。根拠IDはこのReviewの対象に限定します。既存AssetはexpectedRevisionを指定します。変更不要ならitemsを空にします。承認はユーザーがUIで行います。',
     };
+  }
+  reviewPreview(id: string) {
+    const { state, assets } = this.state();
+    const review = requireValue(
+      state.reviews.find((r) => r.id === id),
+      'Reviewが見つかりません',
+    );
+    return review.operations.map((op) => {
+      const assetId = op.op === 'upsert' ? op.asset.id : op.id;
+      const before =
+        op.expectedRevision === 0
+          ? null
+          : requireValue(
+              assetHistory(state, assets, assetId).revisions.find(
+                (a) => a.revision === op.expectedRevision,
+              ),
+              `提案の比較元revisionが見つかりません: ${assetId}@${op.expectedRevision}`,
+            );
+      const after: Asset | null =
+        op.op === 'upsert' ? { ...structuredClone(op.asset), revision: 0, updatedAt: '' } : null;
+      if (after?.projectId) after.scope.project = [after.projectId];
+      return { before, after, diff: assetDiff(before, after) };
+    });
   }
   submitReview(id: string, input: unknown) {
     return this.store.transaction((state, assets) => {
@@ -898,15 +935,10 @@ export class Core {
       .strict()
       .parse(input);
     let body = req.content;
-    let name = req.name;
+    const name = req.name;
     let description = '';
     const frontmatter = body.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
     if (frontmatter) {
-      name =
-        frontmatter[1]
-          .match(/^name:\s*(.+)$/m)?.[1]
-          ?.trim()
-          .replace(/^["']|["']$/g, '') ?? name;
       description =
         frontmatter[1]
           .match(/^description:\s*(.+)$/m)?.[1]

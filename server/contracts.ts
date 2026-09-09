@@ -44,6 +44,11 @@ export function runRequirements(run: Run, snapshots: Snapshot[]) {
         ...skills.flatMap((a) => a.skill!.completionCriteria),
       ]),
     ],
-    expectedOutput: [...new Set(skills.flatMap((a) => a.skill!.expectedOutput))],
+    expectedOutput: [
+      ...new Set([
+        ...(stage?.expectedOutput ?? []),
+        ...skills.flatMap((a) => a.skill!.expectedOutput),
+      ]),
+    ],
   };
 }

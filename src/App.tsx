@@ -607,7 +607,13 @@ function Workflows({
                   </button>
                   <button
                     className="button small"
-                    onClick={() => onPreview({ workflow: selected.id, stage: stage?.id })}
+                    onClick={() =>
+                      onPreview({
+                        workflow: selected.id,
+                        stage: stage?.id,
+                        project: selected.projectId,
+                      })
+                    }
                   >
                     Contextを確認
                     <ArrowUpRight size={13} />

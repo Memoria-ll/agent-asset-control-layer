@@ -6,7 +6,7 @@ import { api } from './api.ts';
 import { Badge, Field, Modal } from './ui.tsx';
 
 const labels = {
-  connected: '接続済み',
+  connected: 'モデル一覧を取得済み',
   'login-required': 'ログインが必要',
   unavailable: '未接続',
   error: '取得できません',

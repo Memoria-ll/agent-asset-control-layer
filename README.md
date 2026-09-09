@@ -348,6 +348,65 @@ Run `npm run check` for the build and Core/MCP tests. For browser tests, install
 
 See [Core contracts](docs/core-contracts.md) for Skill / Role / Task Type settings, structured review proposals, per-asset cost metrics, and revision comparison APIs.
 
+### First use and daily operation
+
+1. Register the target project in **Projects**, using its existing absolute directory on the OS
+   where the Core runs. Create Roles, Skills, Rules and a Workflow, or add the editable starter.
+   A Workflow's **Roleを追加** button creates a missing Role while preserving the Workflow draft.
+2. Open **Contextを確認** on the Workflow card, then **起動する**. Project-owned Workflows carry
+   their project into both screens. Select the target project explicitly when using global assets.
+3. Connect your AI runtime using **Runtime & MCP**. Model discovery only retrieves the available
+   model catalog; it does not mean that an AI has connected to AACL or started working.
+4. Starting a run creates its state and initial snapshot. Copy **AIへの依頼をコピー** and give the
+   request to the connected AI. The request includes the registered project directory. A handoff
+   also returns `project` with `id`, `name`, and `root`; `root` is a path on the Core host.
+   The run screen distinguishes an AI's handoff retrieval from a manual retrieval. Actual model
+   execution remains visible in the AI runtime.
+5. Use the handoff's returned `version` as `expectedVersion` for the next transition. Handoff
+   retrieval saves a snapshot and increments the run version. If another operation updates the
+   run, read `aacl_run_list` again. With `command: "/workflow-id"`, a separate `instruction` is
+   preserved; when both command-tail text and `instruction` are present, they are joined in that order.
+6. Record the requested artifacts and completion evidence. **記録した成果物** and **過去のContext**
+   remain available after completion. Snapshots retain the context from their creation time.
+
+The current Workflow format finishes at a stage with no outgoing transitions. To allow a review
+to return to implementation, give it both a return transition and an advance transition to a
+separate completion stage. Leave the completion stage without outgoing transitions.
+
+### Generated files and MCP
+
+MCP provides current context directly; generating files is optional. Use **Context Preview** to
+generate a copy of the selected context when you want to give it to the runtime as files. Save
+each file under the target project root at the exact relative path shown by the UI, including
+`.agents/skills/.../SKILL.md` or `.claude/skills/.../SKILL.md`. A browser download only saves the
+file itself, so create those directories when placing it.
+
+Ask the AI to read `AACL-BOOTSTRAP.md` and `AACL-CONTEXT.md`. `aacl-manifest.json` records the
+generation conditions and asset revisions. Generated Workflow launchers still call MCP and need
+the Core to be running. Regenerate after changing canonical assets. Check existing files at the
+same paths before replacing them. The generation screen does not write files into your project.
+HTTP, MCP tools, and the bootstrap resource use the endpoint of the Core receiving the request,
+including a nondefault `PORT`. For a stdio bridge to a nondefault port, set `AACL_URL` to that
+Core's full MCP URL as shown in **Runtime & MCP**.
+
+### Ask AI to propose new assets
+
+To have an AI author an Asset or Workflow, start a session, obtain a handoff, and record the need
+in **Journal** against that snapshot. Select the Journal entry in **Journal & Reviews**, start a
+Review, and copy its AI request. The AI reads `aacl_review_get` and submits new assets or updates
+with `aacl_review_submit`. Inspect the proposed text diff, settings, and Workflow stages, then
+approve in the UI. New assets use `expectedRevision: 0`; existing assets use their current revision.
+For a project-owned asset, include `proposedScope.project: [asset.projectId]`: the Core adds that
+project condition to the saved asset. Mismatch errors show the expected and submitted values.
+
+Project-specific disabling, replacement and scope changes can be selected by name in
+**Projects → Overlayを編集**. Markdown import uses the name entered in the form, even if the
+source frontmatter contains a different name.
+
+Starter improvements apply when those assets are newly added. Adding the starter again preserves
+existing assets and edits; previously saved runs and snapshots keep their original revisions.
+See [the report-to-fix checklist](docs/first-use-fixes.md) for the addressed trial findings.
+
 The local implementation consists of:
 
 - a **Core service** that manages and resolves assets

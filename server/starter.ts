@@ -14,12 +14,72 @@ export function starterAssets(): AssetInput[] {
     ['code-reviewer', 'Code reviewer', 'コード、テスト、回帰リスクを根拠に基づいて確認する。'],
   ].map(([id, name, content]) => ({ id, name, content, type: 'role', scope: { role: [id] } }));
   const stages = [
-    ['intake', '受付・計画', 'orchestrator', 'brief'],
-    ['specification', '仕様策定', 'specifier', 'specification'],
-    ['specification-review', '仕様レビュー', 'specification-reviewer', 'specification-review'],
-    ['implementation', '実装・テスト', 'implementer', 'test-results'],
-    ['pull-request', 'Pull Request', 'implementer', 'pull-request'],
-    ['code-review', 'コードレビュー', 'code-reviewer', 'code-review'],
+    [
+      'intake',
+      '受付・計画',
+      'orchestrator',
+      'brief',
+      '対象Issue、要求、対象範囲、対象外、受け入れ条件、検証方法、不明点を記載した',
+      '例: 対象 #123 / 要求: CLIに挨拶を追加 / 対象外: 配布方式の変更 / 受け入れ条件: 名前あり・なしで所定の文言を出力 / 検証: CLIの入出力テスト / 不明点: なし',
+    ],
+    [
+      'specification',
+      '仕様策定',
+      'specifier',
+      'specification',
+      '入力・出力、異常時の挙動、制約、受け入れ条件ごとのテストを定義した',
+      '要求と対応付けた仕様、境界条件、失敗時の挙動、検証手順を記載する。',
+    ],
+    [
+      'specification-review',
+      '仕様レビュー',
+      'specification-reviewer',
+      'specification-review',
+      '仕様の不足・矛盾・検証可能性を確認し、指摘の対応結果を記録した',
+      '確認した仕様の範囲、根拠付きの指摘、修正要否、残る不明点を記載する。',
+    ],
+    [
+      'implementation',
+      '実装・テスト',
+      'implementer',
+      'test-results',
+      '要求に対応する変更を実装し、検証コマンド・結果・未検証範囲を記録した',
+      '変更ファイル、要求との対応、実行コマンド、成功・失敗したテスト、制約を記載する。',
+    ],
+    [
+      'pull-request',
+      'Pull Request',
+      'implementer',
+      'pull-request',
+      '変更目的・差分・検証結果を記載したPull Requestを作成した',
+      'Pull RequestのURLと、変更目的・検証結果・残る注意点を記載する。',
+    ],
+    [
+      'code-review',
+      'コードレビュー',
+      'code-reviewer',
+      'code-review',
+      '変更とテストを確認し、未対応の指摘と受け入れ可否を記録した',
+      '確認した変更、根拠と影響を伴う指摘、対応状況、受け入れ可否を記載する。',
+    ],
+  ];
+  const reviews = [
+    [
+      'refactoring-review',
+      '重複、責務の分離、依存方向、状態管理、変更容易性を確認する。挙動を保つ最小の改善と、その検証方法を示す。',
+    ],
+    [
+      'architecture-review',
+      'モジュール境界、公開契約、データの流れ、依存方向、障害時の挙動、拡張時の制約を確認する。設計変更の利点と移行コストを示す。',
+    ],
+    [
+      'security-review',
+      '入力検証、認証・認可、信頼境界、秘密情報、コマンドやHTMLへの入力混入を確認する。到達可能な攻撃経路、影響、具体的な対処を示す。',
+    ],
+    [
+      'test-review',
+      '要求とテストの対応、境界値、異常系、回帰の検出力、非決定的な失敗、検証の独立性を確認する。見逃す不具合と追加すべき検証を示す。',
+    ],
   ];
   return [
     ...roles,
@@ -50,18 +110,23 @@ export function starterAssets(): AssetInput[] {
       type: 'workflow',
       name: 'Issue development',
       description: 'Issueを仕様策定から実装・コードレビューまで進める、編集可能なスターター。',
-      content: '各Stageの成果物と完了条件を確認し、定義済みの遷移を選択する。',
+      content:
+        '各Stageの成果物と完了条件を確認し、定義済みの遷移を選択する。成果物にはファイルパス、URL、または結果本文を記録する。\n\n' +
+        stages
+          .map(([, name, , artifact, , guidance]) => `### ${name}: ${artifact}\n${guidance}`)
+          .join('\n\n'),
       workflow: {
         developmentCapable: true,
         entryRole: 'orchestrator',
         entryStage: 'intake',
         completionCriteria: ['コードレビューが完了している'],
-        stages: stages.map(([id, name, role, artifact], i) => ({
+        stages: stages.map(([id, name, role, artifact, criterion], i) => ({
           id,
           name,
           role,
           taskType: 'feature-development',
-          completionCriteria: [`${name}の結果を確認した`],
+          expectedOutput: [artifact],
+          completionCriteria: [criterion],
           transitions:
             i === stages.length - 1
               ? []
@@ -75,17 +140,23 @@ export function starterAssets(): AssetInput[] {
         })),
       },
     },
-    ...['refactoring-review', 'architecture-review', 'security-review', 'test-review'].map(
-      (id) => ({
-        id,
-        type: 'skill',
-        name: id.split('-').join(' '),
-        description: 'Advisory Modeで使う単独レビュー',
-        activation: 'on-demand',
-        content:
-          '指定された対象を調査し、観測事実・根拠・改善候補を記載する。リポジトリの変更は開始しない。',
-      }),
-    ),
+    ...reviews.map(([id, focus]) => ({
+      id,
+      type: 'skill',
+      name: id.split('-').join(' '),
+      description: focus,
+      activation: 'on-demand',
+      skill: {
+        executionMode: 'standalone',
+        executionPermission: 'read-only',
+        role: 'reviewer',
+        expectedOutput: [`${id}-report`],
+        completionCriteria: ['確認範囲、根拠と影響を伴う指摘、未検証範囲を記録した'],
+      },
+      content:
+        focus +
+        '\n指定された対象を調査し、観測事実・根拠・改善候補を記載する。指摘がない場合も確認範囲と未検証範囲を示す。リポジトリの変更は開始しない。',
+    })),
     {
       id: 'journal',
       type: 'skill',

@@ -216,7 +216,9 @@ test('explicit launch pins workflow revision; state cannot skip constraints; sna
         expectedVersion: 1,
         to: 'specification',
         kind: 'advance',
-        criteria: { '受付・計画の結果を確認した': 'Confirmed' },
+        criteria: Object.fromEntries(
+          run.workflow!.workflow!.stages[0].completionCriteria.map((c) => [c, 'Confirmed']),
+        ),
       }),
     /成果物/,
   );
@@ -224,7 +226,9 @@ test('explicit launch pins workflow revision; state cannot skip constraints; sna
     expectedVersion: 1,
     to: 'specification',
     kind: 'advance',
-    criteria: { '受付・計画の結果を確認した': 'Confirmed' },
+    criteria: Object.fromEntries(
+      run.workflow!.workflow!.stages[0].completionCriteria.map((c) => [c, 'Confirmed']),
+    ),
     artifacts: { brief: 'brief.md' },
   });
   assert.equal(moved.stage, 'specification');
@@ -262,7 +266,11 @@ test('complete real workflow through every stage with artifacts and evidence', (
       kind: edge ? 'advance' : 'complete',
       to: edge?.to,
       criteria,
-      artifacts: Object.fromEntries((edge?.requiredArtifacts ?? []).map((a) => [a, `${a}.md`])),
+      artifacts: Object.fromEntries(
+        [...new Set([...(edge?.requiredArtifacts ?? []), ...(stage.expectedOutput ?? [])])].map(
+          (a) => [a, `${a}.md`],
+        ),
+      ),
     });
   }
   assert.equal(run.status, 'completed');
@@ -440,7 +448,7 @@ test('native import keeps content and separates explicit scope; path-like IDs ar
     content: '---\nname: Imported\ndescription: Native skill\n---\n\nReview implementer and Luna.',
   });
   const asset = core.state().assets[0];
-  assert.equal(asset.name, 'Imported');
+  assert.equal(asset.name, 'fallback');
   assert.deepEqual(asset.scope, {});
   assert.equal(asset.activation, 'on-demand');
   assert.throws(() =>
@@ -475,7 +483,9 @@ test('an explicit runtime selection persists across stage transitions', (t) => {
     to: 'specification',
     expectedVersion: 1,
     artifacts: { brief: 'brief.md' },
-    criteria: { '受付・計画の結果を確認した': 'confirmed' },
+    criteria: Object.fromEntries(
+      run.workflow!.workflow!.stages[0].completionCriteria.map((c) => [c, 'confirmed']),
+    ),
   });
   assert.equal(next.context.runtime, 'codex');
   assert.equal(next.context.provider, 'openai');

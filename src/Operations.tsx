@@ -13,6 +13,7 @@ import type { Review, Journal, ChangeSet } from '../server/domain.ts';
 import { Badge, CopyButton, Empty, Field, Json, Modal, relativeDate, statusLabel } from './ui.tsx';
 import { ProposalDetails, changeLabel } from './ProposalDetails.tsx';
 import { RevisionDiff } from './AssetHistory.tsx';
+import { ProposalPreview } from './ProposalPreview.tsx';
 import { AssetCosts } from './AssetCosts.tsx';
 
 type Mutate = (route: string, body: unknown) => Promise<any>;
@@ -308,6 +309,7 @@ function ReviewModal({
   const [proposal, setProposal] = useState(
     '{\n  "reason": "観測と提案の対応、scopeを選んだ理由",\n  "proposedBy": "external-runtime",\n  "items": []\n}',
   );
+  const [previewReady, setPreviewReady] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const action = async (route: string, body: unknown) => {
@@ -420,6 +422,13 @@ function ReviewModal({
               </div>
             ))
           )}
+          {review.operations.length > 0 && (
+            <ProposalPreview
+              reviewId={review.id}
+              revisionKey={JSON.stringify(review.operations)}
+              onReady={setPreviewReady}
+            />
+          )}
           {review.status === 'pending' && (
             <div className="modal-actions">
               <button
@@ -431,7 +440,7 @@ function ReviewModal({
                 却下する
               </button>
               <button
-                disabled={busy}
+                disabled={busy || (review.operations.length > 0 && !previewReady)}
                 className="button primary"
                 onClick={() => action(`/reviews/${review.id}/decision`, { approve: true })}
               >
