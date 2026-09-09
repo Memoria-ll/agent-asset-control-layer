@@ -1,6 +1,6 @@
 # Coreの追加契約
 
-開発要件v14のうち、Skill / Role / Task Typeの固有設定、Journal Review Proposal、Asset別Context Cost、revision比較の実装仕様です。会話による操作と初回導入は[運用ガイド](mcp-operations.md)を参照してください。VS Code Extensionは含みません。
+開発要件v15のうち、Skill / Role / Task Typeの固有設定、Journal Review Proposal、Asset別Context Cost、revision比較の実装仕様です。会話による操作、段階的なSkill取得、任意のモデル指定、初回分類と出力は[運用ガイド](mcp-operations.md)を参照してください。VS Code Extensionは含みません。
 
 ## Asset Typeごとの設定
 
@@ -16,7 +16,7 @@
 | role       | `role.responsibilities`, `role.expectedOutput`                           | 責務と期待する成果物。Runtimeへ渡すContextに含む                                                              |
 | task-type  | `taskType.objective`, `taskType.qualityCriteria`, `taskType.constraints` | 作業目的・品質基準・制約。Runtimeへ渡すContextに含む                                                          |
 
-Skillの各条件はResolverで評価し、不一致の必須SkillはRun起動・Handoffを拒否します。単独Skillは起動時のrevisionを固定します。既存Runに固定Skillがない場合は、起動時Snapshotから取得します。
+Skillの各条件はResolverで評価し、不一致の必須SkillはRun起動・Handoffを拒否します。適用可能なSkillは`available`として説明を提示し、本文をContextへ展開しません。明示取得時に対象を再検証します。単独Skillは起動時のrevisionを固定します。既存Runに固定Skillがない場合は、起動時Snapshotから取得します。`skill.steps`の新規保存は拒否し、旧データの手順も実行指示として展開しません。
 
 `workflow-development`のSkillは、Development-capable Workflow内でのみ利用できます。単独Skillを含むAdvisory Modeに開発権限は与えません。`read-only`は個々のSkillに渡す実行上の制約です。外部Runtimeによる実ファイル操作をOSレベルで遮断する機構ではありません。開発操作前のHandoff検証は引き続き必要です。
 
@@ -71,7 +71,7 @@ Skillの各条件はResolverで評価し、不一致の必須SkillはRun起動�
 | 削除済みも含むrevision履歴 | `/api/assets/:id/history`          | `aacl_asset_history`                   |
 | 指定revisionの比較         | `/api/assets/:id/diff?from=1&to=2` | `aacl_asset_diff` (`id`, `from`, `to`) |
 
-CostはSnapshotに保存されたAsset単位の推定tokensを、Asset ID / Asset revision / Workflow ID / Workflow revision / Stage / Roleで集計します。Snapshot作成・Handoffによる再取得も読込回数に含みます。除外・無効・利用不可のAssetは集計しません。現在のAssetを編集しても過去のCostは変化しません。新しい型契約も本文の推定量に含め、見出し等の共通整形分は含めません。旧Snapshotは当時の推定値を保持します。
+CostはSnapshotに保存されたAsset単位の推定tokensを、Asset ID / Asset revision / Workflow ID / Workflow revision / Stage / Roleで集計します。`candidatePresentations`はSkill候補の提示、`retrieved`は改訂を指定した個別取得記録、`reportedUses`は使用報告の件数です。参照をたどって後から取得したSkillも記録に含めます。候補の提示だけを本文取得や使用とは数えません。本文取得分には固定した改訂の本文と契約の推定量を加えます。現在のAssetを編集しても過去のCostは変化しません。旧Snapshotは当時の推定値を保持します。
 
 Diagnostics画面でWorkflow・revision・Stage・Roleを絞り込めます。実際のモデル課金額や、Assetと不具合の因果関係を表す指標ではありません。
 

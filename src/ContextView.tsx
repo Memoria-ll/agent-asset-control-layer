@@ -11,6 +11,8 @@ import type { Context, Resolution } from '../server/domain.ts';
 import type { Overview } from './api.ts';
 import { api } from './api.ts';
 import { Badge, CopyButton, DownloadButton, Empty, Field, Modal, statusLabel } from './ui.tsx';
+import { SkillCandidates } from './SkillCandidates.tsx';
+import { UnevaluatedConditions } from './ModelPolicy.tsx';
 
 export function ContextView({ data, initial = {} }: { data: Overview; initial?: Context }) {
   const [context, setContext] = useState<Context>(initial);
@@ -156,7 +158,7 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                 value={context.runtime ?? ''}
                 onChange={(e) => change('runtime', e.target.value)}
               >
-                <option value="">Bindingに従う</option>
+                <option value="">Stage / Roleの設定に従う</option>
                 {data.config.runtimes.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.name}
@@ -166,7 +168,7 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
             </Field>
             <Field label="Model">
               <select value={context.model ?? ''} onChange={(e) => change('model', e.target.value)}>
-                <option value="">Bindingに従う</option>
+                <option value="">Stage / Roleの設定、なければRuntime標準</option>
                 {data.config.models
                   .filter(
                     (m) =>
@@ -203,8 +205,9 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
             </Field>
             <fieldset className="context-skills">
               <legend>
-                追加で読み込むSkill <Badge>{requested.length}</Badge>
+                追加する利用候補 <Badge>{requested.length}</Badge>
               </legend>
+              <p className="muted small-text">Skillを選んでも本文は読み込みません。</p>
               <div className="choice-list">
                 {data.assets
                   .filter((a) => a.activation === 'on-demand' || a.type === 'skill')
@@ -262,7 +265,7 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                   .filter(([, v]) => v)
                   .map(([k, v]) => (
                     <span key={k}>
-                      {k}: <strong>{v}</strong>
+                      {k === 'model' ? '要求モデル' : k}: <strong>{v}</strong>
                     </span>
                   ))}
               </div>
@@ -273,6 +276,11 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                   ))}
                 </div>
               )}
+              <UnevaluatedConditions items={result.unevaluated} />
+              <SkillCandidates
+                key={JSON.stringify(result.context)}
+                candidates={result.skillCandidates}
+              />
               <section className="panel">
                 <div className="tabs">
                   <button
@@ -286,7 +294,13 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                     onClick={() => setTab('excluded')}
                   >
                     除外・競合{' '}
-                    <span>{result.entries.filter((e) => e.status !== 'included').length}</span>
+                    <span>
+                      {
+                        result.entries.filter(
+                          (e) => e.status !== 'included' && e.status !== 'available',
+                        ).length
+                      }
+                    </span>
                   </button>
                   <button
                     className={tab === 'content' ? 'active' : ''}
@@ -306,7 +320,9 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                   <div className="resolution-list">
                     {result.entries
                       .filter((e) =>
-                        tab === 'included' ? e.status === 'included' : e.status !== 'included',
+                        tab === 'included'
+                          ? e.status === 'included'
+                          : e.status !== 'included' && e.status !== 'available',
                       )
                       .map((e) => (
                         <details key={e.asset.id} className="resolution-entry">
@@ -340,14 +356,16 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                                 {r}
                               </p>
                             ))}
-                            {e.asset.content && (
+                            {e.asset.type !== 'skill' && e.asset.content && (
                               <pre className="context-content">{e.asset.content}</pre>
                             )}
                           </div>
                         </details>
                       ))}
                     {result.entries.filter((e) =>
-                      tab === 'included' ? e.status === 'included' : e.status !== 'included',
+                      tab === 'included'
+                        ? e.status === 'included'
+                        : e.status !== 'included' && e.status !== 'available',
                     ).length === 0 && (
                       <Empty title="該当するAssetはありません">
                         条件を変更するか、Assetを登録してください。

@@ -105,10 +105,51 @@ export function AssetContractEditor({
                 ))}
               </div>
               <p className="muted small-text">
-                Skillは選択済みのRole・Model・権限を引き継ぎます。
+                Skillは現在の担当者が必要なときに読みます。Role・モデルの選択や、別担当への委譲は行いません。
                 {value.skill.role &&
                   `旧定義のRole条件「${value.skill.role}」は保持されます。このRoleを自動選択する設定ではありません。`}
               </p>
+              {value.skill.steps !== undefined && (
+                <div className="callout">
+                  <strong>旧形式のSkill.stepsがあります</strong>
+                  <p>
+                    新しい保存には使えません。委譲や待機、レビュー工程はWorkflowに移してください。同じ担当者の手順は本文に記述できます。
+                  </p>
+                  <details>
+                    <summary>移行元の手順を確認（閲覧のみ）</summary>
+                    <ol>
+                      {value.skill.steps.map((step, i) => (
+                        <li key={i}>
+                          <strong>{step.skillId}</strong>
+                          {step.condition && <p>条件: {step.condition}</p>}
+                          {step.input && (
+                            <dl className="evidence-values">
+                              {Object.entries(step.input).map(([name, input]) => (
+                                <div key={name}>
+                                  <dt>{name}</dt>
+                                  <dd>{input}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          )}
+                          {step.output?.length ? <p>出力: {step.output.join(', ')}</p> : null}
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                  <button
+                    type="button"
+                    className="button small"
+                    onClick={() => {
+                      const next = { ...value.skill };
+                      delete next.steps;
+                      onChange('skill', next);
+                    }}
+                  >
+                    移行済みの旧stepsを取り除く
+                  </button>
+                </div>
+              )}
               {list('expectedOutput', '期待する成果物', value.skill.expectedOutput)}
               {list('completionCriteria', 'Skillの完了条件', value.skill.completionCriteria)}
             </>
@@ -155,6 +196,11 @@ export function ContractDetails({ asset }: { asset: Asset }) {
       <h3>実行条件・責務</h3>
       {asset.skill && (
         <>
+          {asset.skill.steps !== undefined && (
+            <p className="callout">
+              旧形式のSkill.stepsがあります。新規・更新の保存には使えません。委譲・工程管理はWorkflowに移してください。
+            </p>
+          )}
           <div className="button-row wrap">
             <Badge>{modes[asset.skill.executionMode]}</Badge>
             <Badge>{permissions[asset.skill.executionPermission]}</Badge>

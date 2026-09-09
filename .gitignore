@@ -1,5 +1,6 @@
 node_modules/
 dist/
+*.tsbuildinfo
 .aacl-data/
 playwright-report/
 test-results/

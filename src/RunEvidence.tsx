@@ -1,6 +1,8 @@
 import type { Run, Snapshot } from '../server/domain.ts';
 import type { Overview } from './api.ts';
-import { Badge, CopyButton } from './ui.tsx';
+import { Badge, CopyButton, statusLabel } from './ui.tsx';
+import { ModelPolicy, UnevaluatedConditions } from './ModelPolicy.tsx';
+import { SkillCandidates } from './SkillCandidates.tsx';
 
 export const executionLabels = {
   prepared: '準備済み',
@@ -36,7 +38,7 @@ export function snapshotLabel(snapshot: Overview['snapshots'][number], data: Ove
   const run = data.runs.find((r) => r.id === snapshot.runId);
   const attempt = run?.attempts?.find((a) => a.snapshotId === snapshot.id);
   const stage = run?.workflow?.workflow?.stages.find((s) => s.id === snapshot.stage);
-  return `${run?.title ?? snapshot.task ?? snapshot.runId} · ${stage?.name ?? snapshot.stage ?? '相談・準備'} · ${attempt ? `試行 ${attempt.id}` : '試行未記録'} · ${snapshot.context.model ?? 'モデル未記録'} · ${exactTime(snapshot.createdAt)} · ${snapshot.id}`;
+  return `${run?.title ?? snapshot.task ?? snapshot.runId} · ${stage?.name ?? snapshot.stage ?? '相談・準備'} · ${attempt ? `試行 ${attempt.id}` : '試行未記録'} · 要求: ${snapshot.modelSelection?.requestedModel ?? (snapshot.modelSelection ? 'Runtime標準' : (snapshot.context.model ?? 'Runtime標準'))} · 実際: ${snapshot.modelSelection?.actualModel ?? '未報告'} · ${exactTime(snapshot.createdAt)} · ${snapshot.id}`;
 }
 export function EvidenceValues({
   values,
@@ -165,10 +167,12 @@ export function RunAttempts({ run }: { run: Run }) {
               </Badge>
               <p className="evidence-meta">
                 <span>試行: {attempt.id}</span>
-                <span>
-                  {attempt.model ?? 'モデル未記録'} · {attempt.runtime ?? 'Runtime未記録'}
-                </span>
               </p>
+              <ModelPolicy
+                requestedModel={attempt.requestedModel}
+                actualModel={attempt.actualModel ?? attempt.model}
+                runtime={attempt.runtime}
+              />
               <p className="small-text">
                 開始: {exactTime(attempt.startedAt)}
                 {attempt.finishedAt && ` · 終了: ${exactTime(attempt.finishedAt)}`}
@@ -183,7 +187,7 @@ export function RunAttempts({ run }: { run: Run }) {
     </section>
   );
 }
-export function SavedContext({ snapshot }: { snapshot: Snapshot }) {
+export function SavedContext({ snapshot, run }: { snapshot: Snapshot; run?: Run }) {
   return (
     <>
       <p className="small-text muted">
@@ -194,13 +198,23 @@ export function SavedContext({ snapshot }: { snapshot: Snapshot }) {
       </p>
       <div className="evidence-meta">
         {Object.entries(snapshot.resolution.context)
-          .filter(([, value]) => value)
+          .filter(([dimension, value]) => value && dimension !== 'model')
           .map(([dimension, value]) => (
             <span key={dimension}>
               {dimension}: {value}
             </span>
           ))}
       </div>
+      <ModelPolicy
+        requestedModel={
+          snapshot.modelSelection?.requestedModel ??
+          (snapshot.modelSelection ? undefined : snapshot.resolution.context.model)
+        }
+        actualModel={snapshot.modelSelection?.actualModel}
+        runtime={snapshot.modelSelection?.actualRuntime ?? snapshot.resolution.context.runtime}
+        policy={snapshot.modelSelection?.policy}
+      />
+      <UnevaluatedConditions items={snapshot.resolution.unevaluated} />
       <h3>今回の指示</h3>
       {snapshot.settings && (
         <details>
@@ -220,7 +234,8 @@ export function SavedContext({ snapshot }: { snapshot: Snapshot }) {
           <ul>
             {snapshot.settings.config.bindings.map((binding, index) => (
               <li key={index}>
-                {binding.role} · {binding.model} · {binding.runtime} · {binding.workflow ?? '共通'}
+                {binding.role} · {binding.model ?? 'Runtimeの標準モデル'} · {binding.runtime} ·{' '}
+                {binding.workflow ?? '共通'}
               </li>
             ))}
           </ul>
@@ -230,6 +245,11 @@ export function SavedContext({ snapshot }: { snapshot: Snapshot }) {
       <h3>渡したContext</h3>
       <CopyButton text={snapshot.resolution.content} label="Contextをコピー" />
       <pre className="context-content">{snapshot.resolution.content}</pre>
+      <SkillCandidates
+        candidates={snapshot.resolution.skillCandidates}
+        reads={run?.skillReads}
+        attemptId={run?.attempts?.find((a) => a.snapshotId === snapshot.id)?.id}
+      />
       <details>
         <summary>適用したAssetと理由</summary>
         {snapshot.resolution.entries.map((entry) => (
@@ -237,7 +257,7 @@ export function SavedContext({ snapshot }: { snapshot: Snapshot }) {
             <strong>
               {entry.asset.name} · r{entry.asset.revision}
             </strong>
-            <Badge>{entry.status}</Badge>
+            <Badge>{statusLabel(entry.status)}</Badge>
             {entry.reasons.map((reason, i) => (
               <p key={i}>{reason}</p>
             ))}

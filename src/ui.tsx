@@ -25,6 +25,7 @@ export function statusLabel(value: string) {
         approved: '承認済み',
         rejected: '却下',
         included: '適用',
+        available: '候補・説明のみ',
         excluded: '対象外',
         overridden: '置き換え',
         disabled: '無効',

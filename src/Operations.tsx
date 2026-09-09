@@ -95,7 +95,8 @@ export function JournalModal({
               <option value="">指定なし / Contextの観測</option>
               {attempts.map((attempt) => (
                 <option key={attempt.id} value={attempt.id}>
-                  {attempt.id} · {attempt.model ?? 'モデル未記録'} · {exactTime(attempt.startedAt)}
+                  {attempt.id} · 実際: {attempt.actualModel ?? attempt.model ?? '未報告'} ·{' '}
+                  {exactTime(attempt.startedAt)}
                 </option>
               ))}
             </select>

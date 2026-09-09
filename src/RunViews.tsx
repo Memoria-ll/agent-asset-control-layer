@@ -14,6 +14,13 @@ import type { Core } from '../server/core.ts';
 import { api, type Overview } from './api.ts';
 import { Badge, Empty, Field, Modal, relativeDate, CopyButton, statusLabel } from './ui.tsx';
 import {
+  ModelPolicy,
+  stageAssignment,
+  modelSelectionConflict,
+  UnevaluatedConditions,
+} from './ModelPolicy.tsx';
+import { SkillCandidates } from './SkillCandidates.tsx';
+import {
   executionLabels,
   eventLabels,
   executionLabel,
@@ -91,11 +98,21 @@ export function Launcher({
   const [model, setModel] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const selectedWorkflow = data.assets.find((a) => a.id === selected && a.type === 'workflow');
+  const entryStage = selectedWorkflow?.workflow?.stages.find(
+    (s) => s.id === selectedWorkflow.workflow?.entryStage,
+  );
+  const assignment = stageAssignment(data.config, selectedWorkflow?.id, entryStage, {
+    model: model || undefined,
+    runtime: runtime || undefined,
+  });
+  const conflict = modelSelectionConflict(data.config, assignment.model, assignment.runtime);
   return (
     <Modal title="新しい実行" onClose={onClose}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
+          if (conflict) return;
           setBusy(true);
           setError('');
           try {
@@ -184,7 +201,7 @@ export function Launcher({
                 setModel('');
               }}
             >
-              <option value="">Role bindingに従う</option>
+              <option value="">Stage / Roleの設定に従う</option>
               {data.config.runtimes.map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.name}
@@ -194,7 +211,7 @@ export function Launcher({
           </Field>
           <Field label="Model">
             <select value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="">Role binding / 指定なし</option>
+              <option value="">Stage / Roleの設定、なければRuntime標準</option>
               {data.config.models
                 .filter(
                   (m) =>
@@ -209,6 +226,17 @@ export function Launcher({
             </select>
           </Field>
         </div>
+        <p className="muted small-text">
+          モデル登録は任意です。明示指定がなければモデル引数を付けずに起動し、実際のモデルはRuntimeの報告で確認します。
+        </p>
+        <p className="small-text">
+          今回のモデル指定: {assignment.model ?? '指定なし · Runtimeの標準設定'}
+        </p>
+        {conflict && (
+          <div className="error" role="alert">
+            {conflict}
+          </div>
+        )}
         {error && (
           <div className="error" role="alert">
             {error}
@@ -218,7 +246,7 @@ export function Launcher({
           <button type="button" className="button" onClick={onClose}>
             キャンセル
           </button>
-          <button className="button primary" disabled={busy}>
+          <button className="button primary" disabled={busy || !!conflict}>
             <Play size={15} />
             {busy ? '起動中…' : '実行を開始'}
           </button>
@@ -471,10 +499,21 @@ export function Runs({
                 </div>
                 <div className="panel-body">
                   <h2>{stage?.name ?? runName(run, data)}</h2>
-                  <p className="muted">
-                    {stage?.role ?? run.skillId ?? '質問・調査・検討'}
-                    {run.context.model ? ` · ${run.context.model}` : ''}
-                  </p>
+                  <p className="muted">{stage?.role ?? run.skillId ?? '質問・調査・検討'}</p>
+                  {(() => {
+                    const saved = data.snapshots.find((s) => s.id === run.snapshotIds.at(-1));
+                    return (
+                      <ModelPolicy
+                        requestedModel={
+                          saved?.modelSelection?.requestedModel ??
+                          (saved?.modelSelection ? undefined : run.context.model)
+                        }
+                        actualModel={saved?.modelSelection?.actualModel}
+                        runtime={saved?.modelSelection?.actualRuntime ?? run.context.runtime}
+                        policy={saved?.modelSelection?.policy}
+                      />
+                    );
+                  })()}
                   <ul className="criteria-list">
                     {run.requirements.completionCriteria.map((c) => (
                       <li key={c}>
@@ -581,6 +620,17 @@ export function Runs({
             {error && <div className="error">{error}</div>}
             <RunEvidence run={run} />
             <RunAttempts run={run} />
+            {(() => {
+              const saved = data.snapshots.find((s) => s.id === run.snapshotIds.at(-1));
+              return (
+                <SkillCandidates
+                  key={saved?.id ?? run.id}
+                  candidates={saved?.skillCandidates}
+                  reads={run.skillReads}
+                  attemptId={run.attempts?.find((a) => a.snapshotId === saved?.id)?.id}
+                />
+              );
+            })()}
             <section className="panel">
               <div className="panel-head">
                 <h3>記録した成果物</h3>
@@ -694,7 +744,11 @@ export function Runs({
       )}
       {snapshot && (
         <Modal title="保存されたContext" wide onClose={() => setSnapshot(null)}>
-          <SavedContext snapshot={snapshot} />
+          <SavedContext
+            key={snapshot.id}
+            snapshot={snapshot}
+            run={data.runs.find((r) => r.id === snapshot.runId)}
+          />
         </Modal>
       )}
       {handoff && (
@@ -706,11 +760,37 @@ export function Runs({
           <p className="small-text muted">
             {handoff.runId} · version {handoff.version} · {handoff.stage ?? '相談・準備'}
           </p>
+          <p>
+            <Badge>
+              {handoff.launch?.kind === 'subagent'
+                ? '担当の子エージェントを起動'
+                : '現在の担当者で実行'}
+            </Badge>{' '}
+            ·{' '}
+            {handoff.launch?.modelPolicy === 'explicit' ? 'モデルを明示指定' : 'Runtimeの標準設定'}
+          </p>
+          <ModelPolicy
+            requestedModel={handoff.requestedModel}
+            actualModel={handoff.actualModel}
+            runtime={handoff.runtime?.name}
+            policy={handoff.launch?.modelPolicy}
+          />
+          <UnevaluatedConditions items={handoff.unevaluated} />
           <h3>今回の指示</h3>
           <pre className="context-content">{handoff.task}</pre>
           <h3>Context</h3>
           <CopyButton text={handoff.context} label="Contextをコピー" />
           <pre className="context-content">{handoff.context}</pre>
+          <SkillCandidates
+            key={handoff.snapshotId}
+            candidates={handoff.skillCandidates}
+            reads={data.runs.find((r) => r.id === handoff.runId)?.skillReads}
+            attemptId={
+              data.runs
+                .find((r) => r.id === handoff.runId)
+                ?.attempts?.find((a) => a.snapshotId === handoff.snapshotId)?.id
+            }
+          />
           <h3>完了条件</h3>
           <ul>
             {handoff.completionCriteria.map((c) => (

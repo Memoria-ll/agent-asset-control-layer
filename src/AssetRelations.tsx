@@ -366,22 +366,30 @@ export function RelationsExplorer({
         <p className="muted small-text">Roleが利用するモデルと資産</p>
         {bindings.map((binding, index) => (
           <div className="model-branch" key={index}>
-            <button
-              className="button"
-              onClick={() => {
-                setRoot(`model:${binding.model}`);
-                setTargetId('');
-              }}
-            >
-              {data.config.models.find((m) => m.id === binding.model)?.name ?? binding.model}
-            </button>
+            {binding.model ? (
+              <button
+                className="button"
+                onClick={() => {
+                  setRoot(`model:${binding.model}`);
+                  setTargetId('');
+                }}
+              >
+                {data.config.models.find((m) => m.id === binding.model)?.name ?? binding.model}
+              </button>
+            ) : (
+              <strong>Runtimeの標準モデル</strong>
+            )}
             <span className="muted small-text">
               {binding.runtime} · {binding.workflow ? 'Workflow固有の割り当て' : '共通の割り当て'}
             </span>
-            <div className="button-row wrap">{modelAssets(binding.model).map(assetButton)}</div>
+            {binding.model && (
+              <div className="button-row wrap">{modelAssets(binding.model).map(assetButton)}</div>
+            )}
           </div>
         ))}
-        {!bindings.length && <p className="muted">モデルの割り当ては未登録です。</p>}
+        {!bindings.length && (
+          <p className="muted">Runtimeの割り当ては未登録です。モデル指定は任意です。</p>
+        )}
         {role.relations?.map((relation, index) => (
           <RelationCard key={index} relation={relation} data={data} onSelect={onSelect} />
         ))}
@@ -402,7 +410,7 @@ export function RelationsExplorer({
       </div>
       <div className="panel-body">
         <p className="muted">
-          Workflowで工程と担当を選び、Roleでモデルと利用資産を指定します。モデルに紐づく資産には、対象Assetのmodel適用条件を使います。同じIDは共有された同一資産です。
+          Workflowで工程と担当を選び、RoleでRuntimeと利用資産を指定します。モデルの指定は任意です。モデルに紐づく資産には、対象Assetのmodel適用条件を使います。同じIDは共有された同一資産です。
         </p>
         <Field label="関係を確認するWorkflow・Role・Model">
           <select

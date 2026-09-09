@@ -35,6 +35,7 @@ import { AssetHistory } from './AssetHistory.tsx';
 import { AssetMetadata, AssetFiles, RelationsExplorer } from './AssetRelations.tsx';
 import { WorkflowActivity } from './WorkflowActivity.tsx';
 import { runName } from './RunEvidence.tsx';
+import { stageAssignment } from './ModelPolicy.tsx';
 import { Launcher, Runs, WorkflowFlow } from './RunViews.tsx';
 import { ContextView } from './ContextView.tsx';
 import { Diagnostics, History, JournalModal, Journals } from './Operations.tsx';
@@ -665,13 +666,23 @@ function Workflows({
                   <span className="eyebrow">ROLE / MODEL</span>
                   <strong>{stage?.role}</strong>
                   <span>
-                    {data.config.bindings.find(
-                      (b) => b.role === stage?.role && b.workflow === selected.id,
-                    )?.model ??
-                      data.config.bindings.find((b) => b.role === stage?.role && !b.workflow)
-                        ?.model ??
-                      'Model未指定'}
+                    {stageAssignment(data.config, selected.id, stage).model ??
+                      'Runtimeの標準モデル'}
                   </span>
+                  <span>
+                    {stageAssignment(data.config, selected.id, stage).runtime ?? 'Runtime未指定'}
+                  </span>
+                  {stage?.modelConstraint?.model && (
+                    <span>必須モデル: {stage.modelConstraint.model}</span>
+                  )}
+                  {stage?.modelConstraint?.differentFromStage && (
+                    <span>
+                      {selected.workflow?.stages.find(
+                        (s) => s.id === stage.modelConstraint?.differentFromStage,
+                      )?.name ?? stage.modelConstraint.differentFromStage}
+                      とは別の実モデルが必要
+                    </span>
+                  )}
                 </div>
                 <div>
                   <span className="eyebrow">TRANSITIONS</span>

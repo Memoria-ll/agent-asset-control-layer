@@ -4,6 +4,7 @@ import { configSchema, modelIdSchema, type Config } from '../server/domain.ts';
 import type { Overview } from './api.ts';
 import { Badge, Field, Modal, Empty } from './ui.tsx';
 import { ModelDiscovery } from './ModelDiscovery.tsx';
+import { modelSelectionConflict } from './ModelPolicy.tsx';
 
 export function RuntimeConfigEditor({
   data,
@@ -84,7 +85,9 @@ export function RuntimeConfigEditor({
         {tab === 'models' ? (
           <>
             <div className="section-head compact">
-              <p className="muted">ログイン・ローカルサーバーから認識するか、手動で登録します。</p>
+              <p className="muted">
+                モデル登録は任意です。指定しない場合はRuntimeの標準設定で起動します。
+              </p>
               <div className="button-row wrap">
                 <button
                   type="button"
@@ -160,22 +163,24 @@ export function RuntimeConfigEditor({
                 ))}
               </div>
             ) : (
-              <Empty title="使うモデルを登録">モデルを追加すると、Roleに割り当てられます。</Empty>
+              <Empty title="モデル未登録でも実行できます">
+                RoleにRuntimeを割り当てれば、モデル引数なしで起動できます。特定のモデルを指定するときに登録してください。
+              </Empty>
             )}
           </>
         ) : (
           <>
             <div className="section-head compact">
-              <p className="muted">RoleとWorkflowに、使うモデルを割り当てます。</p>
+              <p className="muted">
+                RoleとWorkflowにRuntimeを割り当てます。モデルの指定は任意です。
+              </p>
               <button
                 type="button"
                 className="button"
                 disabled={
-                  busy || !config.models.length || !data.assets.some((a) => a.type === 'role')
+                  busy || !config.runtimes.length || !data.assets.some((a) => a.type === 'role')
                 }
-                onClick={() =>
-                  setBindingEditor({ index: -1, value: { role: '', model: '', runtime: '' } })
-                }
+                onClick={() => setBindingEditor({ index: -1, value: { role: '', runtime: '' } })}
               >
                 <Plus size={15} />
                 割り当てを追加
@@ -198,7 +203,14 @@ export function RuntimeConfigEditor({
                       </small>
                     </div>
                     <span className="config-assigned-model">
-                      {config.models.find((m) => m.id === b.model)?.name ?? b.model}
+                      {config.models.find((m) => m.id === b.model)?.name ??
+                        b.model ??
+                        'Runtimeの標準モデル'}
+                      {modelSelectionConflict(config, b.model, b.runtime) && (
+                        <span className="error small-text">
+                          {modelSelectionConflict(config, b.model, b.runtime)}
+                        </span>
+                      )}
                     </span>
                     <button
                       type="button"
@@ -227,9 +239,7 @@ export function RuntimeConfigEditor({
               </div>
             ) : (
               <Empty title="Roleへの割り当てはまだありません">
-                {config.models.length
-                  ? 'Roleとモデルを選んで、実行時の既定を設定します。'
-                  : '先に「モデル」タブから、利用するモデルを追加してください。'}
+                RoleとRuntimeを選んで、実行時の既定を設定します。モデルを登録する必要はありません。
               </Empty>
             )}
           </>
@@ -488,12 +498,14 @@ function BindingForm({
   const [binding, setBinding] = useState(entry.value);
   const [error, setError] = useState('');
   const provider = config.models.find((m) => m.id === binding.model)?.provider;
-  const runtimes = config.runtimes.filter((r) => r.provider === provider);
+  const runtimes = config.runtimes.filter((r) => !provider || r.provider === provider);
+  const conflict = modelSelectionConflict(config, binding.model, binding.runtime);
   return (
-    <Modal title="Roleにモデルを割り当てる" onClose={onClose}>
+    <Modal title="RoleにRuntime・モデルを割り当てる" onClose={onClose}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          if (conflict) return;
           if (
             config.bindings.some(
               (b, i) =>
@@ -543,9 +555,14 @@ function BindingForm({
         </Field>
         <Field label="Model">
           <select
-            required
-            value={binding.model}
+            value={binding.model ?? ''}
             onChange={(e) => {
+              if (!e.target.value) {
+                const next = { ...binding };
+                delete next.model;
+                setBinding(next);
+                return;
+              }
               const model = config.models.find((m) => m.id === e.target.value)!;
               const choices = config.runtimes.filter((r) => r.provider === model.provider);
               setBinding({
@@ -559,9 +576,7 @@ function BindingForm({
               });
             }}
           >
-            <option value="" disabled>
-              モデルを選択
-            </option>
+            <option value="">指定なし · Runtimeの標準モデル</option>
             {config.models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
@@ -572,7 +587,6 @@ function BindingForm({
         <Field label="Runtime">
           <select
             required
-            disabled={!binding.model}
             value={binding.runtime}
             onChange={(e) => setBinding({ ...binding, runtime: e.target.value })}
           >
@@ -586,6 +600,14 @@ function BindingForm({
             ))}
           </select>
         </Field>
+        <p className="muted small-text">
+          指定なしの場合はモデル引数を付けずに起動します。実際のモデルはRuntimeの開始報告で確認します。
+        </p>
+        {conflict && (
+          <p className="error" role="alert">
+            {conflict}
+          </p>
+        )}
         {error && (
           <div className="error" role="alert">
             {error}
@@ -595,7 +617,9 @@ function BindingForm({
           <button type="button" className="button" onClick={onClose}>
             キャンセル
           </button>
-          <button className="button primary">割り当てる</button>
+          <button className="button primary" disabled={!!conflict}>
+            割り当てる
+          </button>
         </div>
       </form>
     </Modal>

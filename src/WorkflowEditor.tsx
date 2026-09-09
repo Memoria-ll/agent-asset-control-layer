@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Plus, Trash2, ArrowUp, ArrowDown, RotateCcw } from 'lucide-react';
-import { assetSchema, type Asset, type AssetInput } from '../server/domain.ts';
+import { assetSchema, type Asset, type AssetInput, type Config } from '../server/domain.ts';
+import { modelSelectionConflict } from './ModelPolicy.tsx';
 import { Badge, Field } from './ui.tsx';
 import { TokenPicker } from './TokenPicker.tsx';
 
@@ -49,11 +50,13 @@ export function TextList({
 export function WorkflowEditor({
   value,
   assets,
+  config,
   onCreateRole,
   onChange: onValueChange,
 }: {
   value: Definition;
   assets: Asset[];
+  config: Config;
   onCreateRole?: () => void;
   onChange: (value: Definition) => void;
 }) {
@@ -73,6 +76,14 @@ export function WorkflowEditor({
       entryRole: value.entryStage === stage.id ? next.role : value.entryRole,
       stages: value.stages.map((s, i) => ({
         ...(i === index ? next : s),
+        ...((i === index ? next : s).modelConstraint?.differentFromStage === stage.id
+          ? {
+              modelConstraint: {
+                ...(i === index ? next : s).modelConstraint,
+                differentFromStage: next.id,
+              },
+            }
+          : {}),
         transitions: (i === index ? next : s).transitions.map((t) => ({
           ...t,
           to: t.to === stage.id ? next.id : t.to,
@@ -358,6 +369,109 @@ export function WorkflowEditor({
               <option value="false">完了を許可しない</option>
             </select>
           </Field>
+          <details className="form-section">
+            <summary>Runtime・モデルの指定（任意）</summary>
+            <p className="muted small-text">
+              起動時の指定 → Stage →
+              Roleの既定を使います。どこにもモデル指定がなければRuntimeの標準設定で起動します。必須条件は、この優先順とは別に検証されます。
+            </p>
+            <div className="form-grid">
+              <Field label="StageのRuntime">
+                <select
+                  value={stage.runtime ?? ''}
+                  onChange={(e) => changeStage({ ...stage, runtime: e.target.value || undefined })}
+                >
+                  <option value="">Roleの設定に従う</option>
+                  {config.runtimes.map((runtime) => (
+                    <option key={runtime.id} value={runtime.id}>
+                      {runtime.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Stageのモデル">
+                <select
+                  value={stage.model ?? ''}
+                  onChange={(e) => changeStage({ ...stage, model: e.target.value || undefined })}
+                >
+                  <option value="">Roleの設定、なければRuntime標準</option>
+                  {config.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="必須モデル">
+                <select
+                  value={stage.modelConstraint?.model ?? ''}
+                  onChange={(e) => {
+                    const modelConstraint = {
+                      ...stage.modelConstraint,
+                      model: e.target.value || undefined,
+                    };
+                    changeStage({
+                      ...stage,
+                      modelConstraint:
+                        modelConstraint.model || modelConstraint.differentFromStage
+                          ? modelConstraint
+                          : undefined,
+                    });
+                  }}
+                >
+                  <option value="">制約なし</option>
+                  {config.models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field
+                label="このStageとは別の実モデルを使う"
+                hint="比較にはRuntimeが報告した実モデルが必要です。未報告なら判定できません。"
+              >
+                <select
+                  value={stage.modelConstraint?.differentFromStage ?? ''}
+                  onChange={(e) => {
+                    const modelConstraint = {
+                      ...stage.modelConstraint,
+                      differentFromStage: e.target.value || undefined,
+                    };
+                    changeStage({
+                      ...stage,
+                      modelConstraint:
+                        modelConstraint.model || modelConstraint.differentFromStage
+                          ? modelConstraint
+                          : undefined,
+                    });
+                  }}
+                >
+                  <option value="">制約なし</option>
+                  {value.stages
+                    .filter((other) => other.id !== stage.id)
+                    .map((other) => (
+                      <option key={other.id} value={other.id}>
+                        {other.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            </div>
+            {modelSelectionConflict(
+              config,
+              stage.model ?? stage.modelConstraint?.model,
+              stage.runtime,
+            ) && (
+              <p className="error" role="alert">
+                {modelSelectionConflict(
+                  config,
+                  stage.model ?? stage.modelConstraint?.model,
+                  stage.runtime,
+                )}
+              </p>
+            )}
+          </details>
           <TextList
             label="Stageの成果物"
             value={stage.expectedOutput ?? []}

@@ -479,7 +479,7 @@ test('MCP run reads do not mutate, conflicts expose latest run, and runtime/revi
   });
   assert.equal(failed.executionStatus, 'failed');
   const journal = await call('aacl_journal_append', {
-    snapshotId: handoff.snapshotId,
+    snapshotId: started.attempts[0].snapshotId,
     kind: 'defect',
     observation: 'The runtime failed',
     attemptId: 'attempt-one',

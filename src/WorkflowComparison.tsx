@@ -87,7 +87,7 @@ export function WorkflowComparison({ data }: { data: Overview }) {
                       'Workflow / 版',
                       '比較条件',
                       '実行数',
-                      'Context保存',
+                      '準備Context保存',
                       'AIの試行',
                       '結果 / 失敗',
                       '人間の判断待ち',
@@ -111,11 +111,12 @@ export function WorkflowComparison({ data }: { data: Overview }) {
                             {data.projects.find((p) => p.id === group.project)?.name ??
                               group.project ??
                               'Global'}{' '}
-                            ·{' '}
+                            · 実際:{' '}
                             {data.config.models.find((m) => m.id === group.model)?.name ??
                               group.model ??
-                              'モデル未記録'}
+                              '未報告'}
                           </summary>
+                          <p>要求モデル: {group.requestedModel ?? '指定なし · Runtime標準'}</p>
                           <p>
                             Runtime: {group.runtime ?? '未記録'} · 設定版:{' '}
                             {group.settingsVersion ?? '未記録'}

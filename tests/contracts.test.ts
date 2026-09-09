@@ -68,8 +68,10 @@ test('Skill/Role/Task Type contracts validate type and references and appear in 
   assert.equal(run.context.role, undefined);
   assert.equal(run.context.taskType, undefined);
   const handoff = core.handoff(run.id, {});
-  for (const content of ['Evidence checked', 'read-only'])
-    assert.ok(handoff.context.includes(content), content);
+  assert.ok(!handoff.context.includes('Evidence checked'));
+  const retrieved = core.skillGet({ id: 'skill', revision: 1, snapshotId: handoff.snapshotId });
+  assert.deepEqual(retrieved.asset.skill?.completionCriteria, ['Evidence checked']);
+  assert.equal(retrieved.asset.skill?.executionPermission, 'read-only');
   assert.ok(!handoff.assets.some((a) => ['reader', 'analysis'].includes(a.id)));
   const assigned = core.preview({
     context: { role: 'reader', taskType: 'analysis' },
@@ -195,6 +197,12 @@ test('Skill mode/role/task/permission are enforced without bypassing mandatory o
   save(workflow(true), 1);
   const run = core.startRun({ workflowId: 'flow' });
   assert.equal(core.handoff(run.id, { action: 'development' }).developmentAllowed, true);
+  core.skillGet({
+    id: 'skill',
+    revision: 1,
+    snapshotId: core.state().state.runs[0].snapshotIds.at(-1),
+    usage: 'use',
+  });
   const version = core.state().state.runs[0].version;
   assert.throws(
     () => core.transition(run.id, { kind: 'complete', expectedVersion: version }),
@@ -379,7 +387,7 @@ test('No-change and legacy proposals remain supported with explicit evidence pro
   assert.deepEqual(p.items?.[0].evidence.journalIds, [j.id]);
 });
 
-test('Asset metrics use saved per-revision estimates and count only included assets', (t) => {
+test('Asset metrics preserve revision estimates and distinguish body application from Skill candidates', (t) => {
   const { core, save } = fixture(t);
   save({ id: 'cost', type: 'rule', name: 'Old name', content: 'abcd' });
   save({
@@ -391,18 +399,27 @@ test('Asset metrics use saved per-revision estimates and count only included ass
   });
   const run = core.startRun({});
   core.handoff(run.id, {});
-  const old = core.assetMetrics();
+  const old = core.assetMetrics().filter((m) => m.assetId === 'cost');
   assert.equal(old.length, 1);
   assert.equal(old[0].snapshots, 2);
   assert.equal(old[0].estimatedTokens, 2);
   save({ id: 'cost', type: 'rule', name: 'New name', content: 'abcd'.repeat(50) }, 1);
-  assert.deepEqual(core.assetMetrics(), old);
+  assert.deepEqual(
+    core.assetMetrics().filter((m) => m.assetId === 'cost'),
+    old,
+  );
   core.startRun({});
-  const metrics = core.assetMetrics();
+  const metrics = core.assetMetrics().filter((m) => m.assetId === 'cost');
   assert.equal(metrics.length, 2);
   assert.equal(metrics.find((m) => m.assetRevision === 1)?.name, 'Old name');
   assert.equal(metrics.find((m) => m.assetRevision === 2)?.estimatedTokens, 50);
   assert.ok(metrics.every((m) => m.assetId !== 'excluded'));
+  assert(
+    core
+      .assetMetrics()
+      .filter((m) => m.assetId.startsWith('aacl-'))
+      .every((m) => m.candidatePresentations > 0 && m.retrieved === 0 && m.reportedUses === 0),
+  );
 });
 
 test('History compares content and typed metadata across deletion, recreation and rollback', (t) => {

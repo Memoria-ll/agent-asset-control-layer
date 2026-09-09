@@ -84,13 +84,6 @@ export function validateRelations(assets: Asset[]) {
           409,
         );
     }
-    for (const step of a.skill?.steps ?? [])
-      if (catalog.get(step.skillId)?.type !== 'skill')
-        throw new DomainError(
-          'RELATION_DIRECTION',
-          `Skill内の手順にはSkillを指定してください: ${step.skillId}`,
-          409,
-        );
   }
   // Required execution cycles cannot be satisfied; mutual documentation links are valid.
   const visiting = new Set<string>(),
@@ -103,7 +96,6 @@ export function validateRelations(assets: Asset[]) {
     const asset = catalog.get(id);
     for (const dependency of asset?.dependencies ?? []) visit(dependency);
     for (const r of asset?.relations ?? []) if (r.kind === 'required') visit(r.target);
-    for (const step of asset?.skill?.steps ?? []) if (!step.condition) visit(step.skillId);
     visiting.delete(id);
     visited.add(id);
   }

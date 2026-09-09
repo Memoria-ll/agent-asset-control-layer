@@ -7,13 +7,27 @@ A local control layer for using your development method repeatedly: choose a Wor
 ## Why this exists
 
 Teach AACL your development method once, then ask your connected AI to use it:
-`/issue-development #123`. A Workflow defines the stages, responsibilities, model assignments,
+`/issue-development #123`. A Workflow defines the stages, responsibilities, optional model assignments,
 review returns, and completion conditions. The AI receives the saved instructions for its current
 stage. You supply the target and any instructions specific to this task.
+
+The initial context includes Rule instructions and a catalog of Skill descriptions. The AI retrieves
+the selected Skill body and supporting files individually, using the saved revision. Candidate
+presentation, retrieval, and reported use are recorded separately. An omitted model leaves selection
+to the runtime; AACL does not assume the child uses its parent's model.
 
 Start by importing existing Skills and Rules, or ask the AI to propose a Workflow. Initial authoring
 does not require a previous execution or an invented Journal. Inspect the proposed changes in your
 conversation and authorize them there. The browser UI also supports inspection and manual editing.
+
+The built-in authoring Skill supports consultation and classifies the actual responsibility of each
+source. A file inside a `skills` directory can become a Workflow, Roles, and Skills together when it
+controls delegation. Structured Skill orchestration is retired; existing stored data remains readable.
+
+The built-in export Skill uses `aacl_export_bundle` to retrieve a consistent bundle with asset revisions,
+hashes, local references, and limitations. Standalone Workflow bundles contain local orchestration
+instructions and supporting files for use after AACL stops. Connected bundles explicitly require MCP.
+See the [operating guide](docs/mcp-operations.md) for individual retrieval and CLI export.
 
 After execution, record observations against the actual attempt. Ask for a review, approve a
 concrete change, and use the revised method next time. Past executions preserve their original

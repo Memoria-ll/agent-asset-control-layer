@@ -319,7 +319,7 @@ test('scope picker commits multiple values and candidates; context skills can be
   });
   await page.getByRole('button', { name: 'Context Preview', exact: true }).click();
   const skill = page.getByRole('checkbox', { name: 'security review', exact: true });
-  const included = page.locator('.resolution-list');
+  const included = page.locator('.skill-candidates');
   await expect(included.getByText('security review', { exact: true })).toHaveCount(0);
   await skill.check();
   await expect(included.getByText('security review', { exact: true })).toBeVisible();
