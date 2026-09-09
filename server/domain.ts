@@ -51,6 +51,7 @@ export const stageSchema = z
     requiredCapabilities: z.array(idSchema).default([]),
     expectedOutput: z.array(z.string().trim().min(1)).optional(),
     completionCriteria: z.array(z.string().min(1)).default([]),
+    canComplete: z.boolean().optional(),
     transitions: z
       .array(
         z
@@ -67,6 +68,7 @@ export const stageSchema = z
 export const workflowSchema = z
   .object({
     developmentCapable: z.boolean(),
+    requiredEnforcement: z.array(z.enum(['repository', 'external', 'tools'])).optional(),
     entryStage: idSchema,
     entryRole: idSchema,
     stages: z.array(stageSchema).min(1),
@@ -83,7 +85,53 @@ export const assetTypes = [
   'policy',
   'capability',
   'template',
+  'other',
 ] as const;
+export const relationSchema = z
+  .object({
+    target: idSchema,
+    kind: z.enum(['required', 'conditional', 'reference']),
+    scope: scopeSchema.optional(),
+    condition: z.string().trim().min(1).optional(),
+    origin: z.enum(['manual', 'extracted']),
+    source: z
+      .object({
+        path: z.string().min(1),
+        line: z.number().int().positive(),
+        text: z.string().max(20000),
+      })
+      .strict()
+      .optional(),
+    reason: z.string().trim().min(1),
+  })
+  .strict()
+  .superRefine((r, ctx) => {
+    if (r.kind === 'conditional' && !r.condition && !Object.keys(r.scope ?? {}).length)
+      ctx.addIssue({ code: 'custom', message: '条件付き利用には条件が必要です' });
+  });
+export type AssetRelation = z.infer<typeof relationSchema>;
+export const bundlePathSchema = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine(
+    (p) =>
+      !p.includes('\\') &&
+      !p.includes(':') &&
+      !/[\x00-\x1f\x7f]/.test(p) &&
+      p
+        .split('/')
+        .every(
+          (part) =>
+            !!part &&
+            part !== '.' &&
+            part !== '..' &&
+            !part.endsWith('.') &&
+            !part.endsWith(' ') &&
+            !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(part),
+        ),
+    '補助ファイルには安全な相対パスが必要です',
+  );
 const contractList = z.array(z.string().trim().min(1)).max(100).default([]);
 export const skillSchema = z
   .object({
@@ -93,6 +141,19 @@ export const skillSchema = z
     expectedOutput: contractList,
     completionCriteria: contractList,
     executionPermission: z.enum(['read-only', 'workflow-development']).default('read-only'),
+    steps: z
+      .array(
+        z
+          .object({
+            skillId: idSchema,
+            condition: z.string().optional(),
+            input: z.record(z.string()).optional(),
+            output: z.array(z.string().min(1)).optional(),
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
   })
   .strict();
 export const roleSchema = z
@@ -121,6 +182,24 @@ export const assetSchema = z
     mandatory: z.boolean().default(false),
     enabled: z.boolean().default(true),
     dependencies: z.array(idSchema).default([]),
+    relations: z.array(relationSchema).max(200).optional(),
+    files: z
+      .record(bundlePathSchema, z.string().max(200000))
+      .refine(
+        (files) =>
+          Object.keys(files).length <= 200 &&
+          Object.values(files).reduce((n, s) => n + s.length, 0) <= 2000000,
+        '補助ファイルは200件・合計200万文字以内です',
+      )
+      .optional(),
+    sources: z
+      .array(
+        z
+          .object({ host: z.string().min(1), path: z.string().min(1), hash: z.string().min(1) })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
     conflicts: z.array(idSchema).default([]),
     compatibility: z
       .enum(['portable', 'claude-only', 'codex-only', 'adaptable', 'unsupported'])
@@ -173,7 +252,7 @@ export const assetSchema = z
         ctx.addIssue({ code: 'custom', message: 'Stage IDの重複、またはentryStageが不正です' });
       if (w.stages.find((s) => s.id === w.entryStage)?.role !== w.entryRole)
         ctx.addIssue({ code: 'custom', message: 'entryRoleとentryStageのRoleが一致しません' });
-      if (!w.stages.some((s) => s.transitions.length === 0))
+      if (!w.stages.some((s) => s.canComplete ?? s.transitions.length === 0))
         ctx.addIssue({ code: 'custom', message: '完了Stageが必要です' });
       for (const s of w.stages) {
         const edges = new Set<string>();
@@ -221,6 +300,8 @@ export type Project = {
   disabled: string[];
   overrides: Record<string, string>;
   bindings: Record<string, Scope>;
+  host?: string;
+  pathMappings?: { from: string; to: string }[];
 };
 export const configSchema = z
   .object({
@@ -235,6 +316,14 @@ export const configSchema = z
           name: z.string().min(1),
           provider: idSchema,
           endpoint: z.string().url().optional(),
+          enforcement: z
+            .object({
+              repository: z.enum(['enforced', 'instruction-only', 'unsupported']),
+              external: z.enum(['enforced', 'instruction-only', 'unsupported']),
+              tools: z.enum(['enforced', 'instruction-only', 'unsupported']),
+            })
+            .strict()
+            .optional(),
         })
         .strict(),
     ),
@@ -273,6 +362,7 @@ export type Snapshot = {
   project?: Pick<Project, 'id' | 'name' | 'root'> | null;
   resolution: Resolution;
   artifacts: Record<string, string>;
+  settings?: { version: number; config: Config; project: Project | null };
 };
 export type Run = {
   id: string;
@@ -292,7 +382,43 @@ export type Run = {
   snapshotIds: string[];
   lastHandoff?: { at: string; delivery: 'runtime-pull' | 'host-inject'; snapshotId: string };
   runtimeHandoffAt?: string;
-  events: { at: string; from: string | null; to: string | null; kind: string; note: string }[];
+  executionStatus?:
+    'prepared' | 'delivery-pending' | 'running' | 'result-received' | 'failed' | 'waiting-user';
+  requestId?: string;
+  requestFingerprint?: string;
+  handoffRequests?: Record<string, { fingerprint: string; result: Record<string, unknown> }>;
+  restartedFrom?: {
+    runId: string;
+    workflowRevision: number | null;
+    reason: string;
+    reusedArtifacts: string[];
+  };
+  attempts?: {
+    id: string;
+    stage: string | null;
+    snapshotId: string;
+    startedAt: string;
+    finishedAt?: string;
+    status: 'running' | 'result' | 'failed' | 'waiting-user';
+    model?: string;
+    runtime?: string;
+    note: string;
+  }[];
+  events: {
+    at: string;
+    from: string | null;
+    to: string | null;
+    kind: string;
+    note: string;
+    criteria?: Record<string, string>;
+    artifacts?: Record<string, string>;
+    actor?: string;
+    attemptId?: string;
+    snapshotId?: string;
+    observedAt?: string;
+    requestId?: string;
+    requestVersion?: number;
+  }[];
   artifacts: Record<string, string>;
   criteria: Record<string, string>;
 };
@@ -307,6 +433,8 @@ export type Journal = {
   createdAt: string;
   context: Context;
   workflowRevision: number | null;
+  observedAt?: string;
+  attemptId?: string;
 };
 export type Operation =
   | { op: 'upsert'; asset: AssetInput; expectedRevision: number }
@@ -328,7 +456,11 @@ export const proposalItemSchema = z
     operation: operationSchema,
     proposedScope: scopeSchema.nullable(),
     proposedRelations: z
-      .object({ dependencies: z.array(idSchema), conflicts: z.array(idSchema) })
+      .object({
+        dependencies: z.array(idSchema),
+        conflicts: z.array(idSchema),
+        relations: z.array(relationSchema).optional(),
+      })
       .strict()
       .nullable(),
     reason: z.string().trim().min(1).max(20000),
@@ -359,6 +491,7 @@ export type ChangeSet = {
   origin: string;
   summary: string;
   actor: string;
+  userRequest?: string;
   changes: {
     id: string;
     before: Asset | null;
@@ -389,6 +522,17 @@ export type Review = {
   observedScopes: Context[];
   proposedBy?: string;
   changeSetId?: string;
+  requestedBy?: string;
+  userRequest?: string;
+  decision?: {
+    approved: boolean;
+    actor: string;
+    userRequest?: string;
+    reason?: string;
+    decidedAt: string;
+  };
+  preparedChanges?: ChangeSet['changes'];
+  settingsVersion?: number;
 };
 export type State = {
   schemaVersion: 1;
@@ -399,6 +543,7 @@ export type State = {
   journals: Journal[];
   changesets: ChangeSet[];
   reviews: Review[];
+  settingsVersion?: number;
 };
 export const defaultConfig: Config = {
   providers: [

@@ -34,7 +34,11 @@ export function prepareProposal(state: State, assets: Asset[], review: Review, i
           : null,
       proposedRelations:
         operation.op === 'upsert'
-          ? { dependencies: operation.asset.dependencies, conflicts: operation.asset.conflicts }
+          ? {
+              dependencies: operation.asset.dependencies,
+              conflicts: operation.asset.conflicts,
+              ...(operation.asset.relations ? { relations: operation.asset.relations } : {}),
+            }
           : null,
       reason: req.reason,
       evidence: {
@@ -67,7 +71,11 @@ export function prepareProposal(state: State, assets: Asset[], review: Review, i
     const target = op.op === 'upsert' ? structuredClone(op.asset) : null;
     if (target?.projectId) target.scope.project = [target.projectId];
     const relations = target
-      ? { dependencies: target.dependencies, conflicts: target.conflicts }
+      ? {
+          dependencies: target.dependencies,
+          conflicts: target.conflicts,
+          ...(target.relations ? { relations: target.relations } : {}),
+        }
       : null;
     if (!isDeepStrictEqual(item.proposedScope, target?.scope ?? null))
       fail(

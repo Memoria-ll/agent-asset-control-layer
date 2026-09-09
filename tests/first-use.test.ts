@@ -99,7 +99,7 @@ test('slash commands preserve instructions and handoff exposes immutable project
   );
 });
 
-test('starter reviews have distinct guidance and enforce their common role, evidence and outputs', (t) => {
+test('starter reviews keep standalone authority and enforce evidence and outputs without choosing a role', (t) => {
   const { core } = fixture(t);
   const bodies = new Set<string>();
   for (const id of [
@@ -110,9 +110,9 @@ test('starter reviews have distinct guidance and enforce their common role, evid
   ]) {
     const run = core.startRun({ skillId: id });
     const handoff = core.handoff(run.id, {});
-    assert.equal(handoff.role, 'reviewer');
+    assert.equal(handoff.role, null);
     assert.equal(handoff.developmentAllowed, false);
-    assert.ok(handoff.assets.some((a) => a.id === 'review-evidence'));
+    assert.ok(!handoff.assets.some((a) => a.type === 'role'));
     bodies.add(core.state().assets.find((a) => a.id === id)!.content);
     assert.throws(
       () => core.transition(run.id, { kind: 'complete', expectedVersion: handoff.version }),

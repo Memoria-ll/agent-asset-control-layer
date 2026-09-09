@@ -1,20 +1,20 @@
 # Coreの追加契約
 
-requirements v13のうち、Skill / Role / Task Typeの固有設定、Journal Review Proposal、Asset別Context Cost、revision比較の実装仕様です。VS Code Extensionは含みません。
+開発要件v14のうち、Skill / Role / Task Typeの固有設定、Journal Review Proposal、Asset別Context Cost、revision比較の実装仕様です。会話による操作と初回導入は[運用ガイド](mcp-operations.md)を参照してください。VS Code Extensionは含みません。
 
 ## Asset Typeごとの設定
 
 共通のID・scope・priority・dependencies・conflicts・revisionに、次の任意フィールドを追加しています。対応するAsset Type以外への設定は拒否します。UIのAsset編集からフォームで設定できます。
 
-| Asset Type | フィールド                                                               | 内容                                                                                         |
-| ---------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| skill      | `skill.executionMode`                                                    | `standalone` / `workflow` / `both`。既定は`both`                                             |
-| skill      | `skill.role`, `skill.taskType`                                           | 明示的なRole / Task Type参照。単独起動ではContextに設定し、Workflow内ではStageとの一致を検証 |
-| skill      | `skill.executionPermission`                                              | `read-only` / `workflow-development`。既定は`read-only`                                      |
-| skill      | `skill.expectedOutput`                                                   | 成果物名の配列。完了・次Stageへの進行時に成果物の参照先または結果が必要                      |
-| skill      | `skill.completionCriteria`                                               | 条件の配列。完了・次Stageへの進行時に各条件の根拠が必要                                      |
-| role       | `role.responsibilities`, `role.expectedOutput`                           | 責務と期待する成果物。Runtimeへ渡すContextに含む                                             |
-| task-type  | `taskType.objective`, `taskType.qualityCriteria`, `taskType.constraints` | 作業目的・品質基準・制約。Runtimeへ渡すContextに含む                                         |
+| Asset Type | フィールド                                                               | 内容                                                                                                          |
+| ---------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| skill      | `skill.executionMode`                                                    | `standalone` / `workflow` / `both`。既定は`both`                                                              |
+| skill      | `skill.role`, `skill.taskType`                                           | 既存のRole / Task Typeを制約する参照です。上位で選択済みの場合に一致を検証します。Skillから担当を選びません。 |
+| skill      | `skill.executionPermission`                                              | `read-only` / `workflow-development`。既定は`read-only`                                                       |
+| skill      | `skill.expectedOutput`                                                   | 成果物名の配列。完了・次Stageへの進行時に成果物の参照先または結果が必要                                       |
+| skill      | `skill.completionCriteria`                                               | 条件の配列。完了・次Stageへの進行時に各条件の根拠が必要                                                       |
+| role       | `role.responsibilities`, `role.expectedOutput`                           | 責務と期待する成果物。Runtimeへ渡すContextに含む                                                              |
+| task-type  | `taskType.objective`, `taskType.qualityCriteria`, `taskType.constraints` | 作業目的・品質基準・制約。Runtimeへ渡すContextに含む                                                          |
 
 Skillの各条件はResolverで評価し、不一致の必須SkillはRun起動・Handoffを拒否します。単独Skillは起動時のrevisionを固定します。既存Runに固定Skillがない場合は、起動時Snapshotから取得します。
 

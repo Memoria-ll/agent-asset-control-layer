@@ -10,6 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Store } from '../server/store.ts';
 import { Core } from '../server/core.ts';
 import { createApp, errorHandler } from '../server/app.ts';
+import { DomainError } from '../server/domain.ts';
 
 test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, journal and proposal', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aacl-mcp-'));
@@ -34,8 +35,8 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
   const tools = await client.listTools();
   assert.ok(tools.tools.length >= 15);
   assert.equal(
-    tools.tools.some((t) => /approve|decision|rollback/.test(t.name)),
-    false,
+    tools.tools.some((t) => t.name === 'aacl_review_decision'),
+    true,
   );
   const resources = await client.listResources();
   assert.ok(resources.resources.some((r) => r.uri === 'aacl://bootstrap'));
@@ -254,4 +255,270 @@ test('HTTP rejects foreign Origin, host rebinding and unauthenticated human muta
   );
   assert.equal((await fetch(`${base}/mcp`)).status, 405);
   assert.equal((await fetch(`${base}/api/unknown`)).status, 404);
+});
+
+test('MCP administration needs user attribution, shares UI setting history, and awaits asynchronous discovery', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aacl-mcp-admin-'));
+  const root = path.join(dir, 'project');
+  fs.mkdirSync(root);
+  const store = new Store(path.join(dir, 'data'));
+  const core = new Core(store);
+  let discoveryFails = false;
+  const discoveryResult = { checkedAt: '2026-09-09T00:00:00.000Z', sources: [] };
+  const app = createApp(core, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    if (discoveryFails)
+      throw Object.assign(new DomainError('DISCOVERY_UNAVAILABLE', 'Runtime unavailable', 409), {
+        details: { runtime: 'test-runtime', recoveryTool: 'aacl_model_discover' },
+      });
+    return discoveryResult;
+  });
+  app.use(errorHandler);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const client = new Client({ name: 'admin-test', version: '1' });
+  t.after(async () => {
+    await client.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  const call = async (name: string, args: Record<string, unknown> = {}, expectError = false) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(!!result.isError, expectError, JSON.stringify(result));
+    const payload = (result.content as { text: string }[])[0].text;
+    if (expectError && !payload.startsWith('{')) return { error: payload }; // SDK input-schema rejection.
+    return JSON.parse(payload);
+  };
+  const auth = {
+    actor: { kind: 'runtime', id: 'test-model', userId: 'alice' },
+    userRequest: 'Set up this project and its review rule.',
+    reason: 'User-requested project setup',
+  };
+  assert.deepEqual(await call('aacl_model_discover'), discoveryResult);
+  discoveryFails = true;
+  const error = await call('aacl_model_discover', {}, true);
+  assert.equal(error.code, 'DISCOVERY_UNAVAILABLE');
+  assert.deepEqual(error.details, { runtime: 'test-runtime', recoveryTool: 'aacl_model_discover' });
+  const project = await call('aacl_project_initialize', { ...auth, root, name: 'User project' });
+  assert.equal(
+    (await call('aacl_project_list', { query: 'User project' })).items[0].id,
+    project.id,
+  );
+  const config = (await call('aacl_config_get')).config;
+  config.models.push({ id: 'test-model', name: 'Test model', provider: 'openai' });
+  const configured = await call('aacl_config_update', { ...auth, config, expectedVersion: 0 });
+  assert.equal(configured.settingsVersion, 1);
+  assert.equal((await call('aacl_model_list', { provider: 'openai' })).items[0].id, 'test-model');
+  const stale = await call('aacl_config_update', { ...auth, config, expectedVersion: 0 }, true);
+  assert.equal(stale.code, 'SETTINGS_CONFLICT');
+  assert.equal(stale.details.latestVersion, 1);
+  const proposal = await call('aacl_asset_propose', {
+    ...auth,
+    operations: [
+      {
+        op: 'upsert',
+        expectedRevision: 0,
+        asset: {
+          id: 'user-rule',
+          type: 'rule',
+          name: 'User rule',
+          content: 'UNIQUE_INCLUDED_INSTRUCTION',
+        },
+      },
+    ],
+  });
+  assert.equal(proposal.status, 'pending');
+  assert.equal(core.state().state.journals.length, 0);
+  await call('aacl_proposal_decision', { id: proposal.id, approve: true }, true);
+  await call(
+    'aacl_proposal_decision',
+    { ...auth, id: proposal.id, decision: 'approve', actor: { kind: 'runtime', id: 'test-model' } },
+    true,
+  );
+  const approved = await call('aacl_proposal_decision', {
+    ...auth,
+    id: proposal.id,
+    decision: 'approve',
+  });
+  assert.equal(approved.changeSet.actor, 'alice');
+  assert.equal(approved.proposal.decision.approvedBy, 'alice');
+  assert.equal((await call('aacl_proposal_list', { status: 'approved' })).total, 1);
+  assert.equal(
+    (await call('aacl_asset_list', { query: 'user-rule', limit: 1 })).items[0].content,
+    undefined,
+  );
+  const resolved = await call('aacl_context_resolve');
+  assert.equal(JSON.stringify(resolved).split('UNIQUE_INCLUDED_INSTRUCTION').length - 1, 1);
+
+  // Legacy UI bodies continue to work and write the same durable setting history.
+  const state = (await (await fetch(`${base}/api/state`)).json()) as any;
+  const ui = async (route: string, method: string, body: unknown) => {
+    const result = await fetch(`${base}${route}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-AACL-Token': state.humanToken },
+      body: JSON.stringify(body),
+    });
+    assert.equal(result.status, 200, await result.clone().text());
+    return result.json() as Promise<any>;
+  };
+  const sameProject = await ui('/api/projects', 'POST', { root, name: 'User project' });
+  assert.equal(sameProject.id, project.id);
+  await ui('/api/config', 'PUT', config);
+  await ui(`/api/projects/${project.id}/overlay`, 'PUT', {
+    disabled: ['user-rule'],
+    overrides: {},
+    bindings: {},
+  });
+  const history = await call('aacl_settings_history');
+  assert.equal(history.items[0].actor, 'local-user');
+  assert.equal(history.items[0].kind, 'overlay');
+  assert.equal(history.items[1].actor, 'local-user');
+  assert.equal(history.items[2].actor, 'alice');
+  await call('aacl_settings_restore', { ...auth, id: history.items[0].id, expectedVersion: 3 });
+  assert.deepEqual(core.state().state.projects[0].disabled, []);
+  assert.equal(core.state().state.settingsVersion, 4);
+  const rolledBack = await call('aacl_asset_rollback', {
+    ...auth,
+    changeSetId: approved.changeSet.id,
+  });
+  assert.equal(rolledBack.actor, 'alice');
+  assert.equal(core.state().assets.length, 0);
+});
+
+test('MCP run reads do not mutate, conflicts expose latest run, and runtime/review recovery tools are usable', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aacl-mcp-recovery-'));
+  const store = new Store(dir);
+  const core = new Core(store);
+  core.installStarter();
+  const config = core.state().state.config;
+  config.models.push({ id: 'test-model', name: 'Test model', provider: 'openai' });
+  core.updateConfig(config);
+  const app = createApp(core);
+  app.use(errorHandler);
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const client = new Client({ name: 'recovery-test', version: '1' });
+  t.after(async () => {
+    await client.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+  const call = async (name: string, args: Record<string, unknown> = {}, expectError = false) => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(!!result.isError, expectError, JSON.stringify(result));
+    const payload = (result.content as { text: string }[])[0].text;
+    if (expectError && !payload.startsWith('{')) return { error: payload }; // SDK input-schema rejection.
+    return JSON.parse(payload);
+  };
+  const auth = {
+    actor: { kind: 'runtime', id: 'test-model', userId: 'alice' },
+    userRequest: 'Review these observations.',
+    reason: 'User-requested review',
+  };
+  const start = {
+    workflowId: 'issue-development',
+    instruction: 'Investigate issue',
+    context: { runtime: 'codex', model: 'test-model' },
+    requestId: 'start-request',
+  };
+  await call('aacl_session_preflight', start);
+  assert.equal(core.state().state.runs.length, 0);
+  const run = await call('aacl_session_start', start);
+  const repeated = await call('aacl_session_start', start);
+  assert.equal(repeated.id, run.id);
+  assert.equal(core.state().state.runs.length, 1);
+  const handoffInput = { runId: run.id, expectedVersion: 1, requestId: 'handoff-request' };
+  const handoff = await call('aacl_context_handoff', handoffInput);
+  assert.deepEqual(await call('aacl_context_handoff', handoffInput), handoff);
+  const beforeRead = core.state();
+  const read = await call('aacl_run_get', { runId: run.id });
+  assert.equal(read.version, 2);
+  assert.equal(read.handoffPreview.snapshotId, handoff.snapshotId);
+  assert.equal(read.handoffPreview.preview, true);
+  assert.equal(read.handoffRequests, undefined);
+  assert.equal(
+    (await call('aacl_context_handoff_preview', { runId: run.id })).snapshotId,
+    handoff.snapshotId,
+  );
+  assert.equal(
+    ((await (await fetch(`${base}/api/runs/${run.id}/handoff`)).json()) as any).preview,
+    true,
+  );
+  assert.deepEqual(core.state(), beforeRead);
+  const conflict = await call(
+    'aacl_workflow_transition',
+    { runId: run.id, expectedVersion: 1, kind: 'cancel' },
+    true,
+  );
+  assert.equal(conflict.code, 'RUN_CONFLICT');
+  assert.equal(conflict.latestRun.version, 2);
+  assert.equal(conflict.recoveryTool, 'aacl_run_get');
+  const started = await call('aacl_runtime_event', {
+    runId: run.id,
+    expectedVersion: 2,
+    event: 'started',
+    attemptId: 'attempt-one',
+  });
+  assert.equal(started.executionStatus, 'running');
+  const observedAt = new Date().toISOString();
+  const failed = await call('aacl_runtime_event', {
+    runId: run.id,
+    expectedVersion: 3,
+    event: 'failed',
+    attemptId: 'attempt-one',
+    note: 'Runtime failed to produce the brief',
+    observedAt,
+  });
+  assert.equal(failed.executionStatus, 'failed');
+  const journal = await call('aacl_journal_append', {
+    snapshotId: handoff.snapshotId,
+    kind: 'defect',
+    observation: 'The runtime failed',
+    attemptId: 'attempt-one',
+    observedAt,
+  });
+  assert.equal(journal.attemptId, 'attempt-one');
+  assert.equal(journal.observedAt, observedAt);
+  assert.equal((await call('aacl_journal_list', { runId: run.id })).items[0].id, journal.id);
+  const review = await call('aacl_review_start', { ...auth, journalIds: [journal.id] });
+  assert.equal(
+    (await call('aacl_review_list', { workflowId: 'issue-development' })).items[0].id,
+    review.id,
+  );
+  await call('aacl_review_submit', {
+    id: review.id,
+    reason: 'No asset change needed',
+    proposedBy: 'test-model',
+    items: [],
+  });
+  assert.deepEqual(await call('aacl_review_preview', { id: review.id }), []);
+  await call('aacl_review_decision', { id: review.id, approve: true }, true);
+  const decision = await call('aacl_review_decision', {
+    ...auth,
+    id: review.id,
+    decision: 'approve',
+  });
+  assert.equal(decision.review.decision.actor, 'alice');
+  assert.equal(decision.changeSet, undefined);
+  const restarted = await call('aacl_run_restart', {
+    runId: run.id,
+    expectedVersion: 4,
+    reuseArtifacts: [],
+    reason: 'Retry with the current workflow',
+  });
+  assert.notEqual(restarted.id, run.id);
+  assert.equal(restarted.restartedFrom.runId, run.id);
+  const metrics = await call('aacl_workflow_metrics', { workflowId: 'issue-development' });
+  assert.deepEqual(
+    await (await fetch(`${base}/api/metrics/workflows?workflowId=issue-development`)).json(),
+    metrics,
+  );
 });

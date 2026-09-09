@@ -1,4 +1,28 @@
-# Agent Asset Control Layer — 開発要件 v13
+# Agent Asset Control Layer — 開発要件 v14
+
+2026年9月9日更新。[総合改善インプット](docs/integrated-improvement-input-2026-09-09.md)と[利用方針更新](docs/mcp-first-onboarding-and-asset-relations.md)を反映しています。
+
+## v14の運用契約
+
+日常操作は会話とMCP（AI向けのツール接続）で完結できるものとします。人間用UIの閲覧・編集機能も維持します。以下は初回導入と日常操作についての規範です。後続の既存節を読む場合も、この運用契約を適用します。
+
+- ユーザーは、既存資産の取り込み・初回整理・新規Workflowの作成をAIへ依頼できます。依頼、変更理由、差分、実施者、承認判断を記録します。初期作成には実行や架空のJournalを要求しません。実行からの改善は実際のJournalを根拠にします。
+- 導入は、探索、対象資産の退避コピー、取り込み、実際のMCP取得と保存の確認、AIによる分類・紐づけ、元の自動読込の停止として実施します。途中の状態と復元情報を保存します。中断・再送・再探索で同じ資産を重複作成しません。
+- 認証、接続設定、実行履歴、キャッシュ、拡張機能を資産本文として取り込みません。プラグインが管理する資産は、対応している更新・配置方式を確認するまで切り替えません。Coreが動くホスト上のパスと別ホスト上のパスを区別します。
+- Skill本文と補助ファイルは、相対参照が成立するまとまりとして保存・配布します。未分類のAI開発資産は`other`として保持し、分類と適用先が確定するまでは自動適用しません。未対応ファイルは理由とともに列挙し、黙って欠落させません。
+- Workflowの工程がRoleを選び、Roleの保存済み割り当てがModelとRuntimeを選びます。Roleから下位資産への関係と、Modelに対する資産の適用条件を解決します。共有資産の本文は一度だけ渡し、選択理由は複数保持します。SkillからRole・Model・開発権限を変更しません。
+- Skill間の関係は必須利用・条件付き利用・資料参照を区別します。関係に出所、記述位置、条件、整理理由を保存します。明確なIDやパスの利用指示は編集・取り込み時に抽出できます。自然言語の意味判断は依頼されたAI整理で行い、実行時のResolverは保存済みの関係だけを利用します。条件が機械評価できない場合は無条件適用しません。
+- Skill内の順序・条件・入出力の手順を保存できます。各手順は上位で決めた担当・モデル・権限を引き継ぎます。必須利用の循環を拒否し、相互の資料参照は許容します。
+- 開発権限はDevelopment-capable Workflowに統一します。短い変更には1工程のWorkflowを利用できます。単独Skillは調査・レビュー等を行い、repository mutationを許可しません。AACL内の資産編集は、ユーザーが依頼・承認した別の管理操作です。
+- 開始前に全工程の割り当て、必要資産、外部ツールの接続・許可、Runtimeが宣言した強制可能な制約を検証します。Coreが強制するのはCore経由の操作です。Runtimeが独自に持つファイル・外部サービス・ツールの操作制限はRuntime側の責務です。接続確認だけを権限制約の保証にはしません。
+- 準備、引き継ぎ取得、AIの開始報告、結果、失敗、人間の判断待ちを別々に記録します。閲覧では実行の版もSnapshotも増やしません。更新は現在の版を検証し、開始・引き継ぎの再送には同じ依頼IDを利用します。
+- 工程の完了可否は遷移の有無から独立させます。最終レビューは合格時に完了でき、不合格時には実装へ戻れます。差し戻した工程と後続工程の古い成果物・完了根拠を、現在の合格根拠として再利用しません。履歴には保存します。
+- 改訂後の再開は旧実行への関連と再利用する成果物を明示した新実行として扱います。過去のSnapshotは変更しません。旧版の承認・完了根拠を新実行へコピーしません。
+- `directory`は選択Projectの相対パスを基準とします。同じProject内の絶対パスを正規化します。Project外の入力と条件不一致を区別し、OS間の対応は明示したパスマッピングだけに基づきます。除外理由には条件の期待値と実入力を示します。
+- 通常のMCP応答は対象外資産の本文を含めません。一覧は検索条件と件数上限を持つ要約とし、個別取得と分けます。設定変更はProjectの例外設定とモデル割り当ても履歴・復元の対象とします。Snapshotには適用した設定の版を保持します。
+- 完了条件の根拠、成果物、記録者、時刻、試行をUIとMCPから確認できます。観測時刻と記録時刻を区別します。比較には対象期間・件数・完了／中止／未完了の扱いと、Workflow・Model・資産・設定の改訂差を表示します。準備数を試行数として集計せず、Context量だけから品質改善を判断しません。
+
+対応する実装と検証範囲は[実装確認表](docs/improvement-implementation-2026-09-09.md)に記載します。
 
 ## 1. 概要
 
@@ -546,7 +570,7 @@ WorkflowとSkillをCanonical Domain上で別概念として扱う。
 
 Runtimeが `/` の入口をSkill / Commandとしてしか公開できない場合、AdapterがWorkflow Launcher相当のRuntime-specific representationを生成してよいが、それをCanonical Workflowとは別の正本にしない。
 
-Standalone SkillはWorkflowを必要としないが、Development Executionを許可するかどうかはSkillのcapability / policyで明示する。
+Standalone SkillはWorkflowを必要としません。Development ExecutionにはDevelopment-capable Workflowが必要です。Skillの設定からこの境界を緩めません。
 
 ### Rule
 
@@ -702,7 +726,7 @@ Workflowを必要としないbounded action。
 - journal
 - journal-review
 
-Standalone Skillでrepository mutationを許可する場合は、そのSkill自体に明示的なexecution permissionが必要とする設計を可能にする。
+Standalone Skillによるrepository mutationは許可しません。1工程でも、変更範囲と完了条件を持つDevelopment-capable Workflowを明示して起動します。
 
 ---
 
@@ -881,18 +905,18 @@ Scope Resolutionは決定的・説明可能であることを必須とする。
 
 #### Default scope precedence
 
-| Rank | Scope | 意味 |
-|---:|---|---|
-| 10 | Built-in / Global | 全体既定 |
-| 20 | Team | Team共有方針 |
-| 30 | Project | Project固有overlay |
-| 40 | Workflow | Workflow固有 |
-| 50 | Task Type | 作業種別固有 |
-| 60 | Role | Role固有 |
-| 70 | Provider | Provider固有 |
-| 80 | Runtime | 実行環境固有 |
-| 90 | Model | Model固有 |
-| 100 | Directory | 対象path固有 |
+| Rank | Scope             | 意味               |
+| ---: | ----------------- | ------------------ |
+|   10 | Built-in / Global | 全体既定           |
+|   20 | Team              | Team共有方針       |
+|   30 | Project           | Project固有overlay |
+|   40 | Workflow          | Workflow固有       |
+|   50 | Task Type         | 作業種別固有       |
+|   60 | Role              | Role固有           |
+|   70 | Provider          | Provider固有       |
+|   80 | Runtime           | 実行環境固有       |
+|   90 | Model             | Model固有          |
+|  100 | Directory         | 対象path固有       |
 
 複合scopeはspecificityで優先される。
 
@@ -955,7 +979,7 @@ host-inject
 
 ## 15. Role起動時Context Injection
 
-Workflow StageまたはStandalone SkillによりRoleが確定した後、そのRole向けContextを解決する。
+Workflow Stageまたはユーザーが上位で明示した実行条件によりRoleを確定し、そのRole向けContextを解決します。Standalone SkillからRoleやModelを選択しません。
 
 このときRole Contextだけを固定的に注入するのではなく、Workflow / Stage / Task Type / Role / Model等の現在ContextをまとめてResolverへ渡す。同一Roleでも作業目的が異なれば、複合scopeにより異なるAsset setを取得できる。
 
@@ -1682,18 +1706,18 @@ Orchestratorがsubagentを起動する前に、Workflow Stageとtarget role/mode
 
 ## Consolidated Responsibility Model
 
-| Component | Owns | Does not own |
-|---|---|---|
-| User | Workflow selection, user-authored Workflow/Role/Model policy, initial Asset intent, approval | Resolver implementation |
-| Core / Control Plane | Asset Store, History, Provenance, Scope/Policy application, Context Resolver, Workflow Definition/State, Snapshot, Journal/Diagnostics | user development philosophyの自律推測、model/tool execution |
-| Workflow | user-defined repeated development structure, Stage, Role relation, transition constraints, completion model | 今回どのtransitionを選ぶか |
-| Role | execution identity and reusable responsibility | task-purpose-specific policy that belongs to Workflow / Task Type context |
-| Task Type | task purpose, work-specific criteria and constraints | Role identity |
-| Journal Review AI | Journal/Snapshotの意味的解釈、improvement / scope / relation proposal | 無承認Asset mutation |
-| Orchestrator Role | assignment, transition, retry/reject/fallback decision within Workflow | Asset Source of Truth |
-| Agent Runtime | model invocation, tool invocation, subagent spawn | domain policyの正本 |
-| Extension | Human UI, IDE context, Workflow launcher, Host Inject, Preview, state visualization | Asset / Workflow semantics |
-| Resolver | explicit scope / relation / policy resolution | Workflow discovery, semantic binding inference |
+| Component            | Owns                                                                                                                                   | Does not own                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| User                 | Workflow selection, user-authored Workflow/Role/Model policy, initial Asset intent, approval                                           | Resolver implementation                                                   |
+| Core / Control Plane | Asset Store, History, Provenance, Scope/Policy application, Context Resolver, Workflow Definition/State, Snapshot, Journal/Diagnostics | user development philosophyの自律推測、model/tool execution               |
+| Workflow             | user-defined repeated development structure, Stage, Role relation, transition constraints, completion model                            | 今回どのtransitionを選ぶか                                                |
+| Role                 | execution identity and reusable responsibility                                                                                         | task-purpose-specific policy that belongs to Workflow / Task Type context |
+| Task Type            | task purpose, work-specific criteria and constraints                                                                                   | Role identity                                                             |
+| Journal Review AI    | Journal/Snapshotの意味的解釈、improvement / scope / relation proposal                                                                  | 無承認Asset mutation                                                      |
+| Orchestrator Role    | assignment, transition, retry/reject/fallback decision within Workflow                                                                 | Asset Source of Truth                                                     |
+| Agent Runtime        | model invocation, tool invocation, subagent spawn                                                                                      | domain policyの正本                                                       |
+| Extension            | Human UI, IDE context, Workflow launcher, Host Inject, Preview, state visualization                                                    | Asset / Workflow semantics                                                |
+| Resolver             | explicit scope / relation / policy resolution                                                                                          | Workflow discovery, semantic binding inference                            |
 
 ---
 

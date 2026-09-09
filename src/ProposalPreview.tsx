@@ -31,6 +31,10 @@ function WorkflowDetails({ asset }: { asset: Asset }) {
           </p>
           <p>成果物: {s.expectedOutput?.join(', ') || '指定なし'}</p>
           <p>完了条件: {s.completionCriteria.join(' / ') || 'なし'}</p>
+          <p>
+            実行の完了:{' '}
+            {(s.canComplete ?? s.transitions.length === 0) ? 'この工程で許可' : 'この工程では不可'}
+          </p>
           {s.transitions.length ? (
             <ul>
               {s.transitions.map((edge) => (
@@ -46,7 +50,7 @@ function WorkflowDetails({ asset }: { asset: Asset }) {
               ))}
             </ul>
           ) : (
-            <p>この工程で完了します。</p>
+            <p>遷移先はありません。</p>
           )}
         </div>
       ))}

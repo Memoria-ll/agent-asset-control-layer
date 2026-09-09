@@ -1,0 +1,238 @@
+.run-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+.run-filters .field {
+  flex: 1 1 160px;
+  margin: 0;
+  min-width: 0;
+}
+.run-filters .field:first-child {
+  flex-basis: 220px;
+}
+.run-list,
+.run-detail,
+.activity-columns > section {
+  min-width: 0;
+}
+.workflow-flow .flow-segment {
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 155px;
+}
+.flow-transitions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 5px;
+  color: #69758a;
+  font-size: 11px;
+  max-width: 190px;
+  white-space: normal;
+}
+.run-detail > .panel {
+  margin-top: 18px;
+}
+.run-item strong,
+.run-item span {
+  overflow-wrap: anywhere;
+}
+.evidence-values {
+  margin: 12px 0;
+}
+.evidence-values > div {
+  border-left: 3px solid #ccd6ef;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+}
+.evidence-values dt {
+  font-weight: 650;
+  color: #35435d;
+}
+.evidence-values dd {
+  margin: 6px 0 0;
+}
+.evidence-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.7;
+}
+.evidence-record {
+  padding: 14px 0;
+  border-bottom: 1px solid #e7ebf2;
+}
+.evidence-record:last-child {
+  border-bottom: 0;
+}
+.setting-facts {
+  margin: 8px 0;
+}
+.setting-facts > div {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr);
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #e7ebf2;
+}
+.setting-facts dt {
+  font-weight: 600;
+}
+.setting-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.setting-item {
+  padding: 6px;
+  margin: 5px 0;
+  border-left: 2px solid #d6e2f8;
+}
+.run-detail .panel-body > .button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.evidence-record h4 {
+  margin: 0;
+}
+.evidence-meta {
+  display: flex;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+  color: #68748a;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.relation-editor {
+  border: 1px solid #dfe5ef;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.relation-editor legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+.relation-editor details,
+.source-file {
+  padding: 10px 0;
+}
+.relation-card {
+  background: #f8faff;
+  border: 1px solid #e1e7f2;
+  border-radius: 9px;
+  padding: 14px;
+  margin: 10px 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.relation-card .text-button {
+  padding-left: 0;
+  text-align: left;
+  flex-wrap: wrap;
+}
+.relation-root {
+  padding: 10px 0;
+}
+.relation-stage {
+  margin: 18px 0;
+  padding: 0 0 8px 20px;
+  border-left: 2px solid #aabfe8;
+}
+.relation-branch {
+  border: 1px solid #e0e7f1;
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px;
+  margin: 12px 0;
+}
+.model-branch {
+  background: #f4f5fa;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 10px 0;
+}
+.model-branch > .button-row {
+  margin-top: 10px;
+}
+.workflow-activity {
+  border-top: 1px solid #e2e7ef;
+  padding: 22px;
+}
+.activity-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+.activity-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 13px;
+  text-align: left;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+.activity-link:hover {
+  background: #f3f6fd;
+  border-color: #b6c8ed;
+}
+.activity-link span,
+.activity-link small {
+  font-size: 12px;
+  color: #69758a;
+}
+.activity-journal {
+  padding: 12px;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.activity-journal .button {
+  margin: 5px 0;
+}
+.relations-explorer .button-row {
+  flex-wrap: wrap;
+}
+.relations-explorer .button,
+.relation-card .button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 900px) {
+  .activity-columns {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .run-filters {
+    padding: 12px;
+  }
+  .run-filters .field {
+    flex-basis: 100%;
+  }
+  .relation-stage {
+    padding-left: 10px;
+  }
+  .relation-branch {
+    padding: 12px;
+  }
+  .relation-card .section-head,
+  .workflow-activity > .section-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}

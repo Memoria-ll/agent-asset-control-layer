@@ -86,18 +86,15 @@ export function AssetContractEditor({
                     ))}
                   </select>
                 </Field>
-                {(['role', 'taskType'] as const).map((dimension) => (
-                  <Field
-                    key={dimension}
-                    label={dimension === 'role' ? '担当Role' : '作業のTask Type'}
-                  >
+                {(['taskType'] as const).map((dimension) => (
+                  <Field key={dimension} label="作業のTask Type">
                     <select
                       value={value.skill![dimension] ?? ''}
                       onChange={(e) => change(dimension, e.target.value || undefined)}
                     >
                       <option value="">指定なし</option>
                       {assets
-                        .filter((a) => a.type === (dimension === 'role' ? 'role' : 'task-type'))
+                        .filter((a) => a.type === 'task-type')
                         .map((a) => (
                           <option key={a.id} value={a.id}>
                             {a.name}
@@ -107,6 +104,11 @@ export function AssetContractEditor({
                   </Field>
                 ))}
               </div>
+              <p className="muted small-text">
+                Skillは選択済みのRole・Model・権限を引き継ぎます。
+                {value.skill.role &&
+                  `旧定義のRole条件「${value.skill.role}」は保持されます。このRoleを自動選択する設定ではありません。`}
+              </p>
               {list('expectedOutput', '期待する成果物', value.skill.expectedOutput)}
               {list('completionCriteria', 'Skillの完了条件', value.skill.completionCriteria)}
             </>
@@ -156,7 +158,7 @@ export function ContractDetails({ asset }: { asset: Asset }) {
           <div className="button-row wrap">
             <Badge>{modes[asset.skill.executionMode]}</Badge>
             <Badge>{permissions[asset.skill.executionPermission]}</Badge>
-            {asset.skill.role && <span>Role: {asset.skill.role}</span>}
+            {asset.skill.role && <span>選択済みRoleへの制約: {asset.skill.role}</span>}
             {asset.skill.taskType && <span>Task Type: {asset.skill.taskType}</span>}
           </div>
           {list('期待する成果物', asset.skill.expectedOutput)}

@@ -65,6 +65,32 @@ export function ProposalDetails({ item, journals }: { item: ProposalItem; journa
               <p className="small-text">
                 競合: {item.proposedRelations.conflicts.join(', ') || 'なし'}
               </p>
+              {item.proposedRelations.relations?.map((relation, index) => (
+                <article className="relation-card" key={index}>
+                  <strong>{relation.target}</strong>{' '}
+                  <Badge>
+                    {
+                      { required: '必須利用', conditional: '条件付き利用', reference: '資料参照' }[
+                        relation.kind
+                      ]
+                    }
+                  </Badge>
+                  <p>{relation.reason}</p>
+                  {relation.condition && <p>利用条件: {relation.condition}</p>}
+                  <ScopeFacts scope={relation.scope ?? {}} />
+                  <p className="small-text muted">
+                    {relation.origin === 'manual' ? '手動設定' : '本文から抽出'}
+                  </p>
+                  {relation.source && (
+                    <details>
+                      <summary>
+                        根拠: {relation.source.path}:{relation.source.line}
+                      </summary>
+                      <pre className="context-content">{relation.source.text}</pre>
+                    </details>
+                  )}
+                </article>
+              ))}
             </>
           )}
         </div>

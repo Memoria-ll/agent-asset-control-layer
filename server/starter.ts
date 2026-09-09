@@ -127,9 +127,13 @@ export function starterAssets(): AssetInput[] {
           taskType: 'feature-development',
           expectedOutput: [artifact],
           completionCriteria: [criterion],
+          canComplete: i === stages.length - 1,
           transitions:
             i === stages.length - 1
-              ? []
+              ? [
+                  { to: 'implementation', kind: 'return', requiredArtifacts: [] },
+                  { to: id, kind: 'retry', requiredArtifacts: [] },
+                ]
               : [
                   { to: stages[i + 1][0], kind: 'advance', requiredArtifacts: [artifact] },
                   ...(i > 0
@@ -149,7 +153,6 @@ export function starterAssets(): AssetInput[] {
       skill: {
         executionMode: 'standalone',
         executionPermission: 'read-only',
-        role: 'reviewer',
         expectedOutput: [`${id}-report`],
         completionCriteria: ['確認範囲、根拠と影響を伴う指摘、未検証範囲を記録した'],
       },

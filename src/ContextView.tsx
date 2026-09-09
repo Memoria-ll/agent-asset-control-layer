@@ -390,7 +390,7 @@ export function ContextView({ data, initial = {} }: { data: Overview; initial?: 
                 </div>
               </div>
               <p className="small-text muted">
-                Token数は文字種に基づく推定値です。Previewは実行を開始しません。
+                Token数は文字種に基づく推定値です。Previewとコピーは実行を開始せず、Snapshot・実行versionを更新しません。
               </p>
             </>
           )}

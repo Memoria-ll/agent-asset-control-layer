@@ -1,22 +1,24 @@
 # Agent Asset Control Layer
 
-A local-first control layer for the knowledge, rules, workflows, and safeguards used by AI development tools.
+A local control layer for using your development method repeatedly: choose a Workflow, give this task's instructions, and improve the method from recorded results.
 
 **Status:** local Core, browser UI, and MCP are runnable from source. The VS Code extension is not implemented.
 
 ## Why this exists
 
-AI coding tools become much more useful once you start teaching them how you work.
+Teach AACL your development method once, then ask your connected AI to use it:
+`/issue-development #123`. A Workflow defines the stages, responsibilities, model assignments,
+review returns, and completion conditions. The AI receives the saved instructions for its current
+stage. You supply the target and any instructions specific to this task.
 
-You add instructions for your projects. You create reusable skills. You define review rules,
-workflows, model preferences, safety checks, templates, and project-specific knowledge.
+Start by importing existing Skills and Rules, or ask the AI to propose a Workflow. Initial authoring
+does not require a previous execution or an invented Journal. Inspect the proposed changes in your
+conversation and authorize them there. The browser UI also supports inspection and manual editing.
 
-At first, this is manageable. Then the same ideas begin to appear in several places.
-
-A rule is copied into another project. A skill is rewritten for another runtime. A useful workflow
-lives in one tool but not another. Some instructions are always loaded even when they are irrelevant.
-And when something goes wrong during an AI-assisted task, the lesson often stays in that one session
-instead of improving the setup for next time.
+After execution, record observations against the actual attempt. Ask for a review, approve a
+concrete change, and use the revised method next time. Past executions preserve their original
+Workflow, Context, and setting snapshots. Comparison reports separate Context preparation from
+reported AI attempts and show differences in the conditions of the compared runs.
 
 ```mermaid
 flowchart LR
@@ -29,18 +31,10 @@ flowchart LR
     ClaudeSetup -. copied / rewritten .-> Other[Other runtimes]
 ```
 
-The problem is no longer just “how do I write a good prompt?”
-
-It becomes:
-
-**How do I manage the growing body of knowledge and policy that my AI development tools depend on?**
-
-Agent Asset Control Layer is an attempt to solve that problem.
-
-It acts as a control plane for reusable AI development assets and for the rules that determine when
-those assets apply. Context resolution is a central part of that job, but the system also manages
-asset lifecycle, workflow definitions and state, execution metadata, history, diagnostics, and the
-feedback loop that improves assets over time.
+MCP, the tool protocol used by the connected AI, provides the daily operating interface: discover
+projects and models, organize assets, manage settings, propose changes, start a Workflow, report
+results, and inspect history. Canonical assets and deterministic Context resolution support this
+repeatable development cycle.
 
 ## The basic idea
 
@@ -350,28 +344,36 @@ See [Core contracts](docs/core-contracts.md) for Skill / Role / Task Type settin
 
 ### First use and daily operation
 
-1. Register the target project in **Projects**, using its existing absolute directory on the OS
-   where the Core runs. Create Roles, Skills, Rules and a Workflow, or add the editable starter.
-   A Workflow's **Roleを追加** button creates a missing Role while preserving the Workflow draft.
-2. Open **Contextを確認** on the Workflow card, then **起動する**. Project-owned Workflows carry
-   their project into both screens. Select the target project explicitly when using global assets.
-3. Connect your AI runtime using **Runtime & MCP**. Model discovery only retrieves the available
-   model catalog; it does not mean that an AI has connected to AACL or started working.
-4. Starting a run creates its state and initial snapshot. Copy **AIへの依頼をコピー** and give the
-   request to the connected AI. The request includes the registered project directory. A handoff
-   also returns `project` with `id`, `name`, and `root`; `root` is a path on the Core host.
-   The run screen distinguishes an AI's handoff retrieval from a manual retrieval. Actual model
-   execution remains visible in the AI runtime.
-5. Use the handoff's returned `version` as `expectedVersion` for the next transition. Handoff
-   retrieval saves a snapshot and increments the run version. If another operation updates the
-   run, read `aacl_run_list` again. With `command: "/workflow-id"`, a separate `instruction` is
-   preserved; when both command-tail text and `instruction` are present, they are joined in that order.
-6. Record the requested artifacts and completion evidence. **記録した成果物** and **過去のContext**
-   remain available after completion. Snapshots retain the context from their creation time.
+1. Start the Core and connect the AI using the HTTP endpoint or stdio bridge above. **Runtime & MCP**
+   also displays connection information. Import existing assets with the onboarding tools described
+   in [the operating guide](docs/mcp-operations.md), or add the editable starter.
+2. Ask the AI to register an existing project directory and prepare a Workflow with its Roles,
+   Skills, Rules, and model assignments. `aacl_project_list`, `aacl_model_list`, and
+   `aacl_config_get` expose the registered choices. Project IDs are unambiguous; unique names or
+   registered roots also resolve in Context. A duplicate name returns candidates instead of selecting one.
+3. Ask for the desired method by its Workflow ID and this task's instructions.
+   `aacl_session_preflight` diagnoses every stage's model assignment, required assets, capabilities,
+   and declared Runtime enforcement before work. Registration of a model does not prove connection.
+4. `aacl_session_start` creates a prepared execution. The connected AI obtains Context with
+   `aacl_context_handoff`, reports `started` using `aacl_runtime_event`, performs the work in its
+   Runtime, and reports its result. The Core never invokes models itself. Runtime start reports
+   require a registered model and runtime. Save a stable `requestId` for start and handoff retries.
+5. Use the returned `version` as the next mutation's `expectedVersion`. Read `aacl_run_get` or
+   `aacl_context_handoff_preview` for current state without changing the run. Normal list results are
+   paginated summaries; Context resolution omits excluded asset bodies. Absolute `directory`
+   paths inside the registered Project normalize to Project-relative paths. Cross-OS aliases
+   require an explicit Project `pathMappings` entry.
+6. Record artifacts and evidence before advancing or completing. The final review can set
+   `canComplete: true` and retain a return transition to implementation. Returning invalidates
+   downstream artifact values and current evidence; previous evidence remains in event history.
+   `aacl_run_restart` starts the latest Workflow revision, links the old execution, and carries
+   only explicitly selected artifact references. It never copies approval evidence.
+7. Ask the AI to append observations, select Journals, propose improvements, and record your decision.
+   The UI provides the same manual editing and history views. `aacl_workflow_metrics` separates
+   preparation counts from actual reported attempts and groups comparisons by saved conditions.
 
-The current Workflow format finishes at a stage with no outgoing transitions. To allow a review
-to return to implementation, give it both a return transition and an advance transition to a
-separate completion stage. Leave the completion stage without outgoing transitions.
+For older Workflow definitions without `canComplete`, a stage with no outgoing transitions remains
+completable. Previously saved definitions and executions are not silently upgraded.
 
 ### Generated files and MCP
 
@@ -391,11 +393,16 @@ Core's full MCP URL as shown in **Runtime & MCP**.
 
 ### Ask AI to propose new assets
 
-To have an AI author an Asset or Workflow, start a session, obtain a handoff, and record the need
-in **Journal** against that snapshot. Select the Journal entry in **Journal & Reviews**, start a
-Review, and copy its AI request. The AI reads `aacl_review_get` and submits new assets or updates
-with `aacl_review_submit`. Inspect the proposed text diff, settings, and Workflow stages, then
-approve in the UI. New assets use `expectedRevision: 0`; existing assets use their current revision.
+Ask the AI to use `aacl_asset_propose` with your request, the proposed operations, and the reason.
+Inspect the returned text and settings diff, affected assets, and missing model assignments.
+Use `aacl_proposal_decision` to record your approval or rejection. Neither a Session nor a Journal is
+required. Conversation mutations include `userRequest`, `reason`, and an `actor` identifying the
+user; a Runtime actor records its requesting user separately. These are local audit records supplied
+by the connected Runtime, not an independent identity-verification service.
+
+For changes based on execution observations, use `aacl_journal_list`, `aacl_review_start`,
+`aacl_review_get`, and `aacl_review_submit`, then record your decision with `aacl_review_decision`
+or in **Journal & Reviews**. New assets use `expectedRevision: 0`; existing assets use their current revision.
 For a project-owned asset, include `proposedScope.project: [asset.projectId]`: the Core adds that
 project condition to the saved asset. Mismatch errors show the expected and submitted values.
 
@@ -406,6 +413,8 @@ source frontmatter contains a different name.
 Starter improvements apply when those assets are newly added. Adding the starter again preserves
 existing assets and edits; previously saved runs and snapshots keep their original revisions.
 See [the report-to-fix checklist](docs/first-use-fixes.md) for the addressed trial findings.
+See [the September 9 implementation checklist](docs/improvement-implementation-2026-09-09.md)
+for the integrated improvement and onboarding requirements, implemented contracts, and validation scope.
 
 The local implementation consists of:
 
