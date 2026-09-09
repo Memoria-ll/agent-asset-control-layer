@@ -88,9 +88,18 @@ The UI lets you edit stages, responsibilities, outputs, and return paths. Screen
 
 ## Import existing instructions
 
-Onboarding backs up and imports assets, verifies the connection, and lets the AI organize them before disabling the original automatic loading. You can check the connection and content while the source files remain in place. Directory discovery targets instruction entry points and instruction folders, not ordinary project documentation. Import a README only by explicitly selecting its file path for reuse; README files stay in place during cutover, including those bundled with Skills.
+Single Markdown registration and migration of an existing environment have separate entry points within the import dialog. The UI labels below are in Japanese.
 
-The Assets import dialog registers a single Markdown file immediately as an enabled asset. It does not retain its original path or hash. For folder migration, backup, connection verification, cutover, and restoration by onboarding ID, use the copyable AI request in that dialog. Imported Skills propose their frontmatter name, and you can edit it before saving.
+| Goal | UI entry point | What is saved or changed |
+| --- | --- | --- |
+| Register one file as an asset | Assets → インポート → 単一Markdownを登録 | Saves the body and description as an enabled asset. It does not retain the original path, hash, or supporting files, and leaves the source file unchanged. |
+| Migrate a folder of existing instructions | In the same dialog, AIに移行・初期設定を依頼 → 移行の依頼をコピー | A connected AI uses MCP to back up, import with provenance, verify, classify, and switch off the original automatic loading. The onboarding ID supports resuming and restoring the operation. |
+
+For one file, select it or paste its contents, enter an ID and name, choose its type and destination, and click 取り込む. The name is suggested from the frontmatter `name`, falling back to the filename. A manually entered name survives subsequent file selections. A Skill is registered as an enabled candidate whose body is retrieved when needed.
+
+For migration, replace the target folder in the copied request and send it to an AI connected to AACL. The AI retrieves every imported asset and verifies a real MCP write before classification, while the source files remain in place. Additional connection setup, if needed, happens before cutover.
+
+Directory discovery targets instruction files such as `AGENTS.md` and `AGENTS.override.md`, Skills, and instruction folders. Ordinary README and design documents are not candidates. To reuse a README as a separate asset, select its file path explicitly. README files within a selected Skill are included as supporting files. In both cases, cutover leaves the original README in place, and restore preserves subsequent edits to it.
 
 ```mermaid
 flowchart TD
@@ -107,6 +116,12 @@ A file is not classified as a Skill just because it lives in a `skills` director
 Resume interrupted work with its onboarding ID. Cutover and restore verify file contents and asset revisions; later edits are not overwritten. Credentials, connection settings, histories, and caches are not imported as asset bodies.
 
 Connection setup is available for Codex, Claude, and Cursor. Unsupported formats and plugin-managed assets remain in place with an explanation. See the [operating guide](docs/mcp-operations.md) (Japanese) for the full procedure.
+
+## Update supporting files
+
+The 補助ファイルと出所 section in asset detail and edit views is read-only. Expand a file to read or copy it. Editing the body or description preserves saved supporting files.
+
+To change a checklist or another supporting file, click 補助ファイル更新の依頼をコピー. Fill in the target path and requested changes, then send the request to an AI connected to AACL. The AI retrieves the latest asset and saves the change while retaining other supporting files. A revision conflict requires checking the latest content before continuing. Unsaved body edits in the UI are not included in the request; save any edits you need before sending it.
 
 ## Deliver only the instructions needed
 
@@ -151,9 +166,28 @@ An omitted model does not mean “use the parent AI's model.” If a Runtime can
 
 Requested and reported actual models are stored separately. Runtimes may report unregistered models, but applying model-specific assets requires a matching model configuration. A Workflow that requires a particular model or a different model for review cannot advance or complete without confirming that constraint through execution reports.
 
+## Prepare a Workflow execution in the UI
+
+1. Launch the selected Workflow from Workflows, fill in 今回の指示 and any required conditions, and click 実行を開始.
+2. The execution displays 準備済み／AIへ依頼待ち (prepared; waiting for a request to the AI). Under 次の操作：AIへ依頼する, click AIへの依頼をコピー and send it to an AI connected to AACL.
+3. The execution view updates when the AI reports an actual start or result.
+
+実行を開始 creates prepared state in the Core; it does not automatically launch an AI. The Workflows 実行中 count includes only executions with a reported running status. Preparations are counted separately under AIへ依頼待ち. In Executions, the 未完了（準備・待機を含む） filter includes preparations and work waiting for a decision.
+
 ## Use a Workflow from an AI client
 
 Read `aacl_bootstrap` or `aacl://bootstrap` after connecting. Obtain exact arguments from the connected server's MCP tool definitions.
+
+For a minimal example with `issue-development` already registered, pass these arguments to `aacl_session_preflight`. If it returns `ready: true`, pass the same arguments to `aacl_session_start` to create the preparation.
+
+```json
+{
+  "workflowId": "issue-development",
+  "instruction": "#123 Fix the login failure"
+}
+```
+
+Use the start response's `id` as `runId` in `aacl_run_get` or `aacl_context_handoff_preview` to inspect the state and the actor's instructions. To proceed with development, follow the handoff and execution-reporting sequence below.
 
 A session start request creates a prepared execution. The Runtime performs the actual work. This is the basic call sequence for one stage:
 
@@ -206,6 +240,8 @@ Use `aacl_asset_propose` or `aacl_asset_change` for initial authoring and direct
 
 Assets, model bindings, and Project settings retain before/after values and change reasons and can be restored. Past Snapshots remain unchanged. Comparison views distinguish preparations from attempts, requested from actual models, and asset and setting revisions.
 
+Change History presents onboarding changes with headings such as 既存指示を分類 (classify existing instructions) and 接続を確認 (verify the connection). Open a change and expand 導入ID・依頼原文・変更理由 to inspect the original identifiers, hashes, and full request. Reverting an asset change and restoring source files and connection settings through an onboarding ID are separate operations. To restore the entire onboarding operation, give its ID to the AI and request restoration.
+
 ## Export files
 
 The built-in `aacl-asset-export` Skill and `aacl_export_bundle` retrieve selected assets and their required references together. Assets, relationships, and settings come from one point in time, so export does not mix revisions.
@@ -226,6 +262,14 @@ flowchart LR
 
 Output formats are `codex`, `claude`, `cursor`, and `generic`. Source connection endpoints are omitted in both modes. Check `limitations`; if `ready: false`, resolve the blocking conditions before use. Export alone does not guarantee model selection support or permission enforcement.
 
+To request standalone output from the UI:
+
+1. In Context Preview, select a Workflow or entries under 追加する利用候補.
+2. Under Core不要の単独出力をAIに依頼, choose the output format and click 単独出力の依頼をコピー.
+3. Send the request and destination to the AI. It checks output limitations and differences from existing files, saves the complete set including supporting files, and verifies hashes and references.
+
+Retrieving the export requires the Core and an MCP connection. The saved standalone output can be used after the Core stops. Copying the request does not save files. The Codex and Claude buttons under Coreに接続して使うファイルを生成 generate connected files that also require the Core and MCP when used.
+
 For example, save this as `export-input.json`, replacing the asset ID with a registered one:
 
 ```json
@@ -242,7 +286,7 @@ Keep the Core running and export to a directory that does not yet exist:
 npm run cli -- export-bundle export-input.json ./exported-assets
 ```
 
-If an AI installs the files, it should check the destination and existing-file diff, then write and verify them against the output specification. Context Preview provides a copyable standalone-export request for the selected Workflow and additional candidates, with a choice of runtime format. Its Codex/Claude file-generation buttons, `aacl_materialize`, and CLI `export` generate connected output that requires MCP.
+`aacl_materialize` and CLI `export` also generate connected output that requires MCP. Use `export-bundle` as shown above to save a complete set of files for use without the Core.
 
 ## Implementation and verification
 
@@ -255,7 +299,7 @@ npx playwright install chromium  # First-time setup
 npm run test:ui                  # Browser tests
 ```
 
-Browser tests use port 4781 and temporary data. The September 9, 2026 implementation checks passed 141 server tests and 23 browser tests.
+Browser tests use port 4781 and temporary data. After the September 9, 2026 usability fixes, all 144 server tests and all 35 browser test cases were verified. Coverage includes README retention and restoration, MCP over npm stdio, name suggestions, prepared execution displays, standalone-export requests, and change history.
 
 The current app supports local, single-user operation. A VS Code extension, dedicated desktop shell, multi-user management, and remote operation are not implemented. The Core validates operations that pass through it. The Runtime handles model invocation, external tools, and OS-level restrictions. Execution reports and estimated Context size alone do not establish an improvement in development quality.
 
