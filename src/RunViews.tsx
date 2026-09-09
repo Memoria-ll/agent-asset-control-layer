@@ -24,6 +24,8 @@ import {
   executionLabels,
   eventLabels,
   executionLabel,
+  isPrepared,
+  runStatusLabel,
   runName,
   exactTime,
   snapshotLabel,
@@ -368,7 +370,7 @@ export function Runs({
             <optgroup label="実行の状態">
               {['active', 'completed', 'cancelled'].map((s) => (
                 <option key={s} value={s}>
-                  {statusLabel(s)}
+                  {s === 'active' ? '未完了（準備・待機を含む）' : statusLabel(s)}
                 </option>
               ))}
             </optgroup>
@@ -414,9 +416,7 @@ export function Runs({
                     r.context.project ??
                     'Global'}
                 </span>
-                <span>
-                  {statusLabel(r.status)} · {executionLabel(r)}
-                </span>
+                <span>{runStatusLabel(r)}</span>
                 <span>
                   {r.workflow?.workflow?.stages.find((s) => s.id === r.stage)?.name ??
                     r.stage ??
@@ -440,7 +440,7 @@ export function Runs({
               <Badge
                 tone={run.status === 'active' ? 'blue' : run.status === 'completed' ? 'green' : ''}
               >
-                {statusLabel(run.status)}
+                {runStatusLabel(run)}
               </Badge>
             </div>
             <div className="button-row wrap">
@@ -479,7 +479,7 @@ export function Runs({
               </div>
             )}
             {run.instruction && <pre className="context-content">{run.instruction}</pre>}
-            {run.status === 'active' && (
+            {run.status === 'active' && !isPrepared(run) && (
               <div className="callout">
                 表示とコピーは実行状態を変更しません。接続したAIへの依頼後、Runtimeの開始・結果報告が作業状況に反映されます。
               </div>
@@ -572,10 +572,15 @@ export function Runs({
               </section>
               <section className="panel">
                 <div className="panel-head">
-                  <h3>引き継ぎ情報を確認</h3>
+                  <h3>{isPrepared(run) ? '次の操作：AIへ依頼する' : '引き継ぎ情報を確認'}</h3>
                   <Terminal size={16} />
                 </div>
                 <div className="panel-body">
+                  {isPrepared(run) && (
+                    <div className="callout" role="status">
+                      準備ができました。AIはまだ作業を始めていません。下の依頼をコピーし、AACLへ接続したAIに渡してください。
+                    </div>
+                  )}
                   <p className="muted">
                     現在のStageのContextを閲覧できます。プレビューはSnapshotを作成せず、versionも更新しません。
                   </p>

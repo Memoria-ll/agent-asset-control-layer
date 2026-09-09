@@ -475,6 +475,11 @@ const stamp = (asset: Asset) => ({
 function selected(m: OnboardingManifest) {
   return m.candidates.filter((c) => m.selected?.includes(c.id));
 }
+// A README is documentation even when explicitly imported or packaged with a Skill.
+// Derive this from the path so saved manifests from older releases are protected too.
+function retainedDocument(file: Pick<NativeFile, 'relative'>) {
+  return /^readme(?:[._-].*)?$/i.test(path.posix.basename(file.relative));
+}
 function importedAssets(core: Core, m: OnboardingManifest) {
   const assets = core.state().assets;
   return selected(m).map((c) => {
@@ -992,10 +997,16 @@ export function onboardingDiscover(core: Core, input: unknown) {
         ) {
           const rule =
             /^(?:AGENTS|CLAUDE|GEMINI)(?:\.local)?\.md$/i.test(entry.name) ||
+            /^AGENTS\.override\.md$/i.test(entry.name) ||
             /(?:^|[\\/])rules(?:[\\/]|$)/i.test(file) ||
             /\.(?:rules|mdc)$/.test(entry.name) ||
             entry.name === '.cursorrules';
-          add(rootIndex, directory, entry.name, rule ? 'rule' : 'other');
+          const instruction =
+            rule ||
+            /(?:^|[\\/])(?:prompts|commands)(?:[\\/]|$)/i.test(file) ||
+            /\.prompt$/i.test(entry.name);
+          if (instruction && !retainedDocument({ relative: entry.name }))
+            add(rootIndex, directory, entry.name, rule ? 'rule' : 'other');
         } else issue(file, 'UNSUPPORTED_ASSET');
       } catch (error) {
         if (errorCode(error) === 'DISCOVERY_LIMIT') throw error;
@@ -1027,7 +1038,9 @@ export function onboardingDiscover(core: Core, input: unknown) {
             index,
             root.path,
             path.basename(source),
-            /(?:AGENTS|CLAUDE)\.md$|\.(?:rules|mdc)$/.test(source) ? 'rule' : 'other',
+            /(?:AGENTS(?:\.override)?|CLAUDE)\.md$|\.(?:rules|mdc)$/.test(source)
+              ? 'rule'
+              : 'other',
           );
       }
     } catch (error) {
@@ -1322,6 +1335,7 @@ export function onboardingCutover(core: Core, input: unknown) {
     for (const c of selected(m)) checkSkillMembers(c);
     for (const c of selected(m))
       for (const f of c.files) {
+        if (retainedDocument(f)) continue;
         guard(f.backedUp, 'BACKUP_REQUIRED', 'All imported files require verified backups');
         checkedBackup(core, m, c, f);
         const source = child(c.path, f.relative);
@@ -1346,6 +1360,7 @@ export function onboardingCutover(core: Core, input: unknown) {
       for (const f of [...c.files].sort(
         (a, b) => Number(b.relative === c.entry) - Number(a.relative === c.entry),
       )) {
+        if (retainedDocument(f)) continue;
         if (f.removal === 'removed') continue;
         const source = child(c.path, f.relative);
         if (exists(source)) {
@@ -1418,6 +1433,7 @@ export function onboardingRestore(core: Core, input: unknown) {
     preflightNativeConnectionRestore(path.join(directory(core, m.id), 'connections'));
     for (const c of selected(m))
       for (const f of c.files) {
+        if (retainedDocument(f) && f.removal === 'present') continue;
         if (!f.backedUp) continue;
         checkedBackup(core, m, c, f);
         const source = child(c.path, f.relative);
@@ -1455,6 +1471,7 @@ export function onboardingRestore(core: Core, input: unknown) {
       for (const f of [...c.files].sort(
         (a, b) => Number(a.relative === c.entry) - Number(b.relative === c.entry),
       )) {
+        if (retainedDocument(f) && f.removal === 'present') continue;
         if (!f.backedUp) continue;
         const source = child(c.path, f.relative);
         validateNative(source);
@@ -1484,7 +1501,12 @@ export function onboardingPlan(core: Core, input: unknown) {
         method: 'remove-only-imported-files-after-mcp-verification',
         paths: selected(m)
           .filter((c) => c.root === index)
-          .flatMap((c) => c.files.map((f) => child(c.path, f.relative))),
+          .flatMap((c) =>
+            c.files.filter((f) => !retainedDocument(f)).map((f) => child(c.path, f.relative)),
+          ),
+        retainedPaths: selected(m)
+          .filter((c) => c.root === index)
+          .flatMap((c) => c.files.filter(retainedDocument).map((f) => child(c.path, f.relative))),
         prerequisites: [
           'verified-backups',
           'actual-mcp-retrieval-and-write',

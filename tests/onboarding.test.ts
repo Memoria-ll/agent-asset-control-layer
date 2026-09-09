@@ -327,6 +327,92 @@ test('discovery uses local host, default roots, deterministic identities and met
   }
 });
 
+test('directory discovery targets instructions and leaves ordinary documents out', (t) => {
+  const { core, native } = fixture(t);
+  put(native, 'README.md', 'Project documentation');
+  put(native, 'README.ja.md', 'Project documentation in Japanese');
+  put(native, 'docs/design.md', 'General design document');
+  put(native, 'rules/README.md', 'How to maintain rules');
+  put(native, 'AGENTS.md', 'Instructions');
+  put(native, 'AGENTS.override.md', 'Override instructions');
+  put(native, 'rules/check.md', 'Check instructions');
+  put(native, 'prompts/explain.md', 'Explain instructions');
+  put(native, 'skills/check/SKILL.md', 'Read README.md');
+  put(native, 'skills/check/README.md', 'Skill supporting documentation');
+  const result = discover(core, native);
+  assert.deepEqual(result.candidates.map((c) => c.entry).sort(), [
+    'AGENTS.md',
+    'AGENTS.override.md',
+    'SKILL.md',
+    'check.md',
+    'explain.md',
+  ]);
+  assert(
+    result.candidates
+      .find((c) => c.type === 'skill')!
+      .files.some((f) => f.relative === 'README.md'),
+  );
+  assert.equal(result.candidates.find((c) => c.entry === 'AGENTS.override.md')?.type, 'rule');
+  const explicit = onboardingDiscover(core, {
+    roots: [{ path: path.join(native, 'AGENTS.override.md'), runtime: 'codex' }],
+  });
+  assert.equal(explicit.candidates[0]?.type, 'rule');
+});
+
+test('explicit README imports and bundled README files survive cutover and subsequent edits survive restore', (t) => {
+  const { core, native, reopen } = fixture(t);
+  const readme = put(native, 'README.md', 'Project documentation');
+  const entry = put(native, 'skills/check/SKILL.md', 'Read README.ja.md');
+  const helper = put(native, 'skills/check/README.ja.md', 'Supporting documentation');
+  const found = onboardingDiscover(core, {
+    roots: [
+      { path: readme, runtime: 'codex' },
+      { path: path.dirname(entry), runtime: 'codex' },
+    ],
+  });
+  const imported = onboardingImport(core, { id: found.id });
+  verify(core, imported);
+  organize(core, imported);
+  const plan = onboardingPlan(core, { id: found.id });
+  assert.deepEqual(
+    plan.plans.flatMap((p) => p.cutover.paths),
+    [entry],
+  );
+  assert.deepEqual(
+    plan.plans.flatMap((p) => p.cutover.retainedPaths).sort(),
+    [readme, helper].sort(),
+  );
+  fs.writeFileSync(readme, 'Project documentation updated after import');
+  onboardingCutover(core, { id: found.id });
+  assert(!fs.existsSync(entry));
+  assert.equal(fs.readFileSync(readme, 'utf8'), 'Project documentation updated after import');
+  assert.equal(fs.readFileSync(helper, 'utf8'), 'Supporting documentation');
+  fs.writeFileSync(helper, 'Supporting documentation updated after cutover');
+  const restarted = reopen();
+  onboardingRestore(restarted, { id: found.id });
+  assert(fs.existsSync(entry));
+  assert.equal(fs.readFileSync(readme, 'utf8'), 'Project documentation updated after import');
+  assert.equal(fs.readFileSync(helper, 'utf8'), 'Supporting documentation updated after cutover');
+});
+
+test('restore still recovers README files removed by older releases', (t) => {
+  const { core, native } = fixture(t);
+  const readme = put(native, 'README.md', 'Saved document');
+  const found = onboardingDiscover(core, { roots: [{ path: readme, runtime: 'codex' }] });
+  const imported = onboardingImport(core, { id: found.id });
+  verify(core, imported);
+  organize(core, imported);
+  const old = onboardingCutover(core, { id: found.id });
+  fs.unlinkSync(readme);
+  old.candidates[0].files[0].removal = 'removed';
+  fs.writeFileSync(
+    path.join(core.store.root, 'onboarding', old.id, 'manifest.json'),
+    JSON.stringify(old),
+  );
+  onboardingRestore(core, { id: old.id });
+  assert.equal(fs.readFileSync(readme, 'utf8'), 'Saved document');
+});
+
 test('bundles import from backups, preserve relative references and export into another empty project', (t) => {
   const { core, native, dir } = fixture(t);
   const content =
@@ -810,7 +896,7 @@ test('restore preserves subsequent canonical organization edits and unknown runt
   put(otherRoot, 'note.md', 'other runtime instructions');
   const unknown = onboardingDiscover(core, {
     id: 'other-runtime',
-    roots: [{ path: otherRoot, runtime: 'other' }],
+    roots: [{ path: path.join(otherRoot, 'note.md'), runtime: 'other' }],
   });
   const imported = onboardingImport(core, { id: unknown.id });
   verify(core, imported);

@@ -38,9 +38,9 @@ npm start
 | -------------- | ------------------------------------------------------------------------------------------ |
 | Browser UI     | Open `http://localhost:4780`.                                                              |
 | MCP over HTTP  | Connect your AI client to `http://localhost:4780/mcp`.                                     |
-| MCP over stdio | Keep the Core running. Set this repository as the working directory and run `npm run mcp`. |
+| MCP over stdio | Keep the Core running. Set this repository as the working directory and run `npm --silent run mcp`. |
 
-The stdio process bridges to the running Core. Once connected, ask the AI to register your project and import and organize existing development instructions. If you have no assets, ask it to create a Workflow or add the editable starter through the UI. Model registration is optional.
+The stdio process bridges to the running Core. The `--silent` option keeps npm banners out of the MCP protocol stream. Once connected, ask the AI to register your project and import and organize existing development instructions. If you have no assets, ask it to create a Workflow or add the editable starter through the UI. Model registration is optional.
 
 | Environment variable | Purpose and default                                                  |
 | -------------------- | -------------------------------------------------------------------- |
@@ -88,7 +88,9 @@ The UI lets you edit stages, responsibilities, outputs, and return paths. Screen
 
 ## Import existing instructions
 
-Onboarding backs up and imports assets, verifies the connection, and lets the AI organize them before disabling the original automatic loading. You can check the connection and content while the source files remain in place.
+Onboarding backs up and imports assets, verifies the connection, and lets the AI organize them before disabling the original automatic loading. You can check the connection and content while the source files remain in place. Directory discovery targets instruction entry points and instruction folders, not ordinary project documentation. Import a README only by explicitly selecting its file path for reuse; README files stay in place during cutover, including those bundled with Skills.
+
+The Assets import dialog registers a single Markdown file immediately as an enabled asset. It does not retain its original path or hash. For folder migration, backup, connection verification, cutover, and restoration by onboarding ID, use the copyable AI request in that dialog. Imported Skills propose their frontmatter name, and you can edit it before saving.
 
 ```mermaid
 flowchart TD
@@ -240,7 +242,7 @@ Keep the Core running and export to a directory that does not yet exist:
 npm run cli -- export-bundle export-input.json ./exported-assets
 ```
 
-If an AI installs the files, it should check the destination and existing-file diff, then write and verify them against the output specification. The older Context Preview, `aacl_materialize`, and CLI `export` generate connected output that requires MCP.
+If an AI installs the files, it should check the destination and existing-file diff, then write and verify them against the output specification. Context Preview provides a copyable standalone-export request for the selected Workflow and additional candidates, with a choice of runtime format. Its Codex/Claude file-generation buttons, `aacl_materialize`, and CLI `export` generate connected output that requires MCP.
 
 ## Implementation and verification
 

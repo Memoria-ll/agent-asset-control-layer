@@ -190,30 +190,37 @@ test('real HTTP MCP client: initialize, tools/resources, workflow, handoff, jour
   const missing = await client.callTool({ name: 'aacl_asset_get', arguments: { id: 'absent' } });
   assert.equal(missing.isError, true);
   // Stdio bridges the same live Core and must not acquire another store lock.
-  const stdio = new Client({ name: 'stdio-test', version: '1' });
-  await stdio.connect(
-    new StdioClientTransport({
-      command: process.execPath,
-      args: ['--import', 'tsx', 'server/stdio.ts'],
-      cwd: process.cwd(),
-      env: {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(
-            (pair): pair is [string, string] => pair[1] !== undefined,
+  for (const launch of [
+    { command: process.execPath, args: ['--import', 'tsx', 'server/stdio.ts'] },
+    { command: 'npm', args: ['--silent', 'run', 'mcp'] },
+  ]) {
+    const stdio = new Client({ name: 'stdio-test', version: '1' });
+    const protocolErrors: Error[] = [];
+    stdio.onerror = (error) => protocolErrors.push(error);
+    await stdio.connect(
+      new StdioClientTransport({
+        ...launch,
+        cwd: process.cwd(),
+        env: {
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              (pair): pair is [string, string] => pair[1] !== undefined,
+            ),
           ),
-        ),
-        AACL_URL: `${base}/mcp`,
-      },
-      stderr: 'pipe',
-    }),
-  );
-  try {
-    const bootstrapResult = await stdio.callTool({ name: 'aacl_bootstrap', arguments: {} });
-    assert.ok((bootstrapResult.content as { text: string }[])[0].text.includes(`${base}/mcp`));
-    const runs = await stdio.callTool({ name: 'aacl_run_list', arguments: {} });
-    assert.ok((runs.content as { text: string }[])[0].text.includes(run.id));
-  } finally {
-    await stdio.close();
+          AACL_URL: `${base}/mcp`,
+        },
+        stderr: 'pipe',
+      }),
+    );
+    try {
+      const bootstrapResult = await stdio.callTool({ name: 'aacl_bootstrap', arguments: {} });
+      assert.ok((bootstrapResult.content as { text: string }[])[0].text.includes(`${base}/mcp`));
+      const runs = await stdio.callTool({ name: 'aacl_run_list', arguments: {} });
+      assert.ok((runs.content as { text: string }[])[0].text.includes(run.id));
+      assert.deepEqual(protocolErrors, [], 'stdio must contain only MCP protocol messages');
+    } finally {
+      await stdio.close();
+    }
   }
 });
 test('HTTP rejects foreign Origin, host rebinding and unauthenticated human mutations', async (t) => {

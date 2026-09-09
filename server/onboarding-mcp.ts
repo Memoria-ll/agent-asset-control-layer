@@ -27,7 +27,7 @@ export function registerOnboarding(
 ) {
   register(
     'aacl_onboarding_discover',
-    'Explore requested native asset roots or default local runtime roots. Saves a resumable manifest; excludes authentication, sessions, caches and plugin-managed content.',
+    'Explore requested native asset roots or default local runtime roots. Directory scans target instructions, not ordinary README/project documents; explicitly select a document file to import it for reuse. Saves a resumable manifest; excludes authentication, sessions, caches and plugin-managed content.',
     onboardingSchemas.discover.shape,
     false,
     (args) => onboardingDiscover(core, args),

@@ -34,7 +34,8 @@ import { ContractDetails } from './AssetContracts.tsx';
 import { AssetHistory } from './AssetHistory.tsx';
 import { AssetMetadata, AssetFiles, RelationsExplorer } from './AssetRelations.tsx';
 import { WorkflowActivity } from './WorkflowActivity.tsx';
-import { runName } from './RunEvidence.tsx';
+import { runName, isPrepared, runStatusLabel } from './RunEvidence.tsx';
+import { changeSummary } from './changeSummary.ts';
 import { stageAssignment } from './ModelPolicy.tsx';
 import { Launcher, Runs, WorkflowFlow } from './RunViews.tsx';
 import { ContextView } from './ContextView.tsx';
@@ -487,6 +488,8 @@ function Workflows({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const activeRuns = data.runs.filter((r) => r.status === 'active');
+  const runningRuns = activeRuns.filter((r) => r.executionStatus === 'running');
+  const preparedRuns = data.runs.filter(isPrepared);
   const pendingReviews = data.reviews.filter((r) => r.status === 'pending');
   const starter = async () => {
     setBusy(true);
@@ -513,9 +516,13 @@ function Workflows({
             <span>Assets</span>
           </div>
           <div>
-            <span className={`status-dot ${activeRuns.length ? 'active' : ''}`} />
-            <strong>{activeRuns.length}</strong>
+            <span className={`status-dot ${runningRuns.length ? 'active' : ''}`} />
+            <strong>{runningRuns.length}</strong>
             <span>実行中</span>
+          </div>
+          <div>
+            <strong>{preparedRuns.length}</strong>
+            <span>AIへ依頼待ち</span>
           </div>
           <button type="button" onClick={onReviews}>
             <BookOpen size={18} />
@@ -531,7 +538,7 @@ function Workflows({
             <Play size={19} />
           </span>
           <div className="grow">
-            <span>進行中の実行</span>
+            <span>{runStatusLabel(activeRuns[0])}</span>
             <strong>{activeRuns[0].title}</strong>
             <small>
               {runName(activeRuns[0], data)} ·{' '}
@@ -948,7 +955,13 @@ function AssetDetail({
           return (
             <div key={c.id} className="asset-history-entry">
               <Badge>{c.origin}</Badge>
-              <strong>{c.summary}</strong>
+              <strong>{changeSummary(c)}</strong>
+              {changeSummary(c) !== c.summary && (
+                <details>
+                  <summary>導入ID・依頼原文・変更理由</summary>
+                  <pre className="context-content">{c.summary}</pre>
+                </details>
+              )}
               <p className="muted small-text">
                 {relativeDate(c.createdAt)} · {c.actor} · {c.id}
               </p>

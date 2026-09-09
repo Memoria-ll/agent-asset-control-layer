@@ -17,6 +17,7 @@ import { ProposalPreview } from './ProposalPreview.tsx';
 import { AssetCosts } from './AssetCosts.tsx';
 import { snapshotLabel, exactTime } from './RunEvidence.tsx';
 import { WorkflowComparison } from './WorkflowComparison.tsx';
+import { changeSummary } from './changeSummary.ts';
 
 type Mutate = (route: string, body: unknown) => Promise<any>;
 export function JournalModal({
@@ -535,7 +536,7 @@ export function History({
                 <GitCommitHorizontal size={21} />
               </span>
               <div className="grow">
-                <strong>{c.summary}</strong>
+                <strong>{changeSummary(c)}</strong>
                 <p>
                   {c.actor} · {relativeDate(c.createdAt)} · {c.id}
                 </p>
@@ -561,7 +562,13 @@ export function History({
           wide
         >
           <div className="eyebrow">{selected.id}</div>
-          <h3>{selected.summary}</h3>
+          <h3>{changeSummary(selected)}</h3>
+          {changeSummary(selected) !== selected.summary && (
+            <details className="form-section">
+              <summary>導入ID・依頼原文・変更理由</summary>
+              <pre className="context-content">{selected.summary}</pre>
+            </details>
+          )}
           <div className="button-row wrap">
             <Badge>{selected.origin}</Badge>
             <span className="muted small-text">

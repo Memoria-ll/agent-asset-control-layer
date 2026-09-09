@@ -4,7 +4,7 @@ AACLでは、既存資産の取り込みと最初の整理を済ませた後、W
 
 ## 最初の接続と既存資産の導入
 
-Coreを起動し、`http://localhost:4780/mcp`へRuntimeを接続します。標準入出力の接続を使う場合は、Coreの起動後に`npm run mcp`を使います。接続先を変更する場合は`AACL_URL`を設定します。Runtimeごとの接続設定案は`aacl_onboarding_plan`で取得できます。
+Coreを起動し、`http://localhost:4780/mcp`へRuntimeを接続します。標準入出力の接続を使う場合は、Coreの起動後に`npm --silent run mcp`を使います。`--silent`はnpmの起動ログがMCPの標準出力へ混ざることを防ぎます。接続先を変更する場合は`AACL_URL`を設定します。Runtimeごとの接続設定案は`aacl_onboarding_plan`で取得できます。
 
 `aacl_onboarding_connect`または`npm run cli -- onboarding connect <id> input.json`では、ユーザーの導入依頼に基づいてCodex・Claude・Cursorの接続設定と案内ファイルを配置できます。元の設定値と認証情報を保持します。退避した設定本文は非公開のファイルに保存し、MCP応答や資産本文へ渡しません。未対応の構文や既存定義との競合は、変更せずに通知します。設定を配置しただけでは接続済みと判定しません。
 
@@ -23,6 +23,8 @@ Coreを起動し、`http://localhost:4780/mcp`へRuntimeを接続します。標
 | 初回整理       | `aacl_onboarding_organize`に依頼・理由・分類結果・変更の配列を渡します。分類、Roleへの紐づけ、適用条件を一括保存できます。未確定な資産は無効・未紐づけのまま残せます。 |
 | 元の読込を停止 | `aacl_onboarding_cutover`は、内容が変わっていないことを検証し、退避済みの取り込み対象だけを元の場所から除きます。元の設定や認証情報は維持します。                      |
 | 復元           | `aacl_onboarding_restore`は元ファイルと初回整理を復元します。後から編集されたファイルや資産を上書きせず、競合を示します。                                              |
+
+通常のREADMEや設計文書はフォルダー探索の候補にしません。AGENTS.mdなどの指示ファイル、Skill、rules・prompts・commands内の指示を探索します。文書を明示的に資産化する場合は、そのファイルをrootsに指定します。READMEは補助ファイルとして取り込んだ場合も切り替えで削除しません。`aacl_onboarding_plan`の`paths`が削除対象、`retainedPaths`が残す文書です。残したREADMEの後続編集は、導入の復元でも保持します。
 
 明示的な探索の入力例です。パスはCoreが動くOS上で既に存在する場所に置き換えます。別ホストのパスをローカルのパスとして推測しません。
 

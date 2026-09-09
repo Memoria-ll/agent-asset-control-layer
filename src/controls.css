@@ -330,7 +330,7 @@ td {
 }
 .workspace-overview {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 10px;
