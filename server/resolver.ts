@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { assetBody } from './contracts.ts';
+import { normalizeDirectory } from './paths.ts';
 import {
   type Asset,
   type Context,
@@ -33,6 +34,7 @@ export function scopeMatches(scope: Scope, ctx: Context): boolean {
             path.posix.normalize(s.replaceAll('\\', '/')).replace(/\/$/, '') || '/';
           const target = normalize(ctx[key]!);
           const root = normalize(value);
+          if (root === '.') return !target.startsWith('../') && !path.posix.isAbsolute(target);
           return target === root || target.startsWith(root === '/' ? '/' : root + '/');
         })),
   );
@@ -58,29 +60,92 @@ export function resolveContext(
   context: Context,
   options: { project?: Project; requested?: string[] } = {},
 ): Resolution {
+  if (context.directory)
+    context = { ...context, directory: normalizeDirectory(context.directory, options.project) };
   // Apply explicit project bindings before candidate activation and dependency discovery.
   assets = assets.map((asset) => {
     const binding =
       options.project && Object.hasOwn(options.project.bindings, asset.id)
         ? options.project.bindings[asset.id]
         : undefined;
-    return { ...asset, scope: { ...asset.scope, ...(binding ?? {}) } };
+    const scope = { ...asset.scope, ...(binding ?? {}) };
+    if (scope.directory && (!asset.projectId || asset.projectId === context.project))
+      scope.directory = scope.directory.map((p) => {
+        try {
+          return normalizeDirectory(p, options.project);
+        } catch {
+          return p.replaceAll('\\', '/');
+        } // An out-of-scope rule does not invalidate another project's Context.
+      });
+    return { ...asset, scope };
   });
   const requested = new Set(options.requested ?? []);
+  const selectedBy = new Map<string, string[]>();
+  const relationMatches = (scope: Scope) =>
+    scopeMatches(
+      {
+        ...scope,
+        ...(scope.directory
+          ? {
+              directory: scope.directory.map((p) => {
+                try {
+                  return normalizeDirectory(p, options.project);
+                } catch {
+                  return p;
+                }
+              }),
+            }
+          : {}),
+      },
+      context,
+    );
+  const dependencies = (a: Asset) => [
+    ...new Set([
+      ...a.dependencies,
+      ...(a.relations ?? [])
+        .filter(
+          (r) =>
+            r.kind !== 'reference' &&
+            relationMatches(r.scope ?? {}) &&
+            (r.kind === 'required' ||
+              (!!Object.keys(r.scope ?? {}).length && !r.condition) ||
+              requested.has(r.target)),
+        )
+        .map((r) => r.target),
+      ...(a.skill?.steps ?? [])
+        .filter((s) => !s.condition || requested.has(s.skillId))
+        .map((s) => s.skillId),
+    ]),
+  ];
+  const expanded = new Set<string>();
   // Dependencies are activated explicitly; scopes and compatibility still apply to them.
   const expand = (id: string) => {
     const a = assets.find((x) => x.id === id);
-    for (const dep of a?.dependencies ?? [])
+    if (
+      !a ||
+      expanded.has(id) ||
+      !scopeMatches(a.scope, context) ||
+      (a.projectId && a.projectId !== context.project) ||
+      ((!a.enabled || options.project?.disabled.includes(a.id)) && !a.mandatory)
+    )
+      return;
+    expanded.add(id);
+    for (const dep of dependencies(a)) {
+      selectedBy.set(dep, [...new Set([...(selectedBy.get(dep) ?? []), id])]);
       if (!requested.has(dep)) {
         requested.add(dep);
-        expand(dep);
       }
+      expand(dep);
+    }
   };
   for (const a of assets)
     if (
       requested.has(a.id) ||
+      (a.type === 'skill' && (a.scope.role || a.scope.model) && scopeMatches(a.scope, context)) ||
       (a.activation === 'auto' &&
-        !['workflow', 'role', 'task-type', 'skill', 'template', 'capability'].includes(a.type) &&
+        !['workflow', 'role', 'task-type', 'skill', 'template', 'capability', 'other'].includes(
+          a.type,
+        ) &&
         scopeMatches(a.scope, context))
     ) {
       requested.add(a.id);
@@ -96,7 +161,7 @@ export function resolveContext(
         options.project && Object.hasOwn(options.project.bindings, original.id)
           ? options.project.bindings[original.id]
           : undefined;
-      const a = { ...original, scope: { ...original.scope, ...(binding ?? {}) } };
+      const a = original;
       let status: ResolutionEntry['status'] = 'included';
       const reasons: string[] = [];
       const mark = (s: ResolutionEntry['status'], reason: string) => {
@@ -105,15 +170,24 @@ export function resolveContext(
       };
       if (a.projectId && a.projectId !== context.project) mark('excluded', '他のProjectのAsset');
       else if (!scopeMatches(a.scope, context))
-        mark('excluded', '複合scopeのAND条件に一致しません');
+        mark(
+          'excluded',
+          dimensions
+            .filter((key) => a.scope[key] && !scopeMatches({ [key]: a.scope[key] }, context))
+            .map(
+              (key) =>
+                `${key}: 期待値=${a.scope[key]!.join(' または ')} / 入力=${context[key] ?? '未指定'}`,
+            )
+            .join('; '),
+        );
       else if (!requested.has(a.id))
         mark('excluded', 'オンデマンドAssetは明示選択時に読み込みます');
       else if (
         a.skill &&
         ((a.skill.executionMode === 'workflow' && !context.workflow) ||
           (a.skill.executionMode === 'standalone' && !!context.workflow) ||
-          (a.skill.role && a.skill.role !== context.role) ||
-          (a.skill.taskType && a.skill.taskType !== context.taskType))
+          (a.skill.role && context.role && a.skill.role !== context.role) ||
+          (a.skill.taskType && context.taskType && a.skill.taskType !== context.taskType))
       )
         mark('unavailable', 'Skillの実行モード・Role・Task Typeが一致しません');
       else if (
@@ -146,6 +220,8 @@ export function resolveContext(
         );
         if (a.mandatory) reasons.push('mandatory: disable / overrideより優先');
         if (binding) reasons.push('Project bindingを適用');
+        for (const source of selectedBy.get(a.id) ?? [])
+          reasons.push(`利用関係: ${source} → ${a.id}`);
         if (requested.has(a.id)) reasons.push('明示選択・scope一致、または必要な依存Asset');
       }
       return { asset: a, status, reasons, estimatedTokens: tokenEstimate(assetBody(a)) };
@@ -200,7 +276,8 @@ export function resolveContext(
     }
     if (visited.has(id)) return;
     visited.add(id);
-    get(id)?.asset.dependencies.forEach((d) => visit(d, [...stack, id]));
+    const a = get(id)?.asset;
+    if (a) dependencies(a).forEach((d) => visit(d, [...stack, id]));
   };
   included.forEach((e) => visit(e.asset.id, []));
   for (const id of cycleMembers) {
@@ -220,7 +297,7 @@ export function resolveContext(
         changed = true;
       }
     for (const e of entries.filter((e) => e.status === 'included')) {
-      const missing = e.asset.dependencies.filter((d) => get(d)?.status !== 'included');
+      const missing = dependencies(e.asset).filter((d) => get(d)?.status !== 'included');
       if (missing.length) {
         e.status = 'unavailable';
         e.reasons.push(`必要な依存Assetが利用不可: ${missing.join(', ')}`);
@@ -233,7 +310,7 @@ export function resolveContext(
   const emit = (a: Asset) => {
     if (emitted.has(a.id)) return;
     emitted.add(a.id);
-    a.dependencies.forEach((d) => {
+    dependencies(a).forEach((d) => {
       const e = get(d);
       if (e?.status === 'included') emit(e.asset);
     });

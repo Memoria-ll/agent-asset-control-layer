@@ -6,6 +6,7 @@ import { Field, Modal } from './ui.tsx';
 import { TokenPicker, type Choice } from './TokenPicker.tsx';
 import { WorkflowEditor } from './WorkflowEditor.tsx';
 import { AssetContractEditor, defaultContract, contractKey } from './AssetContracts.tsx';
+import { RelationEditor, AssetFiles, ScopeDetails } from './AssetRelations.tsx';
 
 export function AssetEditor({
   asset,
@@ -147,7 +148,7 @@ export function AssetEditor({
           <Field label="種別">
             <select
               value={form.type}
-              disabled={!!asset}
+              disabled={!!asset && asset.type !== 'other'}
               onChange={(e) =>
                 setForm({ ...form, type: e.target.value, ...defaultContract(e.target.value) })
               }
@@ -180,6 +181,12 @@ export function AssetEditor({
           />
         )}
         <AssetContractEditor value={form} assets={data.assets} onChange={set} />
+        <RelationEditor
+          value={form}
+          assets={data.assets}
+          onChange={(relations) => set('relations', relations)}
+        />
+        {(form.files || form.sources) && <AssetFiles asset={form} />}
         <details className="form-section" open={form.type !== 'workflow'}>
           <summary>説明・本文</summary>
           <Field label="説明">
@@ -217,22 +224,32 @@ export function AssetEditor({
             異なる条件はAND、同じ条件の複数値はORです。候補から選ぶか、Enterで追加できます。
           </p>
           <div className="form-grid">
-            {dimensions.map((d) => (
-              <Field key={d} label={d}>
-                <TokenPicker
-                  value={form.scope[d] ?? []}
-                  choices={choicesFor(d)}
-                  onChange={(values) => {
-                    const scope = { ...form.scope };
-                    if (values.length) scope[d] = values;
-                    else delete scope[d];
-                    set('scope', scope);
-                  }}
-                  placeholder="指定なし · 全体に適用"
-                />
-              </Field>
-            ))}
+            {dimensions
+              .filter((d) => form.type !== 'skill' || !['role', 'model'].includes(d))
+              .map((d) => (
+                <Field key={d} label={d}>
+                  <TokenPicker
+                    value={form.scope[d] ?? []}
+                    choices={choicesFor(d)}
+                    onChange={(values) => {
+                      const scope = { ...form.scope };
+                      if (values.length) scope[d] = values;
+                      else delete scope[d];
+                      set('scope', scope);
+                    }}
+                    placeholder="指定なし · 全体に適用"
+                  />
+                </Field>
+              ))}
           </div>
+          {form.type === 'skill' && (
+            <>
+              <p className="muted small-text">
+                Role・Modelとの紐づけは上位の関係画面から設定します。保存済みの適用条件は保持され、既に選ばれたRole・Modelに対する制約として働きます。
+              </p>
+              <ScopeDetails scope={{ role: form.scope.role, model: form.scope.model }} />
+            </>
+          )}
         </details>
         <details className="form-section">
           <summary>優先度・依存関係・互換性</summary>
@@ -256,7 +273,12 @@ export function AssetEditor({
               <TokenPicker
                 value={form.dependencies}
                 choices={data.assets
-                  .filter((a) => a.id !== form.id)
+                  .filter(
+                    (a) =>
+                      a.id !== form.id &&
+                      !['role', 'workflow'].includes(a.type) &&
+                      (form.type !== 'skill' || a.type !== 'task-type'),
+                  )
                   .map((a) => ({ id: a.id, label: a.name }))}
                 onChange={(values) => set('dependencies', values)}
               />

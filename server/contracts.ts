@@ -10,10 +10,21 @@ export function assetBody(a: AssetInput): string {
     sections.push(
       `Skill execution mode: ${a.skill.executionMode}\nExecution permission: ${a.skill.executionPermission}`,
     );
-    if (a.skill.role) sections.push(`Role: ${a.skill.role}`);
-    if (a.skill.taskType) sections.push(`Task Type: ${a.skill.taskType}`);
+    if (a.skill.role) sections.push(`Role constraint (does not select a role): ${a.skill.role}`);
+    if (a.skill.taskType)
+      sections.push(`Task Type constraint (does not select a task type): ${a.skill.taskType}`);
     list('Expected output', a.skill.expectedOutput);
     list('Completion criteria', a.skill.completionCriteria);
+    if (a.skill.steps?.length)
+      sections.push(
+        'Skill内の手順（現在のRole・Model・権限を引き継ぎます）:\n' +
+          a.skill.steps
+            .map(
+              (s, i) =>
+                `${i + 1}. ${s.skillId}${s.condition ? `（条件: ${s.condition}）` : ''}${s.input ? ` 入力: ${JSON.stringify(s.input)}` : ''}${s.output ? ` 出力: ${s.output.join(', ')}` : ''}`,
+            )
+            .join('\n'),
+      );
   }
   if (a.role) {
     list('Responsibilities', a.role.responsibilities);
@@ -40,7 +51,9 @@ export function runRequirements(run: Run, snapshots: Snapshot[]) {
     completionCriteria: [
       ...new Set([
         ...(stage?.completionCriteria ?? []),
-        ...(stage && !stage.transitions.length ? run.workflow!.workflow!.completionCriteria : []),
+        ...(stage && (stage.canComplete ?? !stage.transitions.length)
+          ? run.workflow!.workflow!.completionCriteria
+          : []),
         ...skills.flatMap((a) => a.skill!.completionCriteria),
       ]),
     ],

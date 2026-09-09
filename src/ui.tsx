@@ -125,6 +125,7 @@ export function CopyButton({ text, label = 'コピー' }: { text: string; label?
   const [error, setError] = useState(false);
   return (
     <button
+      type="button"
       className="button small"
       onClick={async () => {
         try {

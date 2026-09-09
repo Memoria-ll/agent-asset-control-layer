@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { Store } from './store.ts';
 import { resolveContext } from './resolver.ts';
@@ -8,6 +9,10 @@ import { starterAssets } from './starter.ts';
 import { pinnedSkill, runRequirements } from './contracts.ts';
 import { assetHistory, assetDiff, changeKinds } from './history.ts';
 import { prepareProposal } from './proposals.ts';
+import { extractRelations, validateRelations } from './relations.ts';
+import { normalizeProjectContext } from './paths.ts';
+import { compareWorkflows } from './observations.ts';
+import { recordSettingChange, type SettingChangeMeta } from './management.ts';
 import {
   assetSchema,
   configSchema,
@@ -31,10 +36,34 @@ import {
 
 const uid = (prefix: string) => `${prefix}-${randomUUID().slice(0, 12)}`;
 const now = () => new Date().toISOString();
+function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.entries(v)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([k, x]) => [k, sort(x)]),
+          )
+        : v;
+  return JSON.stringify(sort(value));
+}
+const launchSchema = z
+  .object({
+    command: z.string().max(10000).default(''),
+    workflowId: idSchema.optional(),
+    skillId: idSchema.optional(),
+    instruction: z.string().max(10000).default(''),
+    context: contextSchema.default({}),
+    requestId: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
 function guard(condition: unknown, code: string, message: string): asserts condition {
   if (!condition) throw new DomainError(code, message, 409);
 }
 function validateReferences(assets: Asset[]) {
+  validateRelations(assets);
   const get = (id: string, type?: string) => {
     const a = assets.find((a) => a.id === id);
     guard(
@@ -102,7 +131,14 @@ export class Core {
     state: State,
     assets: Asset[],
     ops: Operation[],
-    meta: { origin: string; summary: string; actor: string; review?: Review; rollbackOf?: string },
+    meta: {
+      origin: string;
+      summary: string;
+      actor: string;
+      userRequest?: string;
+      review?: Review;
+      rollbackOf?: string;
+    },
   ): ChangeSet {
     guard(ops.length > 0 && ops.length <= 100, 'OPERATIONS', '変更は1〜100件で指定してください');
     const ids = ops.map((op) => (op.op === 'upsert' ? op.asset.id : op.id));
@@ -117,6 +153,7 @@ export class Core {
       origin: meta.origin,
       summary: meta.summary,
       actor: meta.actor,
+      userRequest: meta.userRequest,
       changes: [],
       sourceJournals: meta.review?.journalIds ?? [],
       sourceSnapshots: meta.review?.snapshotIds ?? [],
@@ -182,11 +219,34 @@ export class Core {
         proposalItemId: item?.id,
       });
     }
+    // Re-evaluate extracted links only when source text changes. Manual links remain intact.
+    for (const c of change.changes) {
+      if (!c.after || (c.before && c.before.content === c.after.content)) continue;
+      const extracted = extractRelations(c.after, assets);
+      const lines = c.after.content.split(/\r?\n/);
+      const explicit = (c.after.relations ?? []).filter(
+        (r) =>
+          r.origin === 'manual' ||
+          (r.source &&
+            lines[r.source.line - 1] === r.source.text &&
+            !(c.before?.relations ?? []).some((old) => JSON.stringify(old) === JSON.stringify(r))),
+      );
+      c.after.relations = [
+        ...explicit,
+        ...extracted.filter((r) => !explicit.some((e) => e.target === r.target)),
+      ];
+      if (!c.after.relations.length) delete c.after.relations;
+      c.kinds = changeKinds(c.before, c.after);
+    }
     validateReferences(assets);
     state.changesets.unshift(change);
     return change;
   }
-  changeAssets(input: unknown) {
+  changeAssets(
+    input: unknown,
+    audit?: { actor: string; origin?: string; userRequest?: string; reason?: string },
+    onApplied?: (state: State, change: ChangeSet) => void,
+  ) {
     const req = z
       .object({
         operations: z.array(operationSchema),
@@ -195,14 +255,29 @@ export class Core {
       })
       .strict()
       .parse(input);
-    const change = this.store.transaction((s, a) =>
-      this.apply(s, a, req.operations, {
-        origin: req.origin,
-        summary: req.summary,
-        actor: 'local-user',
-      }),
-    );
+    const change = this.store.transaction((s, a) => {
+      const change = this.apply(s, a, req.operations, {
+        origin: audit?.origin ?? req.origin,
+        summary: audit?.reason ?? req.summary,
+        actor: audit?.actor ?? 'local-user',
+        userRequest: audit?.userRequest,
+      });
+      onApplied?.(s, change);
+      return change;
+    });
     return this.finishHistory(change);
+  }
+  validateChanges(input: unknown) {
+    const req = z
+      .object({ operations: z.array(operationSchema).min(1).max(100), summary: z.string().min(1) })
+      .strict()
+      .parse(input);
+    const { state, assets } = this.state();
+    return this.apply(state, assets, req.operations, {
+      origin: 'preview',
+      summary: req.summary,
+      actor: 'preview',
+    });
   }
   installStarter() {
     const { assets } = this.state();
@@ -266,12 +341,16 @@ export class Core {
       return project;
     });
   }
-  updateOverlay(id: string, input: unknown) {
+  updateOverlay(id: string, input: unknown, meta?: SettingChangeMeta) {
     const req = z
       .object({
         disabled: z.array(idSchema),
         overrides: z.record(idSchema, idSchema),
         bindings: z.record(idSchema, scopeSchema),
+        pathMappings: z
+          .array(z.object({ from: z.string().min(1), to: z.string().min(1) }).strict())
+          .max(100)
+          .optional(),
       })
       .strict()
       .parse(input);
@@ -290,11 +369,20 @@ export class Core {
           assets.find((a) => a.id === ref),
           `Assetが存在しません: ${ref}`,
         );
+      recordSettingChange(state, {
+        kind: 'overlay',
+        targetId: id,
+        before: structuredClone(p),
+        after: { ...p, ...req },
+        reason: 'Projectの例外設定を変更',
+        actor: 'local-user',
+        ...meta,
+      });
       Object.assign(p, req);
       return p;
     });
   }
-  updateConfig(input: unknown) {
+  updateConfig(input: unknown, meta?: SettingChangeMeta) {
     const config = configSchema.parse(input);
     const { assets } = this.state();
     for (const list of [config.providers, config.accounts, config.models, config.runtimes])
@@ -336,12 +424,20 @@ export class Core {
       guard(m.provider === r.provider, 'CONFIG', 'ModelとRuntimeのProviderが一致しません');
     }
     return this.store.transaction((state) => {
+      recordSettingChange(state, {
+        kind: 'config',
+        before: structuredClone(state.config),
+        after: config,
+        reason: 'モデルと実行環境の設定を変更',
+        actor: 'local-user',
+        ...meta,
+      });
       state.config = config;
       return config;
     });
   }
   private boundContext(state: State, context: Context): Context {
-    const ctx = { ...context };
+    const ctx = normalizeProjectContext(context, state.projects);
     const binding =
       state.config.bindings.find((b) => b.role === ctx.role && b.workflow === ctx.workflow) ??
       state.config.bindings.find((b) => b.role === ctx.role && !b.workflow);
@@ -421,14 +517,7 @@ export class Core {
       catalog = [...assets.filter((a) => a.id !== workflow.id), workflow];
     } else {
       guard(!ctx.stage, 'WORKFLOW_REQUIRED', 'Stageの指定にはWorkflowが必要です');
-      for (const skill of assets.filter((a) => requested.includes(a.id) && a.skill))
-        for (const key of ['role', 'taskType'] as const) {
-          const value = skill.skill![key];
-          if (value) {
-            guard(!ctx[key] || ctx[key] === value, 'SKILL_CONTEXT', `Skillの${key}が一致しません`);
-            ctx[key] = value;
-          }
-        }
+      // Lower-level Skills may constrain an existing assignment, never select a Role/Model.
       if (ctx.role) requested.push(ctx.role);
       if (ctx.taskType) requested.push(ctx.taskType);
     }
@@ -471,6 +560,11 @@ export class Core {
       project: project ? { id: project.id, name: project.name, root: project.root } : null,
       resolution,
       artifacts: structuredClone(run.artifacts),
+      settings: {
+        version: state.settingsVersion ?? 0,
+        config: structuredClone(state.config),
+        project: project ? structuredClone(project) : null,
+      },
     };
     state.snapshots.unshift(snapshot);
     run.snapshotIds.push(snapshot.id);
@@ -478,74 +572,227 @@ export class Core {
     return snapshot;
   }
   startRun(input: unknown) {
+    const req = launchSchema.parse(input);
+    return this.store.transaction((state, assets) => {
+      if (req.requestId) {
+        const existing = state.runs.find((r) => r.requestId === req.requestId);
+        if (existing) {
+          guard(
+            existing.requestFingerprint === canonicalJson(req),
+            'REQUEST_CONFLICT',
+            '同じrequestIdに異なる開始条件は指定できません',
+          );
+          return existing;
+        }
+      }
+      const run = this.prepareRun(state, assets, req);
+      state.runs.unshift(run);
+      return run;
+    });
+  }
+  private prepareRun(state: State, assets: Asset[], req: z.infer<typeof launchSchema>): Run {
+    let workflowId = req.workflowId;
+    let skillId = req.skillId;
+    let instruction = req.instruction || req.command;
+    const match = req.command.match(/^\/([\w.-]+)(?:\s+([\s\S]*))?$/);
+    if (match) {
+      const a = requireValue(
+        assets.find((a) => a.id === match[1] && ['workflow', 'skill'].includes(a.type)),
+        '指定したWorkflow / Skillが見つかりません',
+      );
+      guard(!workflowId && !skillId, 'LAUNCH', 'commandとIDを同時に指定できません');
+      if (a.type === 'workflow') workflowId = a.id;
+      else skillId = a.id;
+      instruction = [match[2], req.instruction].filter((text) => text?.trim()).join('\n\n');
+    }
+    guard(!(workflowId && skillId), 'LAUNCH', 'WorkflowとStandalone Skillの同時起動はできません');
+    guard(
+      !req.context.workflow && !req.context.stage && !req.context.role && !req.context.taskType,
+      'LAUNCH_CONTEXT',
+      'Workflow / Stage / Roleは明示した起動対象から決まります',
+    );
+    const workflow = workflowId
+      ? requireValue(
+          assets.find((a) => a.id === workflowId && a.workflow),
+          'Workflowが存在しません',
+        )
+      : null;
+    const skill = skillId
+      ? requireValue(
+          assets.find((a) => a.id === skillId && a.type === 'skill'),
+          'Skillが存在しません',
+        )
+      : undefined;
+    const run: Run = {
+      id: uid('run'),
+      title: instruction || workflow?.name || skillId || 'Advisory session',
+      instruction,
+      mode: workflow ? 'workflow' : 'advisory',
+      status: 'active',
+      version: 1,
+      workflow: structuredClone(workflow),
+      stage: workflow?.workflow?.entryStage ?? null,
+      context: req.context,
+      runtimeSelection: {
+        model: req.context.model,
+        runtime: req.context.runtime,
+        provider: req.context.provider,
+      },
+      skillId,
+      skill: skill ? structuredClone(skill) : undefined,
+      createdAt: now(),
+      updatedAt: now(),
+      snapshotIds: [],
+      artifacts: {},
+      criteria: {},
+      events: [],
+      executionStatus: 'prepared',
+      attempts: [],
+      requestId: req.requestId,
+      requestFingerprint: req.requestId ? canonicalJson(req) : undefined,
+    };
+    this.snapshot(state, assets, run);
+    return run;
+  }
+  preflight(input: unknown) {
+    const req = launchSchema.parse(input);
+    const { state, assets } = this.state();
+    const issues: { code: string; message: string; stage?: string }[] = [];
+    let run: Run;
+    try {
+      run = this.prepareRun(state, assets, req);
+    } catch (e) {
+      return {
+        ready: false,
+        issues: [
+          {
+            code: e instanceof DomainError ? e.code : 'VALIDATION',
+            message: e instanceof Error ? e.message : String(e),
+          },
+        ],
+        candidates: {
+          projects: state.projects.map(({ id, name, root }) => ({ id, name, root })),
+          models: state.config.models,
+          bindings: state.config.bindings,
+        },
+      };
+    }
+    const stages = run.workflow?.workflow?.stages ?? [{ id: '', role: run.context.role }];
+    const assignments = stages.map((stage) => {
+      try {
+        const { role, taskType, model, runtime, provider, ...base } = run.context;
+        const resolution = this.resolution(
+          state,
+          assets,
+          { ...base, ...run.runtimeSelection, stage: stage.id || undefined, role: stage.role },
+          run.skillId ? [run.skillId] : [],
+          run.workflow,
+        );
+        const ctx = resolution.context;
+        if (!ctx.model || !ctx.runtime)
+          issues.push({
+            code: 'RUNTIME_SELECTION_REQUIRED',
+            stage: stage.id,
+            message: `${stage.role ?? '実行'}のModelとRuntimeを設定してください`,
+          });
+        for (const error of resolution.errors)
+          issues.push({ code: 'CONTEXT_UNRESOLVED', stage: stage.id, message: error });
+        const enforcement = state.config.runtimes.find((r) => r.id === ctx.runtime)?.enforcement;
+        for (const key of run.workflow?.workflow?.requiredEnforcement ?? [])
+          if (enforcement?.[key] !== 'enforced')
+            issues.push({
+              code: 'RUNTIME_ENFORCEMENT',
+              stage: stage.id,
+              message: `${key}の必須制約をRuntimeが強制できません`,
+            });
+        return {
+          stage: stage.id || null,
+          role: ctx.role,
+          model: ctx.model,
+          runtime: ctx.runtime,
+          enforcement: enforcement ?? null,
+        };
+      } catch (e) {
+        issues.push({
+          code: e instanceof DomainError ? e.code : 'VALIDATION',
+          stage: stage.id,
+          message: e instanceof Error ? e.message : String(e),
+        });
+        return { stage: stage.id, role: stage.role };
+      }
+    });
+    return {
+      ready: !issues.length,
+      issues,
+      assignments,
+      project: state.projects.find((p) => p.id === run.context.project) ?? null,
+      workflow: run.workflow ? { id: run.workflow.id, revision: run.workflow.revision } : null,
+      settingsVersion: state.settingsVersion ?? 0,
+      candidates: {
+        models: state.config.models,
+        runtimes: state.config.runtimes,
+        bindings: state.config.bindings,
+      },
+      connection:
+        'RuntimeからMCPの取得・開始報告が必要です。事前確認では接続や作業開始を認定しません。',
+    };
+  }
+  restartRun(runId: string, input: unknown) {
     const req = z
       .object({
-        command: z.string().max(10000).default(''),
-        workflowId: idSchema.optional(),
-        skillId: idSchema.optional(),
-        instruction: z.string().max(10000).default(''),
-        context: contextSchema.default({}),
+        expectedVersion: z.number().int().positive(),
+        instruction: z.string().max(10000).optional(),
+        reuseArtifacts: z.array(z.string().min(1)).default([]),
+        reason: z.string().trim().min(1),
       })
       .strict()
       .parse(input);
     return this.store.transaction((state, assets) => {
-      let workflowId = req.workflowId;
-      let skillId = req.skillId;
-      let instruction = req.instruction || req.command;
-      const match = req.command.match(/^\/([\w.-]+)(?:\s+([\s\S]*))?$/);
-      if (match) {
-        const a = requireValue(
-          assets.find((a) => a.id === match[1] && ['workflow', 'skill'].includes(a.type)),
-          '指定したWorkflow / Skillが見つかりません',
-        );
-        guard(!workflowId && !skillId, 'LAUNCH', 'commandとIDを同時に指定できません');
-        if (a.type === 'workflow') workflowId = a.id;
-        else skillId = a.id;
-        instruction = [match[2], req.instruction].filter((text) => text?.trim()).join('\n\n');
-      }
-      guard(!(workflowId && skillId), 'LAUNCH', 'WorkflowとStandalone Skillの同時起動はできません');
-      guard(
-        !req.context.workflow && !req.context.stage && !req.context.role && !req.context.taskType,
-        'LAUNCH_CONTEXT',
-        'Workflow / Stage / Roleは明示した起動対象から決まります',
+      const previous = requireValue(
+        state.runs.find((r) => r.id === runId),
+        'Runが見つかりません',
       );
-      const workflow = workflowId
-        ? requireValue(
-            assets.find((a) => a.id === workflowId && a.workflow),
-            'Workflowが存在しません',
-          )
-        : null;
-      const skill = skillId
-        ? requireValue(
-            assets.find((a) => a.id === skillId && a.type === 'skill'),
-            'Skillが存在しません',
-          )
-        : undefined;
-      const run: Run = {
-        id: uid('run'),
-        title: instruction || workflow?.name || skillId || 'Advisory session',
-        instruction,
-        mode: workflow ? 'workflow' : 'advisory',
-        status: 'active',
-        version: 1,
-        workflow: structuredClone(workflow),
-        stage: workflow?.workflow?.entryStage ?? null,
-        context: req.context,
-        runtimeSelection: {
-          model: req.context.model,
-          runtime: req.context.runtime,
-          provider: req.context.provider,
-        },
-        skillId,
-        skill: skill ? structuredClone(skill) : undefined,
-        createdAt: now(),
-        updatedAt: now(),
-        snapshotIds: [],
-        artifacts: {},
-        criteria: {},
-        events: [],
+      guard(
+        previous.version === req.expectedVersion,
+        'RUN_CONFLICT',
+        'Runは更新されています。最新状態を読み直してください',
+      );
+      guard(previous.workflow, 'WORKFLOW_REQUIRED', 'Workflow実行を指定してください');
+      const { workflow, stage, role, taskType, model, runtime, provider, ...context } =
+        previous.context;
+      const run = this.prepareRun(
+        state,
+        assets,
+        launchSchema.parse({
+          workflowId: previous.workflow.id,
+          instruction: req.instruction ?? previous.instruction,
+          context: { ...context, ...previous.runtimeSelection },
+        }),
+      );
+      for (const key of req.reuseArtifacts)
+        run.artifacts[key] = requireValue(
+          previous.artifacts[key],
+          `再利用する成果物がありません: ${key}`,
+        );
+      run.restartedFrom = {
+        runId: previous.id,
+        workflowRevision: previous.workflow.revision,
+        reason: req.reason,
+        reusedArtifacts: [...new Set(req.reuseArtifacts)],
       };
-      this.snapshot(state, assets, run);
+      run.events.push({
+        at: now(),
+        from: null,
+        to: run.stage,
+        kind: 'restart',
+        note: req.reason,
+        artifacts: structuredClone(run.artifacts),
+        criteria: {},
+        actor: 'user-request',
+      });
+      state.snapshots.find((s) => s.id === run.snapshotIds[0])!.artifacts = structuredClone(
+        run.artifacts,
+      );
       state.runs.unshift(run);
       return run;
     });
@@ -557,6 +804,7 @@ export class Core {
         to: idSchema.optional(),
         kind: z.enum(['advance', 'return', 'retry', 'reject', 'complete', 'cancel']),
         note: z.string().max(10000).default(''),
+        actor: z.string().trim().min(1).default('runtime-report'),
         artifacts: z.record(z.string().min(1), z.string().trim().min(1)).default({}),
         criteria: z.record(z.string().min(1), z.string().trim().min(1)).default({}),
       })
@@ -612,7 +860,11 @@ export class Core {
         );
         Object.assign(run.artifacts, req.artifacts);
         if (req.kind === 'complete') {
-          guard(stage.transitions.length === 0, 'TRANSITION', '最終Stageでのみ完了できます');
+          guard(
+            stage.canComplete ?? stage.transitions.length === 0,
+            'TRANSITION',
+            '完了可能なStageでのみ完了できます',
+          );
           run.status = 'completed';
         } else {
           const edge = requireValue(
@@ -633,7 +885,55 @@ export class Core {
       run.updatedAt = now();
       delete run.lastHandoff;
       delete run.runtimeHandoffAt;
-      run.events.push({ at: now(), from, to: run.stage, kind: req.kind, note: req.note });
+      run.events.push({
+        at: now(),
+        from,
+        to: run.stage,
+        kind: req.kind,
+        note: req.note,
+        criteria: structuredClone(req.criteria),
+        artifacts: structuredClone(run.artifacts),
+        actor: req.actor,
+        attemptId: run.attempts?.at(-1)?.id,
+        snapshotId: run.snapshotIds.at(-1),
+      });
+      if (['return', 'retry', 'reject'].includes(req.kind)) {
+        const invalidStages = new Set<string>();
+        const visit = (id: string) => {
+          if (invalidStages.has(id)) return;
+          invalidStages.add(id);
+          run.workflow?.workflow?.stages
+            .find((s) => s.id === id)
+            ?.transitions.filter((t) => t.kind === 'advance')
+            .forEach((t) => visit(t.to));
+        };
+        if (run.stage) visit(run.stage);
+        for (const stage of run.workflow?.workflow?.stages ?? [])
+          if (invalidStages.has(stage.id)) {
+            for (const key of stage.expectedOutput ?? []) delete run.artifacts[key];
+            for (const key of Object.keys(run.criteria))
+              if (key.startsWith(stage.id + ':')) delete run.criteria[key];
+          }
+        for (const snapshot of state.snapshots.filter(
+          (s) => s.runId === run.id && s.stage && invalidStages.has(s.stage),
+        ))
+          for (const asset of snapshot.resolution.assets)
+            for (const key of asset.skill?.expectedOutput ?? []) delete run.artifacts[key];
+      }
+      // Transition ends the current attempt; a subsequent stage requires a fresh start report.
+      for (const attempt of run.attempts ?? [])
+        if (attempt.status === 'running' || attempt.status === 'waiting-user') {
+          attempt.status = ['cancel', 'return', 'retry', 'reject'].includes(req.kind)
+            ? 'failed'
+            : 'result';
+          attempt.finishedAt = run.updatedAt;
+        }
+      run.executionStatus =
+        run.status === 'active'
+          ? 'prepared'
+          : run.status === 'completed'
+            ? 'result-received'
+            : 'failed';
       if (run.status === 'active') {
         const { role, taskType, model, provider, runtime, ...context } = run.context;
         // A new stage applies its own user-defined binding. Explicit choices may be made in handoff.
@@ -654,6 +954,8 @@ export class Core {
         context: contextSchema.default({}),
         delivery: z.enum(['runtime-pull', 'host-inject']).default('runtime-pull'),
         action: z.enum(['advisory', 'development']).default('advisory'),
+        requestId: z.string().trim().min(1).max(200).optional(),
+        expectedVersion: z.number().int().positive().optional(),
       })
       .strict()
       .parse(input);
@@ -661,6 +963,26 @@ export class Core {
       const run = requireValue(
         state.runs.find((r) => r.id === runId),
         'Runが見つかりません',
+      );
+      if (req.requestId && run.handoffRequests?.[req.requestId]) {
+        const previous = run.handoffRequests[req.requestId];
+        guard(
+          previous.fingerprint === canonicalJson(req),
+          'REQUEST_CONFLICT',
+          '同じrequestIdに異なる引き継ぎ条件は指定できません',
+        );
+        return previous.result as ReturnType<Core['handoffResult']>;
+      }
+      if (req.expectedVersion !== undefined)
+        guard(
+          run.version === req.expectedVersion,
+          'RUN_CONFLICT',
+          'Runは更新されています。最新状態を読み直してください',
+        );
+      guard(
+        !(run.attempts ?? []).some((a) => ['running', 'waiting-user'].includes(a.status)),
+        'ATTEMPT_ACTIVE',
+        '実行中は現在のSnapshotを参照してください。新しい委譲は試行の終了後に行えます',
       );
       guard(run.status === 'active', 'RUN_FINISHED', '終了済みRunには委譲できません');
       if (req.action === 'development')
@@ -683,46 +1005,215 @@ export class Core {
         if (!req.context.runtime) delete context.runtime;
       }
       const snapshot = this.snapshot(state, assets, run, context);
+      const runtime = state.config.runtimes.find(
+        (r) => r.id === snapshot.resolution.context.runtime,
+      );
+      for (const key of run.workflow?.workflow?.requiredEnforcement ?? [])
+        guard(
+          runtime?.enforcement?.[key] === 'enforced',
+          'RUNTIME_ENFORCEMENT',
+          `${key}の必須制約をRuntimeが強制できません`,
+        );
       run.updatedAt = now();
       run.version++;
       run.lastHandoff = { at: run.updatedAt, delivery: req.delivery, snapshotId: snapshot.id };
       if (req.delivery === 'runtime-pull') run.runtimeHandoffAt = run.updatedAt;
-      const stage = run.workflow?.workflow?.stages.find((s) => s.id === run.stage);
-      const skill = pinnedSkill(run, state.snapshots);
-      return {
-        runId,
-        version: run.version,
-        snapshotId: snapshot.id,
-        project: snapshot.project ?? null,
-        task: run.instruction,
-        workflowId: snapshot.workflowId,
-        workflowRevision: snapshot.workflowRevision,
-        stage: run.stage,
-        role: snapshot.resolution.context.role ?? null,
-        runtime:
-          state.config.runtimes.find((r) => r.id === snapshot.resolution.context.runtime) ?? null,
-        model: state.config.models.find((m) => m.id === snapshot.resolution.context.model) ?? null,
-        mode: run.mode,
-        developmentAllowed: !!run.workflow?.workflow?.developmentCapable,
-        delivery: req.delivery,
-        context: snapshot.resolution.content,
-        assets: snapshot.resolution.assets.map((a) => ({
-          id: a.id,
-          revision: a.revision,
-          type: a.type,
-        })),
-        artifacts: run.artifacts,
-        ...runRequirements(run, state.snapshots),
-        skill: skill
-          ? {
-              id: skill.id,
-              revision: skill.revision,
-              contract: skill.skill ?? null,
-            }
-          : null,
-        possibleTransitions: stage?.transitions ?? [],
-        estimatedTokens: snapshot.resolution.estimatedTokens,
-      };
+      run.executionStatus = 'delivery-pending';
+      const result = this.handoffResult(state, run, snapshot, req.delivery);
+      if (req.requestId) {
+        run.handoffRequests ??= {};
+        run.handoffRequests[req.requestId] = { fingerprint: canonicalJson(req), result };
+      }
+      return result;
+    });
+  }
+  private handoffResult(
+    state: State,
+    run: Run,
+    snapshot: Snapshot,
+    delivery: 'runtime-pull' | 'host-inject',
+  ) {
+    const config = snapshot.settings?.config ?? state.config;
+    const stage = run.workflow?.workflow?.stages.find((s) => s.id === run.stage);
+    const skill = pinnedSkill(run, state.snapshots);
+    return {
+      runId: run.id,
+      version: run.version,
+      snapshotId: snapshot.id,
+      project: snapshot.project ?? null,
+      task: run.instruction,
+      workflowId: snapshot.workflowId,
+      workflowRevision: snapshot.workflowRevision,
+      stage: run.stage,
+      role: snapshot.resolution.context.role ?? null,
+      runtime: config.runtimes.find((r) => r.id === snapshot.resolution.context.runtime) ?? null,
+      model: config.models.find((m) => m.id === snapshot.resolution.context.model) ?? null,
+      mode: run.mode,
+      developmentAllowed: !!run.workflow?.workflow?.developmentCapable,
+      delivery,
+      context: snapshot.resolution.content,
+      assets: snapshot.resolution.assets.map((a) => ({
+        id: a.id,
+        revision: a.revision,
+        type: a.type,
+      })),
+      artifacts: run.artifacts,
+      ...runRequirements(run, state.snapshots),
+      skill: skill
+        ? {
+            id: skill.id,
+            revision: skill.revision,
+            contract: skill.skill ?? null,
+          }
+        : null,
+      possibleTransitions: stage?.transitions ?? [],
+      canComplete: stage ? (stage.canComplete ?? stage.transitions.length === 0) : true,
+      executionStatus: run.executionStatus ?? 'prepared',
+      relations: snapshot.resolution.assets.flatMap((a) =>
+        (a.relations ?? []).map((r) => ({ sourceId: a.id, ...r })),
+      ),
+      enforcement: config.runtimes.find((r) => r.id === snapshot.resolution.context.runtime)
+        ?.enforcement ?? {
+        repository: 'instruction-only',
+        external: 'instruction-only',
+        tools: 'instruction-only',
+      },
+      estimatedTokens: snapshot.resolution.estimatedTokens,
+    };
+  }
+  handoffPreview(runId: string) {
+    const { state } = this.state();
+    const run = requireValue(
+      state.runs.find((r) => r.id === runId),
+      'Runが見つかりません',
+    );
+    const snapshot = requireValue(
+      state.snapshots.find((s) => s.id === run.snapshotIds.at(-1)),
+      'Snapshotが見つかりません',
+    );
+    return { ...this.handoffResult(state, run, snapshot, 'host-inject'), preview: true };
+  }
+  runtimeEvent(runId: string, input: unknown) {
+    const req = z
+      .object({
+        expectedVersion: z.number().int().positive(),
+        event: z.enum(['started', 'resumed', 'result', 'failed', 'waiting-user']),
+        attemptId: z.string().trim().min(1).max(200),
+        note: z.string().max(20000).default(''),
+        artifacts: z.record(z.string().trim().min(1)).default({}),
+        observedAt: z.string().datetime().optional(),
+        requestId: z.string().trim().min(1).max(200).optional(),
+      })
+      .strict()
+      .parse(input);
+    return this.store.transaction((state) => {
+      const run = requireValue(
+        state.runs.find((r) => r.id === runId),
+        'Runが見つかりません',
+      );
+      const repeated = run.events.find((e) =>
+        req.requestId
+          ? e.requestId === req.requestId
+          : e.attemptId === req.attemptId &&
+            e.kind === `runtime-${req.event}` &&
+            e.requestVersion === req.expectedVersion,
+      );
+      if (repeated) {
+        guard(
+          repeated.kind === `runtime-${req.event}` &&
+            repeated.attemptId === req.attemptId &&
+            repeated.note === req.note &&
+            isDeepStrictEqual(repeated.artifacts ?? {}, req.artifacts) &&
+            repeated.observedAt === req.observedAt,
+          'REQUEST_CONFLICT',
+          '同じ試行の報告を異なる内容で再送できません',
+        );
+        return run;
+      }
+      guard(
+        run.version === req.expectedVersion,
+        'RUN_CONFLICT',
+        'Runは更新されています。最新状態を読み直してください',
+      );
+      guard(run.status === 'active', 'RUN_FINISHED', '終了済みRunは変更できません');
+      const at = now();
+      if (req.observedAt)
+        guard(
+          Date.parse(req.observedAt) <= Date.now(),
+          'OBSERVED_AT',
+          '観測時刻を未来にできません',
+        );
+      run.attempts ??= [];
+      let attempt = run.attempts.find((a) => a.id === req.attemptId);
+      if (req.event === 'started') {
+        guard(
+          !attempt && !run.attempts.some((a) => ['running', 'waiting-user'].includes(a.status)),
+          'ATTEMPT_ACTIVE',
+          '実行中の試行があります',
+        );
+        guard(run.lastHandoff, 'HANDOFF_REQUIRED', '開始報告の前にContextを取得してください');
+        guard(
+          run.context.model && run.context.runtime,
+          'RUNTIME_SELECTION_REQUIRED',
+          '開始報告には登録済みのModelとRuntimeが必要です',
+        );
+        attempt = {
+          id: req.attemptId,
+          stage: run.stage,
+          snapshotId: run.lastHandoff.snapshotId,
+          startedAt: at,
+          status: 'running',
+          model: run.context.model,
+          runtime: run.context.runtime,
+          note: req.note,
+        };
+        run.attempts.push(attempt);
+      } else if (req.event === 'resumed') {
+        guard(
+          attempt && attempt.stage === run.stage && attempt.status === 'waiting-user',
+          'ATTEMPT_STATE',
+          '現在工程の判断待ちの試行を指定してください',
+        );
+        attempt.status = 'running';
+        attempt.note = req.note;
+      } else {
+        guard(
+          attempt &&
+            attempt.stage === run.stage &&
+            ['running', 'waiting-user'].includes(attempt.status),
+          'ATTEMPT_STATE',
+          '現在工程の実行中の試行を指定してください',
+        );
+        attempt.status = req.event;
+        attempt.note = req.note;
+        if (req.event !== 'waiting-user') attempt.finishedAt = at;
+        for (const [key, value] of Object.entries(req.artifacts)) {
+          if (run.artifacts[key] !== value) run.criteria = {};
+          run.artifacts[key] = value;
+        }
+      }
+      run.executionStatus = ['started', 'resumed'].includes(req.event)
+        ? 'running'
+        : req.event === 'result'
+          ? 'result-received'
+          : (req.event as 'failed' | 'waiting-user');
+      run.events.push({
+        at,
+        from: run.stage,
+        to: run.stage,
+        kind: `runtime-${req.event}`,
+        note: req.note,
+        attemptId: req.attemptId,
+        artifacts: structuredClone(req.artifacts),
+        actor: 'runtime-report',
+        snapshotId: attempt.snapshotId,
+        observedAt: req.observedAt,
+        requestId: req.requestId,
+        requestVersion: req.expectedVersion,
+      });
+      run.version++;
+      run.updatedAt = at;
+      return run;
     });
   }
   addJournal(input: unknown) {
@@ -733,6 +1224,8 @@ export class Core {
         observation: z.string().trim().min(1).max(20000),
         possibleCause: z.string().max(10000).default(''),
         confidence: z.number().min(0).max(1).default(0.8),
+        observedAt: z.string().datetime().optional(),
+        attemptId: z.string().min(1).optional(),
       })
       .strict()
       .parse(input);
@@ -749,11 +1242,25 @@ export class Core {
         context: s.resolution.context,
         workflowRevision: s.workflowRevision,
       };
+      if (req.observedAt)
+        guard(
+          Date.parse(req.observedAt) <= Date.now(),
+          'OBSERVED_AT',
+          '観測時刻を未来にできません',
+        );
+      if (req.attemptId)
+        guard(
+          state.runs
+            .find((r) => r.id === s.runId)
+            ?.attempts?.some((a) => a.id === req.attemptId && a.snapshotId === s.id),
+          'JOURNAL_ATTEMPT',
+          '試行とSnapshotが一致しません',
+        );
       state.journals.unshift(journal);
       return journal;
     });
   }
-  requestReview(input: unknown) {
+  requestReview(input: unknown, audit?: { actor: string; userRequest?: string; reason?: string }) {
     const req = z
       .object({ journalIds: z.array(z.string()).min(1), reason: z.string().min(1) })
       .strict()
@@ -774,6 +1281,8 @@ export class Core {
         reason: req.reason,
         operations: [],
         observedScopes: journals.map((j) => j.context),
+        requestedBy: audit?.actor ?? 'local-user',
+        userRequest: audit?.userRequest,
       };
       state.reviews.unshift(review);
       return review;
@@ -793,7 +1302,7 @@ export class Core {
       diagnostics: this.diagnostics(),
       provenance: state.changesets,
       instructions:
-        'JournalとSnapshotを解釈し、aacl_review_submitのitemsで提案してください。各itemにoperation、proposedScope、proposedRelations（dependencies/conflicts）、reason、evidence（journalIds/snapshotIds/explanation）が必要です。Scope/Relationは変更後Assetと一致させ、削除時はnullにします。観測scopeは根拠からCoreが導出します。根拠IDはこのReviewの対象に限定します。既存AssetはexpectedRevisionを指定します。変更不要ならitemsを空にします。承認はユーザーがUIで行います。',
+        'JournalとSnapshotを解釈し、aacl_review_submitのitemsで提案してください。各itemにoperation、proposedScope、proposedRelations（dependencies/conflicts、設定時はrelations）、reason、evidence（journalIds/snapshotIds/explanation）が必要です。Scope/Relationは変更後Assetと一致させ、削除時はnullにします。観測scopeは根拠からCoreが導出します。根拠IDはこのReviewの対象に限定します。既存AssetはexpectedRevisionを指定します。変更不要ならitemsを空にします。承認はユーザーの依頼を記録してMCPまたはUIで行います。',
     };
   }
   reviewPreview(id: string) {
@@ -802,6 +1311,12 @@ export class Core {
       state.reviews.find((r) => r.id === id),
       'Reviewが見つかりません',
     );
+    if (review.preparedChanges)
+      return review.preparedChanges.map(({ before, after }) => ({
+        before,
+        after,
+        diff: assetDiff(before, after),
+      }));
     return review.operations.map((op) => {
       const assetId = op.op === 'upsert' ? op.asset.id : op.id;
       const before =
@@ -832,33 +1347,71 @@ export class Core {
       );
       const req = prepareProposal(state, assets, review, input);
       // Validate the complete proposed result on a copy. Never mutate canonical assets here.
-      if (req.operations.length)
-        this.apply(structuredClone(state), structuredClone(assets), req.operations, {
-          origin: 'journal-review',
-          summary: req.reason,
-          actor: req.proposedBy,
-          review,
-        });
-      Object.assign(review, req, { status: 'pending' });
+      const prepared = req.operations.length
+        ? this.apply(structuredClone(state), structuredClone(assets), req.operations, {
+            origin: 'journal-review',
+            summary: req.reason,
+            actor: req.proposedBy,
+            review,
+          })
+        : undefined;
+      Object.assign(review, req, {
+        status: 'pending',
+        preparedChanges: prepared?.changes ?? [],
+        settingsVersion: state.settingsVersion ?? 0,
+      });
       return review;
     });
   }
-  decideReview(id: string, approve: boolean) {
+  decideReview(
+    id: string,
+    approve: boolean,
+    audit?: { actor: string; origin?: string; userRequest?: string; reason?: string },
+  ) {
     const result = this.store.transaction((state, assets) => {
       const review = requireValue(
         state.reviews.find((r) => r.id === id),
         'Reviewが見つかりません',
       );
       guard(review.status === 'pending', 'REVIEW_STATE', '承認待ちのReviewではありません');
+      review.decision = {
+        approved: approve,
+        actor: audit?.actor ?? 'local-user',
+        userRequest: audit?.userRequest,
+        reason: audit?.reason,
+        decidedAt: now(),
+      };
       if (!approve) {
         review.status = 'rejected';
         return { review };
+      }
+      if (review.operations.length) {
+        const prepared = this.apply(
+          structuredClone(state),
+          structuredClone(assets),
+          review.operations,
+          { origin: 'preview', summary: review.reason, actor: 'preview', review },
+        );
+        const content = (changes: ChangeSet['changes']) =>
+          changes.map((c) => ({
+            id: c.id,
+            before: c.before ? inputOf(c.before) : null,
+            after: c.after ? inputOf(c.after) : null,
+          }));
+        guard(
+          review.preparedChanges &&
+            isDeepStrictEqual(content(prepared.changes), content(review.preparedChanges)) &&
+            (review.settingsVersion ?? 0) === (state.settingsVersion ?? 0),
+          'PROPOSAL_STALE',
+          '保存した差分または適用設定が変わっています。Reviewを作り直して提案を確認してください',
+        );
       }
       const changeSet = review.operations.length
         ? this.apply(state, assets, review.operations, {
             origin: 'journal-review',
             summary: review.reason,
-            actor: 'local-user',
+            actor: audit?.actor ?? 'local-user',
+            userRequest: audit?.userRequest,
             review,
           })
         : undefined;
@@ -869,7 +1422,10 @@ export class Core {
     if (result.changeSet) this.finishHistory(result.changeSet);
     return result;
   }
-  rollback(input: unknown) {
+  rollback(
+    input: unknown,
+    audit?: { actor: string; origin?: string; userRequest?: string; reason?: string },
+  ) {
     const req = z
       .object({
         changeSetId: z.string().optional(),
@@ -916,8 +1472,9 @@ export class Core {
       }
       return this.apply(state, assets, operations, {
         origin: 'rollback',
-        actor: 'local-user',
-        summary: `${rollbackOf}を復元`,
+        actor: audit?.actor ?? 'local-user',
+        userRequest: audit?.userRequest,
+        summary: audit?.reason ?? `${rollbackOf}を復元`,
         rollbackOf,
       });
     });
@@ -1028,6 +1585,9 @@ export class Core {
     return [...groups.values()]
       .map((g) => ({ ...g, averageTokens: Math.round(g.estimatedTokens / g.snapshots) }))
       .sort((a, b) => b.estimatedTokens - a.estimatedTokens || a.assetId.localeCompare(b.assetId));
+  }
+  workflowMetrics(input: unknown = {}) {
+    return compareWorkflows(this.state().state, input);
   }
   diagnostics() {
     const { state, assets } = this.state();

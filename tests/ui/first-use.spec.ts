@@ -56,23 +56,31 @@ test('project Workflow preserves draft while adding a Role, previews, starts and
   await expect(draft.getByLabel('Project', { exact: true })).toHaveValue(project.id);
   await draft.getByLabel('今回の指示').fill('成果物と過去のContextを確認する');
   await draft.getByRole('button', { name: '実行を開始', exact: true }).click();
-  await expect(page.getByText('AIへの依頼待ち', { exact: true })).toBeVisible();
+  await expect(page.locator('.run-detail').getByText('準備済み', { exact: true })).toBeVisible();
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.getByRole('button', { name: 'AIへの依頼をコピー', exact: true }).click();
   const request = await page.evaluate(() => navigator.clipboard.readText());
   expect(request).toContain(root);
   expect(request).toContain(project.id);
-  await page.getByRole('button', { name: 'Handoffを取得', exact: true }).click();
+  const beforePreview = await (await page.request.get('/api/state')).json();
+  await page.getByRole('button', { name: 'Handoffをプレビュー', exact: true }).click();
   await expect(draft).toContainText(root);
   await draft.getByRole('button', { name: '閉じる', exact: true }).click();
-  await expect(page.getByText(/手動で引き継ぎ情報を取得済み/)).toBeVisible();
+  const afterPreview = await (await page.request.get('/api/state')).json();
+  expect(afterPreview.runs).toEqual(beforePreview.runs);
+  expect(afterPreview.snapshots).toEqual(beforePreview.snapshots);
   await page.getByRole('button', { name: '実行を完了', exact: true }).click();
   await draft.getByLabel('検証が完了している', { exact: true }).fill('テストを確認');
   await draft.getByLabel('成果物が確認されている', { exact: true }).fill('内容を確認');
   await draft.getByLabel('成果物 · report', { exact: true }).fill('reports/result.md');
   await draft.getByRole('button', { name: '確定する', exact: true }).click();
-  await expect(page.getByText('reports/result.md', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Snapshot 1 · work', exact: true }).click();
+  await expect(page.getByRole('region', { name: '保存された完了根拠' })).toContainText(
+    'テストを確認',
+  );
+  await expect(page.getByRole('region', { name: '保存された完了根拠' })).toContainText(
+    '内容を確認',
+  );
+  await page.getByRole('button', { name: /^Snapshot 1 ·/ }).click();
   await expect(draft.getByRole('heading', { name: '渡したContext', exact: true })).toBeVisible();
   await expect(draft).toContainText('成果物と過去のContextを確認する');
   await expect(draft).toContainText('プロジェクトの成果物と検証結果を確認する。');

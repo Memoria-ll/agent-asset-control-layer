@@ -5,10 +5,24 @@ export function changeKinds(before: Asset | null, after: Asset | null): string[]
   if (!before) return ['added'];
   if (!after) return ['removed'];
   const kinds: string[] = [];
-  const { scope: bs, dependencies: bd, conflicts: bc, projectId: bp, ...b } = inputOf(before);
-  const { scope: as, dependencies: ad, conflicts: ac, projectId: ap, ...a } = inputOf(after);
+  const {
+    scope: bs,
+    dependencies: bd,
+    conflicts: bc,
+    relations: br,
+    projectId: bp,
+    ...b
+  } = inputOf(before);
+  const {
+    scope: as,
+    dependencies: ad,
+    conflicts: ac,
+    relations: ar,
+    projectId: ap,
+    ...a
+  } = inputOf(after);
   if (!isDeepStrictEqual([bs, bp], [as, ap])) kinds.push('scope-changed');
-  if (!isDeepStrictEqual([bd, bc], [ad, ac])) kinds.push('relation-changed');
+  if (!isDeepStrictEqual([bd, bc, br], [ad, ac, ar])) kinds.push('relation-changed');
   if (!isDeepStrictEqual(b, a)) kinds.push('updated');
   return kinds.length ? kinds : ['no-change'];
 }

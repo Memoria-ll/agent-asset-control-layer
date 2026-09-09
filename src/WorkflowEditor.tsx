@@ -161,7 +161,7 @@ export function WorkflowEditor({
         </button>
       )}
       <p className="callout">
-        遷移先がない工程でWorkflowを完了します。確認工程から差し戻す場合は、成功時に進む「完了確認」工程を追加し、その工程には遷移先を設定しません。
+        完了できる工程と遷移先は独立して設定できます。最終レビューでは、合格なら完了し、修正が必要なら実装へ差し戻せます。
       </p>
       <div className="workflow-canvas" aria-label="Stage接続図">
         <div style={{ width, height: 174, position: 'relative' }}>
@@ -215,7 +215,7 @@ export function WorkflowEditor({
             >
               <small>
                 {value.entryStage === s.id ? '開始' : String(i + 1).padStart(2, '0')}
-                {!s.transitions.length ? ' · 完了' : ''}
+                {(s.canComplete ?? s.transitions.length === 0) ? ' · 完了可能' : ''}
               </small>
               <strong>{s.name || '名前未入力'}</strong>
               <span>{roles.find((r) => r.id === s.role)?.name ?? s.role}</span>
@@ -340,6 +340,24 @@ export function WorkflowEditor({
               </select>
             </Field>
           </div>
+          <Field
+            label="このStageでの実行完了"
+            hint="既存の定義を維持する場合、遷移先がない工程だけで完了できます。"
+          >
+            <select
+              value={stage.canComplete === undefined ? 'legacy' : String(stage.canComplete)}
+              onChange={(e) => {
+                const next = { ...stage };
+                if (e.target.value === 'legacy') delete next.canComplete;
+                else next.canComplete = e.target.value === 'true';
+                changeStage(next);
+              }}
+            >
+              <option value="legacy">既存の定義に従う（遷移先がない場合）</option>
+              <option value="true">完了を許可する（差し戻しと併用可能）</option>
+              <option value="false">完了を許可しない</option>
+            </select>
+          </Field>
           <TextList
             label="Stageの成果物"
             value={stage.expectedOutput ?? []}
@@ -373,9 +391,11 @@ export function WorkflowEditor({
               遷移を追加
             </button>
           </div>
-          {!stage.transitions.length && (
-            <p className="muted small-text">このStageでWorkflowを完了します。</p>
-          )}
+          <p className="muted small-text">
+            {(stage.canComplete ?? stage.transitions.length === 0)
+              ? 'このStageでは、完了条件の根拠を記録して実行を完了できます。'
+              : 'このStageでは実行を完了できません。次の工程への遷移を設定してください。'}
+          </p>
           {stage.transitions.map((t, i) => (
             <div className="transition-editor" key={i}>
               <div className="form-grid">

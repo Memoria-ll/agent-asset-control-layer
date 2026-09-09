@@ -65,18 +65,18 @@ test('Skill/Role/Task Type contracts validate type and references and appear in 
   });
   const run = core.startRun({ skillId: 'skill' });
   assert.equal(run.mode, 'advisory');
-  assert.equal(run.context.role, 'reader');
-  assert.equal(run.context.taskType, 'analysis');
+  assert.equal(run.context.role, undefined);
+  assert.equal(run.context.taskType, undefined);
   const handoff = core.handoff(run.id, {});
-  for (const content of [
-    'Read evidence',
-    'Find causes',
-    'Cite sources',
-    'No writes',
-    'Evidence checked',
-    'read-only',
-  ])
+  for (const content of ['Evidence checked', 'read-only'])
     assert.ok(handoff.context.includes(content), content);
+  assert.ok(!handoff.assets.some((a) => ['reader', 'analysis'].includes(a.id)));
+  const assigned = core.preview({
+    context: { role: 'reader', taskType: 'analysis' },
+    requested: ['skill'],
+  });
+  for (const content of ['Read evidence', 'Find causes', 'Cite sources', 'No writes'])
+    assert.ok(assigned.content.includes(content), content);
   assert.deepEqual(handoff.expectedOutput, ['Report']);
   assert.equal(handoff.skill?.revision, 1);
   const file = materialize(core, { runtime: 'codex', requested: ['skill'] }).files.find((f) =>

@@ -3,6 +3,7 @@ import { Plus, FolderGit2, Plug, Download, ArrowUpRight } from 'lucide-react';
 import type { Overview } from './api.ts';
 import { RuntimeConfigEditor } from './RuntimeConfigEditor.tsx';
 import { ProjectOverlayEditor } from './ProjectOverlayEditor.tsx';
+import { SettingsHistory } from './SettingsHistory.tsx';
 import { Badge, CopyButton, Empty, Field, Modal } from './ui.tsx';
 
 type Mutate = (route: string, body: unknown, method?: string) => Promise<any>;
@@ -11,6 +12,7 @@ export function Settings({ data, mutate }: { data: Overview; mutate: Mutate }) {
   return (
     <>
       <RuntimeConfigEditor data={data} onSave={(config) => mutate('/config', config, 'PUT')} />
+      <SettingsHistory data={data} mutate={mutate} />
       <section className="panel margin-top">
         <div className="panel-head">
           <h3>
@@ -66,6 +68,44 @@ export function Settings({ data, mutate }: { data: Overview; mutate: Mutate }) {
           <p className="small-text muted">
             Coreは状態管理とContext提供を担当します。Modelと外部MCPツールの呼び出しは接続先Runtimeが担当します。
           </p>
+          <section className="form-section" aria-label="会話から操作するための接続案内">
+            <h3>会話から確認・実行・改善する</h3>
+            <p>
+              接続したAIに依頼すると、同じ資産と実行をMCPから操作できます。承認が必要な変更は、具体的な提案を会話で確認して判断できます。
+            </p>
+            <dl className="evidence-values">
+              <div>
+                <dt>現在の実行とContextを確認</dt>
+                <dd>
+                  <code>aacl_run_get</code> と <code>aacl_context_handoff_preview</code>{' '}
+                  は閲覧用です。Snapshotや実行versionを増やしません。
+                </dd>
+              </div>
+              <div>
+                <dt>作業を実行</dt>
+                <dd>
+                  <code>aacl_context_handoff</code>{' '}
+                  でContextを受け取り、実際の作業開始・結果・失敗を <code>aacl_runtime_event</code>{' '}
+                  で報告します。
+                </dd>
+              </div>
+              <div>
+                <dt>新しい資産や紐づけを提案</dt>
+                <dd>
+                  <code>aacl_asset_propose</code> で変更案を用意し、ユーザーの判断を{' '}
+                  <code>aacl_proposal_decision</code> で記録します。架空のJournalは不要です。
+                </dd>
+              </div>
+              <div>
+                <dt>実行の観測から改善</dt>
+                <dd>
+                  <code>aacl_review_get</code> と <code>aacl_review_submit</code>{' '}
+                  で根拠と提案を確認し、<code>aacl_review_decision</code>{' '}
+                  でユーザーの判断を記録します。
+                </dd>
+              </div>
+            </dl>
+          </section>
         </div>
       </section>
     </>

@@ -15,6 +15,8 @@ import { ProposalDetails, changeLabel } from './ProposalDetails.tsx';
 import { RevisionDiff } from './AssetHistory.tsx';
 import { ProposalPreview } from './ProposalPreview.tsx';
 import { AssetCosts } from './AssetCosts.tsx';
+import { snapshotLabel, exactTime } from './RunEvidence.tsx';
+import { WorkflowComparison } from './WorkflowComparison.tsx';
 
 type Mutate = (route: string, body: unknown) => Promise<any>;
 export function JournalModal({
@@ -34,6 +36,13 @@ export function JournalModal({
   const [cause, setCause] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [attemptId, setAttemptId] = useState('');
+  const [observedAt, setObservedAt] = useState('');
+  const selectedSnapshot = data.snapshots.find((s) => s.id === snapshot);
+  const attempts =
+    data.runs
+      .find((r) => r.id === selectedSnapshot?.runId)
+      ?.attempts?.filter((a) => a.snapshotId === snapshot) ?? [];
   return (
     <Modal title="Journalを記録" onClose={onClose}>
       <form
@@ -46,6 +55,8 @@ export function JournalModal({
               kind,
               observation,
               possibleCause: cause,
+              ...(attemptId ? { attemptId } : {}),
+              ...(observedAt ? { observedAt: new Date(observedAt).toISOString() } : {}),
             });
             onClose();
           } catch (e) {
@@ -56,20 +67,46 @@ export function JournalModal({
         }}
       >
         <Field label="実行Snapshot">
-          <select required value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
+          <select
+            required
+            value={snapshot}
+            onChange={(e) => {
+              setSnapshot(e.target.value);
+              setAttemptId('');
+            }}
+          >
             <option value="" disabled>
               選択してください
             </option>
             {data.snapshots.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.task.slice(0, 30) || 'Advisory'} · {s.stage ?? 'advisory'} ·{' '}
-                {relativeDate(s.createdAt)}
+                {snapshotLabel(s, data)}
               </option>
             ))}
           </select>
         </Field>
         <div className="callout">
           Workflow・Role・Model・Asset revisionは、選択したSnapshotから記録されます。
+          観測した問題が発生した工程を選んでください。後の工程を選ぶと、観測の対象も変わります。
+        </div>
+        <div className="form-grid">
+          <Field label="観測対象の試行">
+            <select value={attemptId} onChange={(e) => setAttemptId(e.target.value)}>
+              <option value="">指定なし / Contextの観測</option>
+              {attempts.map((attempt) => (
+                <option key={attempt.id} value={attempt.id}>
+                  {attempt.id} · {attempt.model ?? 'モデル未記録'} · {exactTime(attempt.startedAt)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="観測した時刻（任意）" hint="記録した時刻とは別に保存します。">
+            <input
+              type="datetime-local"
+              value={observedAt}
+              onChange={(e) => setObservedAt(e.target.value)}
+            />
+          </Field>
         </div>
         <Field label="観測の種類">
           <select value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -109,13 +146,15 @@ export function Journals({
   data,
   mutate,
   onAdd,
+  initialReviewId = '',
 }: {
   data: Overview;
   mutate: Mutate;
   onAdd: () => void;
+  initialReviewId?: string;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
-  const [reviewId, setReviewId] = useState('');
+  const [reviewId, setReviewId] = useState(initialReviewId);
   const [request, setRequest] = useState(false);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('');
@@ -282,6 +321,10 @@ function JournalCard({
           <time className="small-text muted">{relativeDate(j.createdAt)}</time>
         </div>
         <p>{j.observation}</p>
+        <p className="small-text muted">
+          観測時刻: {j.observedAt ? exactTime(j.observedAt) : '未記録'} · 記録時刻:{' '}
+          {exactTime(j.createdAt)} · 試行: {j.attemptId ?? '未記録'}
+        </p>
         {j.possibleCause && <p className="muted small-text">原因の仮説: {j.possibleCause}</p>}
         <div className="scope-pills">
           {[j.context.workflow, j.context.stage, j.context.role, j.context.model]
@@ -459,8 +502,18 @@ function ReviewModal({
     </Modal>
   );
 }
-export function History({ data, mutate }: { data: Overview; mutate: Mutate }) {
-  const [selected, setSelected] = useState<ChangeSet | null>(null);
+export function History({
+  data,
+  mutate,
+  initialChangeId = '',
+}: {
+  data: Overview;
+  mutate: Mutate;
+  initialChangeId?: string;
+}) {
+  const [selected, setSelected] = useState<ChangeSet | null>(
+    data.changesets.find((c) => c.id === initialChangeId) ?? null,
+  );
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -607,7 +660,7 @@ export function Diagnostics({ data }: { data: Overview }) {
         <div className="stat-card">
           <span>記録されたSnapshot</span>
           <strong>{data.snapshots.length}</strong>
-          <small>実行時のContextを保存</small>
+          <small>Contextの保存数。実作業の試行数ではありません。</small>
         </div>
         <div className="stat-card">
           <span>平均Context量</span>
@@ -657,7 +710,13 @@ export function Diagnostics({ data }: { data: Overview }) {
           </Empty>
         )}
       </section>
+      <WorkflowComparison data={data} />
       <AssetCosts data={data} />
+      <div className="callout">
+        AIが報告した試行は{data.runs.reduce((sum, run) => sum + (run.attempts?.length ?? 0), 0)}
+        件です。
+        以下のContext集計には、準備・中止・未完了の実行も含まれます。モデル、関連Assetの改訂、Projectの設定、作業規模の違いは実行の詳細で確認してください。Context量だけでは品質の改善を判定できません。
+      </div>
       <section className="panel margin-top">
         <div className="panel-head">
           <h3>Workflow / revision別の観測</h3>

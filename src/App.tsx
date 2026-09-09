@@ -32,6 +32,9 @@ import { Badge, Empty, Modal, Json, relativeDate } from './ui.tsx';
 import { AssetEditor } from './AssetEditor.tsx';
 import { ContractDetails } from './AssetContracts.tsx';
 import { AssetHistory } from './AssetHistory.tsx';
+import { AssetMetadata, AssetFiles, RelationsExplorer } from './AssetRelations.tsx';
+import { WorkflowActivity } from './WorkflowActivity.tsx';
+import { runName } from './RunEvidence.tsx';
 import { Launcher, Runs, WorkflowFlow } from './RunViews.tsx';
 import { ContextView } from './ContextView.tsx';
 import { Diagnostics, History, JournalModal, Journals } from './Operations.tsx';
@@ -74,6 +77,8 @@ export function App() {
   const [toast, setToast] = useState('');
   const [help, setHelp] = useState(false);
   const [selectedRun, setSelectedRun] = useState('');
+  const [selectedReview, setSelectedReview] = useState('');
+  const [selectedChange, setSelectedChange] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const reloadSequence = useRef(0);
   const reload = useCallback(async () => {
@@ -320,9 +325,19 @@ export function App() {
                 go('runs');
               }}
               onReviews={() => go('journals')}
+              onOpenReview={(id) => {
+                setSelectedReview(id);
+                go('journals');
+              }}
+              onOpenChange={(id) => {
+                setSelectedChange(id);
+                go('history');
+              }}
             />
           )}
-          {page === 'assets' && <Assets data={data} query={query} onDetail={setDetail} />}
+          {page === 'assets' && (
+            <Assets data={data} query={query} onDetail={setDetail} mutate={mutate} />
+          )}
           {page === 'runs' && (
             <Runs
               key={selectedRun}
@@ -337,9 +352,22 @@ export function App() {
             <ContextView key={JSON.stringify(context)} data={data} initial={context} />
           )}
           {page === 'journals' && (
-            <Journals data={data} mutate={mutate} onAdd={() => setJournal({})} />
+            <Journals
+              key={selectedReview}
+              initialReviewId={selectedReview}
+              data={data}
+              mutate={mutate}
+              onAdd={() => setJournal({})}
+            />
           )}
-          {page === 'history' && <History data={data} mutate={mutate} />}
+          {page === 'history' && (
+            <History
+              key={selectedChange}
+              initialChangeId={selectedChange}
+              data={data}
+              mutate={mutate}
+            />
+          )}
           {page === 'diagnostics' && <Diagnostics data={data} />}
           {page === 'projects' && <Projects data={data} mutate={mutate} />}
           {page === 'settings' && <Settings data={data} mutate={mutate} />}
@@ -369,8 +397,10 @@ export function App() {
       )}
       {detail && (
         <AssetDetail
+          key={detail.id}
           asset={data.assets.find((a) => a.id === detail.id) ?? detail}
           data={data}
+          onSelect={setDetail}
           onClose={() => setDetail(null)}
           onEdit={() => {
             setEdit({ asset: data.assets.find((a) => a.id === detail.id) ?? detail });
@@ -433,6 +463,8 @@ function Workflows({
   onCreate,
   onOpenRun,
   onReviews,
+  onOpenReview,
+  onOpenChange,
 }: {
   data: Overview;
   onLaunch: (id: string) => void;
@@ -442,6 +474,8 @@ function Workflows({
   onCreate: () => void;
   onOpenRun: (id: string) => void;
   onReviews: () => void;
+  onOpenReview: (id: string) => void;
+  onOpenChange: (id: string) => void;
 }) {
   const workflows = data.assets.filter((a) => a.type === 'workflow');
   const [selectedId, setSelectedId] = useState('');
@@ -499,7 +533,7 @@ function Workflows({
             <span>進行中の実行</span>
             <strong>{activeRuns[0].title}</strong>
             <small>
-              {activeRuns[0].workflow?.name ?? 'Advisory'} ·{' '}
+              {runName(activeRuns[0], data)} ·{' '}
               {activeRuns[0].workflow?.workflow?.stages.find((s) => s.id === activeRuns[0].stage)
                 ?.name ?? '質問・調査・検討'}
             </small>
@@ -641,6 +675,9 @@ function Workflows({
                 </div>
                 <div>
                   <span className="eyebrow">TRANSITIONS</span>
+                  {stage && (stage.canComplete ?? stage.transitions.length === 0) && (
+                    <Badge tone="green">完了可能</Badge>
+                  )}
                   {stage?.transitions.length ? (
                     stage.transitions.map((t) => (
                       <span key={`${t.to}:${t.kind}`}>
@@ -648,10 +685,18 @@ function Workflows({
                       </span>
                     ))
                   ) : (
-                    <span>Completion stage</span>
+                    <span>遷移先なし</span>
                   )}
                 </div>
               </div>
+              <WorkflowActivity
+                key={selected.id}
+                workflow={selected}
+                data={data}
+                onRun={onOpenRun}
+                onReview={onOpenReview}
+                onChange={onOpenChange}
+              />
             </section>
           )}
         </>
@@ -684,10 +729,12 @@ function Assets({
   data,
   query,
   onDetail,
+  mutate,
 }: {
   data: Overview;
   query: string;
   onDetail: (asset: Asset) => void;
+  mutate: (route: string, body: unknown) => Promise<unknown>;
 }) {
   const [type, setType] = useState('all');
   const [view, setView] = useState('list');
@@ -720,6 +767,13 @@ function Assets({
             <List size={17} />
           </button>
           <button
+            aria-label="関係表示"
+            className={view === 'relations' ? 'active' : ''}
+            onClick={() => setView('relations')}
+          >
+            <GitBranch size={17} />
+          </button>
+          <button
             aria-label="カード表示"
             className={view === 'grid' ? 'active' : ''}
             onClick={() => setView('grid')}
@@ -728,7 +782,9 @@ function Assets({
           </button>
         </div>
       </div>
-      {list.length ? (
+      {view === 'relations' ? (
+        <RelationsExplorer data={data} onSelect={onDetail} mutate={mutate} />
+      ) : list.length ? (
         view === 'list' ? (
           <div className="panel table-scroll">
             <table className="asset-table">
@@ -821,11 +877,13 @@ function AssetDetail({
   onClose,
   onEdit,
   mutate,
+  onSelect,
 }: {
   asset: Asset;
   data: Overview;
   onClose: () => void;
   onEdit: () => void;
+  onSelect: (asset: Asset) => void;
   mutate: (route: string, body: unknown) => Promise<any>;
 }) {
   const [tab, setTab] = useState('content');
@@ -864,25 +922,12 @@ function AssetDetail({
         <>
           <ContractDetails asset={asset} />
           <pre className="context-content">{asset.content || '本文はありません。'}</pre>
-          {asset.workflow && <Json value={asset.workflow} />}
+          {asset.workflow && <WorkflowFlow workflow={asset} />}
           {asset.capability && <Json value={asset.capability} />}
+          {(asset.files || asset.sources) && <AssetFiles asset={asset} />}
         </>
       )}
-      {tab === 'metadata' && (
-        <Json
-          value={{
-            scope: asset.scope,
-            dependencies: asset.dependencies,
-            conflicts: asset.conflicts,
-            compatibility: asset.compatibility,
-            priority: asset.priority,
-            mandatory: asset.mandatory,
-            enabled: asset.enabled,
-            activation: asset.activation,
-            projectId: asset.projectId,
-          }}
-        />
-      )}
+      {tab === 'metadata' && <AssetMetadata asset={asset} data={data} onSelect={onSelect} />}
       {tab === 'history' && (
         <AssetHistory key={`${asset.id}:${asset.revision}`} assetId={asset.id} />
       )}
