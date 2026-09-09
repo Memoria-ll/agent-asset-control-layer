@@ -1,176 +1,387 @@
-# AACL — Agent Asset Control Layer
+# Agent Asset Control Layer
 
-Workflowを中心にAI開発資産を管理する、ローカル用Control Planeです。TypeScript Core、ブラウザUI、HTTP API、MCPサーバーを実装しています。Coreが状態・Context・承認済みAssetを管理し、モデルの実行と外部ツールの呼び出しはClaude / Codexなどの接続先Runtimeが担当します。
+A local-first control layer for the knowledge, rules, workflows, and safeguards used by AI development tools.
 
-## 起動
+> **Status:** early-stage. There is nothing to install yet — the MVP is being built in the open.
 
-Node.js 24以上とGitを使用します。このworkspaceではWSL内で実行してください。
+## Why this exists
 
-```bash
-cd /home/owner/dev/aacl
-npm ci
-npm run build
-npm start
+AI coding tools become much more useful once you start teaching them how you work.
+
+You add instructions for your projects. You create reusable skills. You define review rules,
+workflows, model preferences, safety checks, templates, and project-specific knowledge.
+
+At first, this is manageable. Then the same ideas begin to appear in several places.
+
+A rule is copied into another project. A skill is rewritten for another runtime. A useful workflow
+lives in one tool but not another. Some instructions are always loaded even when they are irrelevant.
+And when something goes wrong during an AI-assisted task, the lesson often stays in that one session
+instead of improving the setup for next time.
+
+```mermaid
+flowchart LR
+    Rules[Rules] --> ClaudeSetup[Claude-specific setup]
+    Skills[Skills] --> ClaudeSetup
+    Knowledge[Project knowledge] --> ClaudeSetup
+    Workflow[Workflows] --> ClaudeSetup
+
+    ClaudeSetup --> Claude[Claude]
+    ClaudeSetup -. copied / rewritten .-> Other[Other runtimes]
 ```
 
-UI: [http://localhost:4780](http://localhost:4780)  
-MCP: `http://localhost:4780/mcp`
+The problem is no longer just “how do I write a good prompt?”
 
-開発中は`npm run dev`で、同じポートからUIとCoreを提供します。Node.jsをnvmでインストールしている場合は、先に`source ~/.nvm/nvm.sh`を実行してください。Windowsブラウザからもlocalhostで接続できます。
+It becomes:
 
-`PORT`でポート、`AACL_DATA_DIR`で保存先を変更できます。既定の保存先はこのリポジトリの`.aacl-data`です。同じ保存先を複数Coreで同時に開くことはできません。stdio接続は既存Coreへのbridgeです。
+**How do I manage the growing body of knowledge and policy that my AI development tools depend on?**
 
-## 最初の操作
+Agent Asset Control Layer is an attempt to solve that problem.
 
-1. Workflows画面の「スターターを追加」を押します。6 Stageの`issue-development`、6つのRole、Task Type、Rule、単独レビューSkillを登録します。初期状態は空で、自動登録しません。
-2. Assetsから内容・複合scope・依存関係・priorityなどを編集します。Scopeと依存関係は候補から選択でき、直接入力はEnterで追加します。Workflowは接続図のStageを選び、Role・遷移・必要成果物・完了条件をフォームで編集します。新規Workflowは、参照するRoleを先に登録してください。
-3. Context PreviewでWorkflow / Stage / Role / Project / Runtime / Modelを指定し、適用・除外理由を確認します。
-4. 「新しい実行」からWorkflowと追加指示を指定します。選択しなければAdvisory Modeになります。
-5. Runtime & MCPに表示された接続先をClaude / Codexに登録します。CoreがRunを開始しただけではAIの実作業は始まりません。実行画面の「AIへの依頼をコピー」を接続先AIへ渡し、`aacl_context_handoff`から引き継がせます。
-6. Stageの完了根拠と成果物を登録して進行し、実行後にJournalを記録します。
-7. Journalを選択してReviewを開始します。「AIへの依頼をコピー」を接続先AIへ渡してください。AIは`aacl_review_get`で根拠を読み、`aacl_review_submit`で提案を提出します。UIの「承認して反映」で初めてAssetを変更します。
+It acts as a control plane for reusable AI development assets and for the rules that determine when
+those assets apply. Context resolution is a central part of that job, but the system also manages
+asset lifecycle, workflow definitions and state, execution metadata, history, diagnostics, and the
+feedback loop that improves assets over time.
 
-Runtime & MCPの「モデルを自動認識」から候補を取得し、選択して登録できます。Role bindingはフォームで指定し、「設定を保存」で反映します。Provider / Account / Runtimeの構成は「詳細設定」から編集できます。認識だけではModel登録やRoleへの割り当てを変更しません。Accountは識別用metadataのみで、APIキーを保存しません。
+## The basic idea
 
-進行中のRunにはWorkflows画面の「続きを開く」から戻れます。Asset検索は `/` または `Ctrl / Cmd + K` でフォーカスし、Escapeで検索を解除できます。
+AI development knowledge should not belong to one model or runtime.
 
-## モデルの自動認識
+Instead of letting each tool, project, or runtime maintain its own independent copy of your AI
+development setup, keep those reusable pieces as shared **assets** managed by AACL.
 
-| 接続先      | 取得方法                                                         | 認識されない場合                                        |
-| ----------- | ---------------------------------------------------------------- | ------------------------------------------------------- |
-| Codex       | ローカルCLIの`account/read`と`model/list`。既存ログインを利用    | Coreと同じ環境で`codex login`後に再取得                 |
-| Claude Code | `claude auth status`と、CLIのSDK初期化応答のモデル名・エイリアス | Coreと同じ環境で`claude auth login`後に再取得           |
-| Ollama      | `GET /api/tags`のインストール済みモデル                          | Ollamaサーバーを起動。既定URLは`http://127.0.0.1:11434` |
-| LM Studio   | `GET /v1/models`のサーバー提供モデル                             | Local Serverを起動。既定URLは`http://127.0.0.1:1234`    |
-| llama.cpp   | `GET /v1/models`のサーバー提供モデル                             | llama-serverを起動。既定URLは`http://127.0.0.1:8080`    |
+An asset can be a skill, rule, role, workflow, guardrail, template, checklist, piece of project
+knowledge, routing policy, or capability definition.
 
-CodexはOpenAI用カタログ、Claude Codeはインストール済みCLIが返す候補を使用します。モデルをハードコードせず、接続先から取得できた値を表示します。Claude CodeのエイリアスはRuntime側で解釈され、具体的なモデルはログイン・契約・CLIバージョンによって変わります。利用権限を試す推論リクエストは送信しません。
+“Asset” is a shared management boundary, not a claim that all of those things have identical
+semantics. They can share identity, metadata, scope, dependency, lifecycle, versioning, and history
+while still keeping type-specific validation, merge behavior, and execution meaning.
 
-CLIはPATHと`~/.local/bin`から探します。`AACL_CODEX_BIN` / `AACL_CLAUDE_BIN`で実行ファイルの絶対パスを指定できます。認識はCoreの動くOS・ユーザーの環境を対象とし、WindowsとWSLのログインは自動共有しません。検証環境はCodex CLI 0.151.0、Claude Code 2.1.177です。Claude Codeの認識はSDKのcontrol protocolに依存し、未対応バージョンでは取得エラーを表示します。
+```mermaid
+flowchart TB
+    subgraph AACL[Agent Asset Control Layer]
+        Assets[Canonical Assets<br/>Rules · Skills · Roles · Workflows<br/>Project Knowledge · Policies]
+        Resolver[Context Resolver]
+        Assets --> Resolver
+    end
 
-ローカルサーバーのURLは認識画面で変更できます。`AACL_OLLAMA_URL` / `AACL_LMSTUDIO_URL` / `AACL_LLAMACPP_URL`でも既定値を指定できます。localhostまたはプライベートIPに限定し、リダイレクトを追いません。WSLからWindowsのサーバーへ接続する場合は、Windows側で公開したIP・ポートを指定してください。`llama3.2:latest`や`org/model.gguf`などのIDを保持し、登録したRuntime URLとModel情報はHandoffにも含めます。
+    Context[Execution Context<br/>Project · Task · Role · Workflow<br/>Runtime · Model · Directory] --> Resolver
 
-認識時にタスク入力・モデルの推論・モデルのダウンロードは実行しません。ログイン情報はCLIが管理し、Coreにはコピーしません。ログイン自体は各CLIで行います。
+    Resolver --> Interface[MCP / Runtime Interface]
 
-取得契約: [Codex App Server](https://learn.chatgpt.com/docs/app-server)、[Claude Code CLI](https://code.claude.com/docs/en/cli-reference)、[Claude SDK初期化](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/client.py)、[Ollama](https://docs.ollama.com/api/tags)、[LM Studio](https://lmstudio.ai/docs/developer/openai-compat/models)、[llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/server)。
-
-## MCP接続
-
-Streamable HTTPとstdio bridgeを実装しています。SDKの実クライアントでinitialize、tools/list、resources/read、Workflow起動、Handoff、Journal、Proposalを検証しています。
-
-Codexの設定例:
-
-```toml
-[mcp_servers.aacl]
-url = "http://localhost:4780/mcp"
+    Interface --> Claude[Claude]
+    Interface --> Codex[Codex]
+    Interface --> Gemini[Gemini]
+    Interface --> Local[Local LLM]
+    Interface --> Future[Other / Future Models]
 ```
 
-Streamable HTTPサーバーのURLは`mcp_servers`に設定します。[Codex MCP公式ドキュメント](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
+The model is not the source of truth for how development work should be performed. AACL keeps the
+reusable development knowledge outside any one provider or runtime, resolves what applies, and
+provides the result through a runtime-facing interface.
 
-Claude Codeの設定例:
+MCP is a natural interface for runtimes that can discover and retrieve AACL-managed context
+directly. Other integrations can use the same Core through adapters, host injection, or other
+runtime interfaces without changing the canonical asset model.
 
-```bash
-claude mcp add --transport http aacl http://localhost:4780/mcp
+**The model can change. The development knowledge remains.**
+
+## You define where assets apply
+
+AACL does not decide by itself that a rule "looks like" a Reviewer rule or that a skill should only
+be used with a particular model. The user can explicitly define the scope in which an asset applies.
+
+Assets can be scoped by project, workflow, task type, role, provider, runtime, model, directory, or
+combinations of those dimensions.
+
+For example, the same asset store can contain:
+
+- a rule that applies globally
+- a rule that applies only to the `reviewer` role
+- guidance that applies to a particular model
+- guidance that applies only when a particular model is acting as a particular role
+- project-specific knowledge that is further limited to a workflow, role, model, or directory
+
+```mermaid
+flowchart TB
+    Global[Global rule] --> Resolver[Context Resolver]
+    Reviewer[Role scope<br/>reviewer] --> Resolver
+    Model[Model scope<br/>specific model] --> Resolver
+    Combo[Role + Model scope<br/>reviewer × specific model] --> Resolver
+    Project[Project + Directory scope] --> Resolver
+
+    Execution[Current execution<br/>Project · Workflow · Role · Model · Directory] --> Resolver
+
+    Resolver --> Match[Matched assets]
+    Resolver --> NoMatch[Non-matching assets]
 ```
 
-HTTP transportの登録形式はClaude Codeの公式仕様に従います。[Claude Code MCP公式ドキュメント](https://code.claude.com/docs/en/mcp)
+**You decide where an asset applies; the resolver determines whether those conditions match the
+current execution.**
 
-stdioを使う場合は、Coreを別途起動した状態で次をクライアントに登録します。`/absolute/path/to/aacl`を実際のパスへ置き換えてください。
+Role and model are intentionally separate dimensions. A Role describes what responsibility an
+execution has; a Model describes what performs that execution. This allows the same Role to be used
+with different models, while still letting model-specific or Role × Model guidance be expressed when
+needed.
 
-```json
-{
-  "mcpServers": {
-    "aacl": {
-      "command": "node",
-      "args": [
-        "--import",
-        "/absolute/path/to/aacl/node_modules/tsx/dist/loader.mjs",
-        "/absolute/path/to/aacl/server/stdio.ts"
-      ],
-      "env": { "AACL_URL": "http://127.0.0.1:4780/mcp" }
-    }
-  }
-}
+Role, task type, workflow, and stage are also separate dimensions. A Role identifies a reusable
+responsibility, a task type identifies the purpose of the work, a workflow identifies the process, and
+a stage identifies the current position in that process. Task-specific behavior is selected by their
+combination rather than encoded by creating a different Role for every kind of work.
+
+Before resolving execution assets, orchestration turns the selected Workflow and Stage requirements
+into an explicit execution context containing the applicable Role and task type. The resolver consumes
+that context; it does not infer a missing context axis from the candidates it is evaluating.
+
+## Resolve, don't dump
+
+The Core does not simply load every asset into every execution.
+
+The answer may depend on:
+
+- which project is open
+- what task is being performed
+- which workflow stage is active
+- which role is running
+- which provider, runtime, or model is being used
+- which directory or part of the project is being worked on
+
+The resolver evaluates those conditions, decides which assets apply, explains why they were selected
+or excluded, and produces the context and policy for the target runtime.
+
+```mermaid
+flowchart TB
+    Project[Project] --> Resolver[Context Resolver]
+    Task[Task] --> Resolver
+    Workflow[Workflow / Stage] --> Resolver
+    Role[Role] --> Resolver
+    Runtime[Runtime] --> Resolver
+    Model[Model] --> Resolver
+    Directory[Directory] --> Resolver
+
+    Resolver --> Included[Included<br/>implementation rules<br/>project architecture<br/>required skills]
+    Resolver --> Excluded[Excluded<br/>review-only rules<br/>unrelated knowledge<br/>incompatible assets]
+
+    Included --> Result[Resolved Context + Policy]
+    Excluded -. reasons .-> Result
+    Result --> Target[AI Runtime / Development Tool]
 ```
 
-MCP tool一覧:
+The same canonical assets can therefore produce different context for different executions. An
+Implementer using a local model does not need the same context as a Reviewer using Claude, Codex,
+Gemini, or another runtime.
 
-| 用途     | Tools                                                                              |
-| -------- | ---------------------------------------------------------------------------------- |
-| 閲覧     | `aacl_workflow_list`, `aacl_asset_list`, `aacl_asset_get`, `aacl_run_list`         |
-| Context  | `aacl_context_resolve`, `aacl_context_handoff`, `aacl_snapshot_get`                |
-| 実行状態 | `aacl_session_start`, `aacl_workflow_transition`                                   |
-| 改善     | `aacl_journal_append`, `aacl_review_list`, `aacl_review_get`, `aacl_review_submit` |
-| 運用     | `aacl_bootstrap`, `aacl_materialize`, `aacl_diagnostics`                           |
+The resolver is the Core's decision boundary for applicability. Runtime adapters and clients may
+translate or present the result, but they should not silently reinterpret which assets apply.
 
-Resources: `aacl://bootstrap`, `aacl://workflows`。人間の承認・Asset直接編集・RollbackはMCP toolに公開していません。UI / CLI用APIで操作します。
+Agent Asset Control Layer does **not** replace an AI coding runtime, model provider, IDE, MCP
+implementation, or agent framework. It sits between your reusable development assets and those
+systems, providing a consistent way to manage, resolve, explain, and apply them.
 
-`aacl_context_handoff`は`delivery=runtime-pull`と`delivery=host-inject`を受け付け、同じContextとSnapshot参照を返します。実際のhost injectionは呼び出し元が行います。repository modificationの前に`action=development`を指定し、Coreの実行境界検証を受けてください。Coreは外部Runtimeが独自に行う操作をOSレベルで遮断するサンドボックスではありません。
+## What this should make easier
 
-## Project / Native import / Export
+### Keep reusable AI development knowledge in one place
 
-```bash
-# 既存ディレクトリにstable project-idを付与
-npm run cli -- init /path/to/project "My project"
+Skills, rules, workflows, roles, guardrails, templates, project knowledge, and related assets can
+be managed through one canonical model instead of being independently maintained for every runtime.
 
-# Workflowを明示起動
-npm run cli -- start /issue-development '#123'
+The common model handles shared management concerns without erasing the differences between asset
+types. A workflow can remain a workflow, a guardrail can remain an enforcement policy, and a skill
+can retain its own invocation semantics while still participating in the same management and
+resolution system.
 
-# 新しいディレクトリへ生成（既存ディレクトリは上書きしない）
-npm run cli -- export codex issue-development ./generated-codex
-npm run cli -- export claude issue-development ./generated-claude
+Users can define where each asset applies rather than relying on runtime-specific copies to imply
+its scope. Role, model, project, workflow, task type, runtime, directory, and combinations of them
+remain explicit, inspectable metadata.
+
+The source of truth remains human-readable and versionable, so assets can still be inspected,
+diffed, reviewed, and edited directly.
+
+### Give each execution the context it actually needs
+
+Not every rule or skill belongs in every session.
+
+The resolver evaluates the current project, task, workflow, role, runtime, model, directory, and
+other relevant conditions before deciding what applies. Mandatory policies, overrides,
+dependencies, conflicts, and disabled assets are handled explicitly rather than through implicit
+“last one wins” behavior.
+
+The resolution result includes both decisions and reasons. Inclusion, exclusion, override,
+unavailability, degradation, and conflict are part of the result rather than hidden implementation
+details.
+
+This makes it possible to answer questions such as:
+
+- Why was this rule included?
+- Why was this skill unavailable?
+- Which project setting overrode the default?
+- What changed when the model changed?
+
+### Use workflows without turning one prompt into the whole system
+
+A workflow describes the stages that exist, the roles involved, and the transitions that are
+allowed.
+
+The orchestrator remains responsible for runtime decisions such as delegation, retry, fallback,
+acceptance, or rejection. The Core provides the workflow definition, current state, resolved
+context, available choices, and policy constraints needed to make those decisions.
+
+This keeps workflow structure, orchestration decisions, and actual model execution as separate
+responsibilities.
+
+### Understand what an AI execution was actually given
+
+Execution snapshots record the context around a run: the assets and revisions that were selected,
+the active project, role, runtime and model, and the reasons behind the resolution result.
+
+The goal is not to pretend that a model execution can be reproduced perfectly. The goal is to make
+its **development context** inspectable later.
+
+### Improve the system from real usage
+
+The project also treats AI development assets as something that can improve over time.
+
+```mermaid
+flowchart TB
+    Assets[Assets] --> Resolution[Context Resolution]
+    Resolution --> Execution[Execution]
+    Execution --> Snapshot[Execution Snapshot]
+    Snapshot --> Journal[Journal]
+    Journal --> Diagnostics[Diagnostics]
+    Diagnostics --> Review[Journal Review]
+    Review --> Proposal[Improvement Proposal]
+    Proposal --> Approval[Human Approval]
+    Approval --> Update[Versioned Asset Update]
+    Update --> Assets
 ```
 
-Project Assetは`<project>/.aacl/assets.json`、identityは`.aacl/project.json`に保存します。Global Assetを複製せず、Project overlayでdisable / override / bindを指定できます。Project IDを含むasset scopeは対象Projectに固定します。Asset IDはCore内で一意です。
+A journal captures useful observations from real work. Diagnostics can identify patterns such as
+conflicts, duplication, missing dependencies, unused assets, or unnecessarily expensive context.
+A review can then turn those signals into an improvement proposal.
 
-UIのインポートではSKILL.md・rule・knowledgeのMarkdownを取り込めます。単純な`name`と`description`のfrontmatterを解析し、scopeやmodel bindingは推測しません。複数行YAMLの完全な解釈やSkill同梱スクリプトの再帰importは未対応です。
+Changes are proposed and reviewed rather than silently rewriting important rules behind the user's
+back.
 
-Exportは`AACL-BOOTSTRAP.md`、`AACL-CONTEXT.md`、Runtime向け`SKILL.md`、revision manifestを生成します。Context Previewからも内容確認・ダウンロードできます。既存の`AGENTS.md`、`CLAUDE.md`、MCP設定を自動変更しません。BootstrapをRuntimeの初期指示へ組み込み、MCP接続を設定してください。
+## How it fits together
 
-## 実装した意味論
+AACL is the control plane. Models and agent runtimes remain the execution plane.
 
-- Scopeは異なる軸をAND、同じ軸の値をOR / INとして評価します。Directoryはpath境界を確認します。
-- Scope一致→mandatory→disable→priority→specificity→scope precedence→依存・競合→依存順の並びでContextを作ります。意味が変わる排他的同順位はconflictにします。
-- Role / Workflow / Task Type / Skill / Capabilityは明示選択または依存関係から読み込みます。Rule / Knowledge / Policyはscopeとactivationで絞り込みます。
-- 必要な依存の欠落・disable・互換性不一致・循環がある場合は成功扱いにしません。Capabilityはconnectedとallowedの両方が必要です。この2値は明示申告で、外部サーバーへの接続probeは実装していません。
-- RunはWorkflow全定義とrevisionを固定します。Stage・Role・Task Type、許可遷移、成果物、完了条件を検証します。Snapshotは実際に解決した本文・asset revisions・除外理由・推定tokensを保持します。
-- Asset編集とRun遷移はexpectedRevision / expectedVersionで古い更新を拒否します。Proposalの承認時にも競合を再検証します。
-- Roleの作業目的差は複合scopeで表現します。本文からのscope推測やWorkflow自動選択はありません。
-- Journal Reviewの意味判断は外部AI Runtimeが行います。Coreは根拠bundle、提案検証、承認、Change Setを担当します。疑似AIによる固定ルールの改善提案は生成しません。
-- Asset / Change Set rollbackは履歴を消さずに新しいrevisionを作ります。後続変更があるChange Setの巻き戻しは拒否し、Asset単位の復元を使います。
+```mermaid
+flowchart TB
+    subgraph Control[AACL Core / Control Plane]
+        Store[Asset Store]
+        Resolver[Context Resolution]
+        Workflow[Workflow State]
+        History[History / Snapshots]
+        Learning[Journal / Diagnostics]
 
-## 保存と回復
+        Store --> Resolver
+        Workflow --> Resolver
+        Resolver --> History
+        History --> Learning
+    end
+
+    Resolver --> Interface[MCP / Core API / Runtime Adapter]
+
+    subgraph Execution[Execution Plane]
+        ClaudeCode[Claude Code]
+        Codex[Codex]
+        GeminiRuntime[Gemini-based Runtime]
+        LocalRuntime[Local LLM Runtime]
+        OtherRuntime[Other Agent Runtime]
+    end
+
+    Interface --> ClaudeCode
+    Interface --> Codex
+    Interface --> GeminiRuntime
+    Interface --> LocalRuntime
+    Interface --> OtherRuntime
+```
+
+The **Core** owns source-of-truth semantics for assets, scope and policy resolution, workflow state,
+history, snapshots, diagnostics, and related domain behavior.
+
+The resolver is where the Core turns canonical assets plus execution conditions into an explicit,
+explainable result. Materializers and adapters consume that result; they do not become alternate
+policy engines.
+
+Clients such as the VS Code extension provide the working interface. They can supply editor and
+workspace context, display resolved context and workflow state, and connect the Core to supported
+AI runtimes without duplicating the Core's domain rules.
+
+A useful mental model is:
+
+> **AACL holds the reusable development brain; models provide the reasoning and execution.**
+
+Claude Code and Codex are the initial runtime targets for the MVP. The architecture itself is
+runtime-neutral: Gemini-based runtimes, local LLMs, and future agent runtimes should be able to use
+the same canonical assets and resolution semantics through compatible interfaces.
+
+## Design principles
+
+- **One source of truth.** Reusable assets should not have to drift across tool-specific copies.
+- **User-defined applicability.** Users define where assets apply; the resolver evaluates those scopes against each execution.
+- **Role and model are separate dimensions.** The same role can move across models, while model-specific and role × model guidance remains expressible.
+- **Execution dimensions compose.** Role states reusable responsibility, task type states work purpose, Workflow states process, and Stage states position; orchestration supplies their explicit combination before resolution.
+- **Shared management, distinct semantics.** Asset types can share lifecycle and resolution infrastructure without being forced into identical behavior.
+- **Resolve, don't dump.** Give each execution what it needs instead of loading everything by default.
+- **Resolution is a Core decision.** Applicability is decided centrally and should not be silently reinterpreted by adapters or clients.
+- **Explain decisions.** Inclusion, exclusion, override, conflict, degradation, and unavailability should be inspectable.
+- **Local-first and private-first.** Single-user local operation is a first-class deployment model.
+- **Runtime-neutral.** Core assets should not be defined by one provider's configuration format.
+- **Interface-neutral.** MCP is a primary runtime-facing integration path, but the Core model is not coupled to one transport.
+- **Human-approved evolution.** The system may detect and propose improvements, but important changes remain reviewable.
+
+## Installation
+
+Not available yet. Installation instructions will be added once the MVP is usable.
+
+The planned local setup consists of:
+
+- a **Core service** that manages and resolves assets
+- a **Core UI** for asset management, preview, history, and diagnostics
+- a **VS Code extension** that acts as the everyday development workbench
+- runtime-facing interfaces, including MCP where supported, for AI development tools
+
+The first version targets local, single-user use. Remote and team deployments come later and are
+not required for local operation.
 
 ```text
-.aacl-data/
-  assets.json       Global / Personal Assetの正本
-  state.json        Run / Snapshot / Journal / Review / Provenance / config
-  transaction.json  複数ファイル更新のwrite-ahead記録（処理中のみ）
-  .lock             Core単一writerのロック（起動中のみ）
-  history/.git/     Asset revisionの専用Git履歴
-<project>/.aacl/
-  project.json      stable project-id
-  assets.json       Project Assetの正本
+Phase 1: single-user local Core
+Phase 2: single-user remote Core / multi-device use
+Phase 3: multi-user team Core
 ```
 
-ファイルは一時ファイル・fsync・renameで置換します。複数ファイル変更は先にtransactionを永続化し、起動時または次の読込時に残りを再適用します。Core内の読込は回復後に行います。外部プロセスが複数JSONを直接読む場合の一貫したsnapshotは保証しません。更新はCore APIを通してください。
+## Technology direction
 
-Git commitはChange Set IDを参照し、Provenanceはcommit hashを参照します。Asset / state commit後のGit記録は別処理で、Git失敗時もCanonical変更は保持し、Diagnosticsに記録します。Git記録の直前にプロセスが強制終了した場合はcommit参照が未付与のまま残る可能性があります。Asset / Change Set履歴からの復元は利用できます。
+The current plan is:
 
-この版は個人localhost運用・単一プロセスを対象に、JSONを一括読込します。大規模データの索引・ページ分割・SQLite移行、複数writer、Team / remote認証は未実装です。ローカルHTTPのHost / Origin検証とUI操作tokenは、ネットワーク越しのユーザー認証を代替しません。
+- Core domain and service: TypeScript / Node.js
+- Desktop Core UI shell: Tauri 2 with a TypeScript frontend
+- Asset source of truth: human-readable filesystem files
+- Revision history: Git-compatible history backend
+- Optional index / runtime storage: SQLite where useful
+- Interfaces: local service API and MCP-facing interface
 
-## 検証
+Rust may be introduced later for system-boundary components where stronger isolation,
+reliability, or performance is useful, such as process supervision, guardrail execution, file
+watching, credential integration, or performance-sensitive paths.
 
-```bash
-npm run check              # TypeScript・本番build・Core/HTTP/MCP統合テスト
-npx playwright install --with-deps chromium
-npm run test:ui            # 実ブラウザの操作フローとモバイル幅
-```
+## Roadmap
 
-テストは一時ディレクトリを使用し、通常の保存先を変更しません。ブラウザテストのスクリーンショットは`test-results/`に出力されます。Claude / Codex本体での有料モデル呼び出しは実施していません。接続とCoreの振る舞いはSDKクライアントで検証します。
+The MVP is intended to be useful for day-to-day single-user AI development, not just demonstrate a
+resolver.
 
-## 現時点の境界
+Development is currently grouped into three broad stages:
 
-要求v13から、コアの一連の操作が動く実装を優先しています。VS Code拡張、Tauriデスクトップシェル、外部モデルの直接実行、外部MCPへのproxy / 接続probe、Hooks / OS Guardrails、AI自動選択、semantic duplicate検出は含みません。Workflow編集は接続図とフォームで行い、自由配置・ドラッグによる接続は未実装です。Token数は文字種からの推定で、モデル別tokenizerによる実測ではありません。Providerの価格を使った金額計算も行いません。
+1. Canonical assets, shared contracts, context resolution, preview, and initial runtime materialization
+2. Workflow state, orchestration bridge contracts, runtime integration, and execution snapshots
+3. History, journal, diagnostics, context-cost metrics, and the learning loop
 
-主なコードは`server/domain.ts`（契約）、`server/resolver.ts`（決定論的解決）、`server/core.ts`（状態・承認）、`server/store.ts`（保存・回復・Git）、`server/mcp.ts`（MCP）、`src/`（UI）に分かれています。
+Claude Code and Codex are the initial adapters used to prove the architecture. Broader runtime and
+provider support can follow without changing the canonical asset model or resolution semantics.
+
+Team sharing, multi-user access control, and remote hosting are post-MVP work.
+
+## License
+
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE).
