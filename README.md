@@ -1,30 +1,32 @@
 # Agent Asset Control Layer
 
-**AACLは、AIと進める開発手順を保存し、繰り返し使い、実行記録から改善するローカルアプリです。**
+**English** | [日本語](README.ja.md)
 
-最初に既存の指示を取り込むか、AIに手順の作成を依頼します。次回からは、保存したWorkflow（開発工程）と今回の対象を指定します。
+**AACL is a local app for saving AI development methods, reusing them, and improving them from execution records.**
+
+Import existing instructions or ask the AI to create a method. Next time, select the saved Workflow and give it this task's target.
 
 ```text
-/issue-development #123 ログイン時の不具合を修正してください
+/issue-development #123 Fix the login failure
 ```
 
-これは`issue-development`を登録した場合の依頼例です。AACLが手順と状態を管理し、接続したAIの実行環境がコード変更やレビューを行います。
+This example assumes you have registered `issue-development`. AACL manages the method and its state. The connected AI runtime performs code changes and reviews.
 
 ```mermaid
 flowchart LR
-    User["ユーザー<br/>手順と今回の対象を指定"] --> AI["接続したAI"]
-    AI <-->|"手順の取得・結果の報告"| Core["AACL<br/>資産・工程・履歴を管理"]
-    AI --> Work["実行環境<br/>担当AIの起動・開発・レビュー"]
-    Work -->|"結果"| AI
-    User <-->|"閲覧・手動編集"| UI["ブラウザUI"]
+    User["User<br/>Select method and target"] --> AI["Connected AI"]
+    AI <-->|"Get instructions / report results"| Core["AACL<br/>Assets, stages, history"]
+    AI --> Work["Runtime<br/>Start agents, develop, review"]
+    Work -->|"Results"| AI
+    User <-->|"Inspect / edit"| UI["Browser UI"]
     UI <--> Core
 ```
 
-**現在利用できるもの:** ローカルCore、ブラウザUI、MCP接続、CLI、既存資産の導入、単独ファイルへの出力。Coreは保存と検証を行うサービスです。MCPはAIがその操作を呼び出すための接続規約、CLIは端末からの操作手段です。
+**Available now:** local Core, browser UI, MCP, CLI, asset onboarding, and standalone file export. The Core service stores data and validates operations. MCP is the protocol through which AI clients call those operations; the CLI provides terminal commands.
 
-## 始める
+## Get started
 
-Node.js 24以上を用意し、このリポジトリのルートで実行します。
+Use Node.js 24 or newer. Run these commands from the repository root:
 
 ```sh
 npm ci
@@ -32,197 +34,197 @@ npm run build
 npm start
 ```
 
-| 接続方法            | 設定                                                                      |
-| ------------------- | ------------------------------------------------------------------------- |
-| ブラウザUI          | `http://localhost:4780`を開きます。                                       |
-| MCPのHTTP接続       | AIの接続先に`http://localhost:4780/mcp`を設定します。                     |
-| MCPの標準入出力接続 | Coreを起動したまま、リポジトリを作業場所として`npm run mcp`を実行します。 |
+| Interface      | Setup                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| Browser UI     | Open `http://localhost:4780`.                                                              |
+| MCP over HTTP  | Connect your AI client to `http://localhost:4780/mcp`.                                     |
+| MCP over stdio | Keep the Core running. Set this repository as the working directory and run `npm run mcp`. |
 
-標準入出力の接続は、稼働中のCoreへの中継です。接続後は「このプロジェクトを登録し、既存の開発手順を取り込んで整理してください」とAIに依頼できます。資産がない場合は、新しいWorkflowの作成を依頼するか、UIから編集可能なスターターを追加します。モデルの登録は任意です。
+The stdio process bridges to the running Core. Once connected, ask the AI to register your project and import and organize existing development instructions. If you have no assets, ask it to create a Workflow or add the editable starter through the UI. Model registration is optional.
 
-| 環境変数        | 用途・既定値                                                |
-| --------------- | ----------------------------------------------------------- |
-| `AACL_DATA_DIR` | Coreの保存先。既定はリポジトリ内の`.aacl-data`です。        |
-| `PORT`          | Coreのポート。既定は`4780`です。                            |
-| `AACL_URL`      | 標準入出力の中継先。既定は`http://127.0.0.1:4780/mcp`です。 |
-| `AACL_API_URL`  | CLIの接続先。既定は`http://127.0.0.1:4780`です。            |
+| Environment variable | Purpose and default                                                  |
+| -------------------- | -------------------------------------------------------------------- |
+| `AACL_DATA_DIR`      | Core storage directory; defaults to `.aacl-data` in this repository. |
+| `PORT`               | Core port; defaults to `4780`.                                       |
+| `AACL_URL`           | Stdio bridge destination; defaults to `http://127.0.0.1:4780/mcp`.   |
+| `AACL_API_URL`       | CLI destination; defaults to `http://127.0.0.1:4780`.                |
 
-Coreは`127.0.0.1`で待ち受けます。ポートを変えた場合は、AIとCLIの接続先も合わせます。
+The Core listens on `127.0.0.1`. If you change its port, update the AI and CLI connection settings too.
 
-## 手順を資産として保存する
+## Save methods as assets
 
-再利用する指示や知識を**Asset（資産）**と呼びます。資産にはID、改訂番号、適用条件、参照関係を保存します。
+An **Asset** is reusable instruction or knowledge. Assets have IDs, revisions, applicability conditions, and relationships.
 
-| 種類       | 保存するもの                                           |
-| ---------- | ------------------------------------------------------ |
-| Workflow   | 工程、担当Role、委譲、成果物、差し戻し、完了条件。     |
-| Role       | 担当者の責務と期待する成果物。                         |
-| Skill      | 現在の担当者が使う手順・知識と補助ファイル。           |
-| Rule       | 条件に合う作業で守る指示。                             |
-| Task Type  | 作業の目的、品質基準、制約。                           |
-| Capability | 外部ツールの接続と利用許可。                           |
-| その他     | プロジェクト知識、方針、テンプレート、未分類資産など。 |
+| Type        | What it stores                                                                 |
+| ----------- | ------------------------------------------------------------------------------ |
+| Workflow    | Stages, assigned Roles, delegation, outputs, returns, and completion criteria. |
+| Role        | A responsibility and its expected outputs.                                     |
+| Skill       | Procedures, knowledge, and supporting files used by the current actor.         |
+| Rule        | Instructions that apply when their conditions match.                           |
+| Task Type   | Work objectives, quality criteria, and constraints.                            |
+| Capability  | External tool connection and permission information.                           |
+| Other types | Project knowledge, policies, templates, and unclassified assets.               |
 
-Workflowが担当を決め、担当者が必要なSkillを使います。次は、実装とレビューを分ける構成例です。
-
-```mermaid
-flowchart LR
-    Implement["実装工程<br/>Role: 実装担当"] --> Review["レビュー工程<br/>Role: レビュー担当"]
-    Review -->|"合格"| Done["完了"]
-    Review -->|"差し戻し"| Implement
-    Implement -. "必要時に使う" .-> Coding["Skill: 実装手順"]
-    Review -. "必要時に使う" .-> Checking["Skill: 確認手順"]
-    Rules["Rule: 共通の制約"] -. "両担当に適用" .-> Implement
-    Rules -. "両担当に適用" .-> Review
-```
-
-Skillは担当やモデルを選びません。同じ担当者が行う順序付きの手順はSkillに書けます。別担当への委譲や工程の制御はWorkflowに保存します。旧`skill.steps`は読み取れますが実行せず、新規保存も拒否します。
-
-リポジトリを変更する作業には、開発を許可したWorkflowの明示起動が必要です。Workflowなしの会話や単独Skillは相談・準備として扱います。AACL内の資産編集は、ユーザーの依頼に基づく別の管理操作です。
-
-UIでは工程、担当、成果物、差し戻し先を編集できます。以下の画面は説明用データで撮影しています。
-
-![Workflowの工程と担当を編集する画面](docs/images/readme-workflow.png)
-
-## 既存の指示を取り込む
-
-導入は、退避・取り込み・接続確認・AIによる整理を経て、元の自動読込を停止します。元ファイルを残したまま接続と内容を確認できます。
+A Workflow assigns responsibility. Each actor uses the Skills it needs. This example separates implementation from review:
 
 ```mermaid
 flowchart TD
-    Backup["探索・退避コピー"] --> Import["出所付きで取り込み<br/>初期状態は無効"]
-    Import --> Organize["取得と保存を確認<br/>AIが分類・整理"]
-    Organize --> Check{"分類は確定したか"}
-    Check -->|"はい"| Cutover["変更がないことを検証<br/>元の自動読込を停止"]
-    Check -->|"いいえ"| Hold["無効のまま保留"]
-    Cutover -. "復元" .-> Restore["元ファイルと整理前の状態を復元"]
+    Implement["Implementation stage<br/>Role: Implementer"] --> Review["Review stage<br/>Role: Reviewer"]
+    Review -->|"Pass"| Done["Complete"]
+    Review -->|"Return"| Implement
+    Implement -. "Read when needed" .-> Coding["Skill: Implementation procedure"]
+    Review -. "Read when needed" .-> Checking["Skill: Review procedure"]
+    Rules["Rule: Shared constraints"] -. "Apply to both actors" .-> Implement
+    Rules -. "Apply to both actors" .-> Review
 ```
 
-`skills`フォルダーにあるだけではSkillに確定しません。AIが原文の実際の動作を読み、1つの原文をWorkflow・Role・Skillへ分割できます。出力ID、分類理由、未変換部分、出所を記録します。
+A Skill does not choose actors or models. It can describe ordered steps performed by the same actor. Delegation and stage control belong in a Workflow. Legacy `skill.steps` remain readable but are not executed; new writes are rejected.
 
-導入IDで中断後の作業を再開できます。切り替えと復元では、対象ファイルと資産の改訂を検証します。後から編集された内容は上書きしません。認証情報・接続設定・履歴・キャッシュは資産本文に取り込みません。
+Repository changes require explicit launch of a Workflow that permits development. Conversations without a Workflow and standalone Skills stay in advisory or preparation mode. Editing AACL assets is a separate management operation authorized by the user's request.
 
-Codex・Claude・Cursor向けの接続設定も導入できます。未対応形式やプラグイン管理下の資産は、理由を示して切り替えを保留します。手順は[導入・運用ガイド](docs/mcp-operations.md)を参照してください。
+The UI lets you edit stages, responsibilities, outputs, and return paths. Screenshots show the current Japanese UI with example data.
 
-## 必要な指示だけを渡す
+![Workflow editor showing stages, assigned Roles, and a return path](docs/images/readme-workflow.png)
 
-**Contextは、その担当者へ渡す作業情報です。** CoreはProject、Workflow、工程、Role、作業種別、Runtime、モデル、ディレクトリー等の条件から内容を決めます。Runtimeは、担当AIとツールを実際に動かす環境です。
+## Import existing instructions
 
-初期ContextにはRule本文とSkillの説明一覧を含めます。Skill本文や補助ファイルは、AIが必要なものを選んで取得します。
+Onboarding backs up and imports assets, verifies the connection, and lets the AI organize them before disabling the original automatic loading. You can check the connection and content while the source files remain in place.
 
 ```mermaid
 flowchart TD
-    Conditions["今回の条件<br/>Project・工程・Role・実行環境"] --> Resolve["Coreが適用を判定"]
-    Resolve --> Rules["適用するRule本文"]
-    Resolve --> Catalog["Skillの説明一覧<br/>ID・改訂・取得方法"]
-    Rules --> AI["担当AI"]
+    Backup["Discover and back up"] --> Import["Import with provenance<br/>Initially disabled"]
+    Import --> Organize["Verify reads and writes<br/>AI classifies and organizes"]
+    Organize --> Check{"Classification settled?"}
+    Check -->|"Yes"| Cutover["Verify unchanged sources<br/>Disable original loading"]
+    Check -->|"No"| Hold["Keep disabled"]
+    Cutover -. "Restore" .-> Restore["Restore source files<br/>and prior organization"]
+```
+
+A file is not classified as a Skill just because it lives in a `skills` directory. The AI reads its actual behavior and can split one source into Workflow, Role, and Skill assets. AACL records output IDs, classification reasons, unconverted parts, and provenance.
+
+Resume interrupted work with its onboarding ID. Cutover and restore verify file contents and asset revisions; later edits are not overwritten. Credentials, connection settings, histories, and caches are not imported as asset bodies.
+
+Connection setup is available for Codex, Claude, and Cursor. Unsupported formats and plugin-managed assets remain in place with an explanation. See the [operating guide](docs/mcp-operations.md) (Japanese) for the full procedure.
+
+## Deliver only the instructions needed
+
+**Context is the information delivered to an actor.** The Core resolves it from the Project, Workflow, stage, Role, task type, Runtime, model, directory, and other conditions. A Runtime is the environment that starts AI agents and runs tools.
+
+Initial Context includes applicable Rule bodies and Skill descriptions. The AI selects and retrieves Skill bodies and supporting files when needed.
+
+```mermaid
+flowchart TD
+    Conditions["Current conditions<br/>Project, stage, Role, runtime"] --> Resolve["Core resolves applicability"]
+    Resolve --> Rules["Applicable Rule bodies"]
+    Resolve --> Catalog["Skill descriptions<br/>IDs, revisions, retrieval"]
+    Rules --> AI["Assigned AI"]
     Catalog --> AI
-    AI -->|"必要なSkillを選ぶ"| Body["その改訂の本文を取得"]
-    Body -->|"必要な参照だけ"| Files["補助ファイル・参照先を個別取得"]
-    Resolve -. "本文を渡さない" .-> Other["対象外の資産<br/>除外理由だけを返す"]
+    AI -->|"Select a Skill"| Body["Read its pinned revision"]
+    Body -->|"Follow needed references"| Files["Read individual files<br/>and referenced assets"]
+    Resolve -. "Omit bodies" .-> Other["Excluded assets<br/>Return reasons only"]
 ```
 
-異なる条件軸はANDで組み合わせます。例えば`Role = reviewer`と`Model = model-a`を設定すると、両方が一致したときだけ適用します。Projectごとの無効化、置き換え、条件の上書きも指定できます。
+Different condition dimensions combine with AND. For example, an asset scoped to `Role = reviewer` and `Model = model-a` applies only when both match. Projects can also disable assets, replace them, or override their conditions.
 
-同じSkillが複数の関係から選ばれても、候補を重複させず選択理由を残します。候補の提示、本文取得、使用報告は別々の記録です。本文を取得しただけで「使用した」とは判定しません。
+When several relationships select the same Skill, the candidate appears once and retains its selection reasons. Candidate presentation, body retrieval, and reported use are separate records. Retrieval alone does not count as use.
 
-実行画面では、その工程のContextとSkill候補を確認できます。
+The execution UI shows the current stage's Context and Skill candidates.
 
-![実行の状態と担当へ渡すContextを確認する画面](docs/images/readme-run-context.png)
+![Context preview showing model policy, instructions, and Skill candidates](docs/images/readme-run-context.png)
 
-## モデル指定は任意にする
+## Leave model selection optional
 
-Roleとモデルは別の設定です。モデルを指定した場合は、実行時の指定、工程の指定、Roleの割り当ての順に決めます。
+Role and model are separate settings. When a model is specified, precedence is the explicit run selection, then the stage setting, then the Role binding.
 
 ```mermaid
 flowchart TD
-    Order["指定を探す<br/>実行 → 工程 → Roleの順に優先"] --> Selected{"指定はあるか"}
-    Selected -->|"ある"| Explicit["指定モデルで起動を依頼"]
-    Selected -->|"ない"| Default["モデル引数を省略<br/>Runtimeの標準設定で起動"]
-    Explicit --> Report["実モデルを別に報告<br/>不明なら未報告のまま"]
+    Order["Look for a model selection<br/>Run, then stage, then Role"] --> Selected{"Selection present?"}
+    Selected -->|"Yes"| Explicit["Request the specified model"]
+    Selected -->|"No"| Default["Omit the model argument<br/>Use the runtime default"]
+    Explicit --> Report["Report the actual model separately<br/>Leave unknown values unset"]
     Default --> Report
 ```
 
-モデル未指定を「親AIと同じモデル」に置き換えません。明示指定に対応しないRuntimeでは、指定を無視せず競合を返します。
+An omitted model does not mean “use the parent AI's model.” If a Runtime cannot honor an explicit selection, AACL reports a conflict rather than ignoring the selection.
 
-指定モデルと、Runtimeが報告した実モデルは別に保存します。未登録のモデルも報告できますが、モデル固有の資産を適用するには対応するモデル設定が必要です。特定モデルや別モデルによるレビューを必須にしたWorkflowは、実行報告で確認できなければ進行・完了できません。
+Requested and reported actual models are stored separately. Runtimes may report unregistered models, but applying model-specific assets requires a matching model configuration. A Workflow that requires a particular model or a different model for review cannot advance or complete without confirming that constraint through execution reports.
 
-## AIからWorkflowを使う
+## Use a Workflow from an AI client
 
-接続したAIは、最初に`aacl_bootstrap`または`aacl://bootstrap`を読みます。正確な引数は、接続先のMCPツール定義から取得します。
+Read `aacl_bootstrap` or `aacl://bootstrap` after connecting. Obtain exact arguments from the connected server's MCP tool definitions.
 
-Coreへの開始要求は準備状態を作ります。実作業を行うのはRuntimeです。次は1工程の基本的な呼び出し順です。
+A session start request creates a prepared execution. The Runtime performs the actual work. This is the basic call sequence for one stage:
 
 ```mermaid
 sequenceDiagram
-    participant AI as 接続したAI・Runtime
+    participant AI as Connected AI / Runtime
     participant Core as AACL Core
-    AI->>Core: aacl_session_preflight（全工程を事前確認）
-    AI->>Core: aacl_session_start（Workflowと今回の指示）
-    Core-->>AI: 実行ID・現在の版
-    AI->>Core: aacl_context_handoff（担当へ渡す内容を取得）
-    Core-->>AI: 起動方針・Rule本文・Skill候補
-    AI->>AI: 担当AIを起動
-    AI->>Core: aacl_runtime_event: started（実モデルが分かれば報告）
-    Core-->>AI: 試行のSnapshot・実モデルを反映したContext
-    AI->>Core: aacl_skill_get（必要な本文を取得）
-    AI->>AI: 作業・検証
+    AI->>Core: aacl_session_preflight: check every stage
+    AI->>Core: aacl_session_start: Workflow and task instructions
+    Core-->>AI: Run ID and current version
+    AI->>Core: aacl_context_handoff: get the actor's Context
+    Core-->>AI: Launch policy, Rule bodies, Skill candidates
+    AI->>AI: Start the assigned agent
+    AI->>Core: aacl_runtime_event: started, actual model if known
+    Core-->>AI: Attempt Snapshot and Context for the actual model
+    AI->>Core: aacl_skill_get: retrieve a needed body
+    AI->>AI: Perform and verify the work
     AI->>Core: aacl_runtime_event: result / failed
-    AI->>Core: aacl_workflow_transition（成果物・完了根拠）
+    AI->>Core: aacl_workflow_transition: outputs and evidence
 ```
 
-Snapshotは、資産の改訂・設定・Contextを固定した記録です。開始報告では準備時の記録を保ち、実モデルを反映した別Snapshotを作ります。
+A **Snapshot** pins asset revisions, settings, and Context. A start report preserves the preparation record and creates another Snapshot reflecting the actual model.
 
-AIが守る操作上の要点は次のとおりです。
+Rules for AI clients:
 
-1. 資産の新規作成・整理には実行や架空のJournalを作りません。`userRequest`、変更理由、実際の依頼者を記録します。
-2. 開発操作前の引き継ぎには`action: "development"`を指定し、`developmentAllowed`を確認します。
-3. `aacl_skill_get`には返された`id`・`revision`・`snapshotId`を使います。閲覧は`usage: "inspect"`、使用報告は`usage: "use"`です。補助ファイルは`aacl_asset_file_get`で同じ改訂を取得します。
-4. 更新には最新の`expectedVersion`を使います。再送を支える操作では、同じ内容と`requestId`を再利用します。開始報告の`attemptId`は実際の試行を識別します。
-5. 閲覧には`aacl_run_get`と`aacl_context_handoff_preview`を使います。閲覧で実行の版やSnapshotを増やしません。
-6. 遷移には定義済みの工程、成果物、完了根拠を渡します。差し戻し後は必要な根拠を取り直します。最新版での再開は`aacl_run_restart`で別の実行を作ります。
+1. Do not invent executions or Journals to create or organize assets. Record `userRequest`, the change reason, and the actual requesting user.
+2. Before development, request a handoff with `action: "development"` and check `developmentAllowed`.
+3. Call `aacl_skill_get` with the returned `id`, `revision`, and `snapshotId`. Use `usage: "inspect"` for reading and `usage: "use"` to report use. Retrieve supporting files with `aacl_asset_file_get` at the same revision.
+4. Use the latest `expectedVersion` for updates. Where request replay is supported, reuse the same payload and `requestId`. A start report's `attemptId` identifies the real attempt.
+5. Inspect state with `aacl_run_get` and `aacl_context_handoff_preview`. These reads do not increment the run version or create Snapshots.
+6. Transitions must follow defined stages and supply outputs and completion evidence. Collect fresh evidence after a return. To restart with the latest Workflow, use `aacl_run_restart` to create a separate execution.
 
-## 記録から改善する
+## Improve from records
 
-Journalは、実際の試行で観測した問題や結果の記録です。ユーザーの依頼でAIが記録を読み、変更を提案します。
+A **Journal** records problems and results observed in a real attempt. At the user's request, the AI reviews these records and proposes a change.
 
 ```mermaid
 flowchart TD
-    Work["実際の作業"] --> Journal["Journal<br/>問題・結果を記録"]
-    Journal --> Review["依頼されたAIレビュー"]
-    Review --> Proposal["具体的な変更案<br/>差分と根拠"]
-    Proposal --> Decision{"ユーザーの判断"}
-    Decision -->|"承認"| Revision["新しい改訂を保存"]
-    Decision -->|"拒否"| Keep["変更せず判断を保存"]
-    Revision --> Next["次の実行で利用"]
+    Work["Actual work"] --> Journal["Journal<br/>Record problems and results"]
+    Journal --> Review["User-requested AI review"]
+    Review --> Proposal["Concrete proposal<br/>Diff and evidence"]
+    Proposal --> Decision{"User decision"}
+    Decision -->|"Approve"| Revision["Save a new revision"]
+    Decision -->|"Reject"| Keep["Record decision<br/>without changing assets"]
+    Revision --> Next["Use in the next execution"]
     Next --> Work
 ```
 
-初回作成や直接の変更依頼は`aacl_asset_propose`・`aacl_asset_change`、承認判断は`aacl_proposal_decision`で扱います。実行記録に基づく改善は`aacl_review_start`から始めます。組み込みの`aacl-asset-authoring` Skillは、相談段階から作成と分類を支援します。
+Use `aacl_asset_propose` or `aacl_asset_change` for initial authoring and direct change requests, and `aacl_proposal_decision` for approval decisions. Reviews based on execution records start with `aacl_review_start`. The built-in `aacl-asset-authoring` Skill supports authoring and classification during consultation.
 
-資産・モデル割り当て・Project設定は変更前後と理由を保存し、復元できます。過去のSnapshotは書き換えません。比較画面では、準備数と実試行数、指定モデルと実モデル、資産や設定の改訂差を分けて確認できます。
+Assets, model bindings, and Project settings retain before/after values and change reasons and can be restored. Past Snapshots remain unchanged. Comparison views distinguish preparations from attempts, requested from actual models, and asset and setting revisions.
 
-## ファイルへ書き出す
+## Export files
 
-組み込みの`aacl-asset-export` Skillと`aacl_export_bundle`で、指定資産と必要な参照先をまとめて取得します。出力中に異なる改訂を混ぜないよう、1時点の資産・関係・設定を固定します。
+The built-in `aacl-asset-export` Skill and `aacl_export_bundle` retrieve selected assets and their required references together. Assets, relationships, and settings come from one point in time, so export does not mix revisions.
 
 ```mermaid
 flowchart LR
-    Assets["指定資産と必要な参照先"] --> Bundle["1時点の出力データ<br/>改訂・設定・ハッシュ・配置表"]
-    Bundle --> Standalone["standalone<br/>ローカルの工程・Role・Skill・補助ファイル"]
-    Bundle --> Connected["connected<br/>MCP接続を使う起動手順"]
-    Standalone --> Offline["AACL停止後も利用"]
-    Connected --> Online["稼働中のAACLへ接続"]
+    Assets["Selected assets<br/>and required references"] --> Bundle["One consistent bundle<br/>Revisions, settings, hashes, paths"]
+    Bundle --> Standalone["standalone<br/>Local stages, Roles, Skills, files"]
+    Bundle --> Connected["connected<br/>Launch instructions using MCP"]
+    Standalone --> Offline["Use after AACL stops"]
+    Connected --> Online["Connect to a running AACL"]
 ```
 
-| 出力モード   | 利用条件                                                                               |
-| ------------ | -------------------------------------------------------------------------------------- |
-| `standalone` | Workflowの委譲・差し戻し手順と参照ファイルを同梱します。生成後の利用にCoreは不要です。 |
-| `connected`  | MCP接続が必要です。配置先で接続を設定します。                                          |
+| Mode         | Requirements                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `standalone` | Includes Workflow delegation, return instructions, and referenced files. The exported result does not need the Core. |
+| `connected`  | Requires MCP. Configure the connection in the destination environment.                                               |
 
-対応する出力形式は`codex`・`claude`・`cursor`・`generic`です。元の接続先は両モードで出力から除きます。`limitations`に未対応事項を返し、`ready: false`なら阻害理由を解消してから利用します。出力しただけでモデル選択や権限制約が保証されるものではありません。
+Output formats are `codex`, `claude`, `cursor`, and `generic`. Source connection endpoints are omitted in both modes. Check `limitations`; if `ready: false`, resolve the blocking conditions before use. Export alone does not guarantee model selection support or permission enforcement.
 
-例えば、次を`export-input.json`に保存します。資産IDは登録済みのものに置き換えます。
+For example, save this as `export-input.json`, replacing the asset ID with a registered one:
 
 ```json
 {
@@ -232,35 +234,37 @@ flowchart LR
 }
 ```
 
-Coreを起動した状態で、まだ存在しないディレクトリーへ出力します。
+Keep the Core running and export to a directory that does not yet exist:
 
 ```sh
 npm run cli -- export-bundle export-input.json ./exported-assets
 ```
 
-AIに配置を依頼する場合は、配置先と既存ファイルとの差分を確認し、出力仕様に従って書き込み・検証します。従来のContext Preview、`aacl_materialize`、CLIの`export`は、MCPを必要とする接続用の出力です。
+If an AI installs the files, it should check the destination and existing-file diff, then write and verify them against the output specification. The older Context Preview, `aacl_materialize`, and CLI `export` generate connected output that requires MCP.
 
-## 実装と検証
+## Implementation and verification
 
-CoreはTypeScript・Node.js・Express、UIはReact・Viteで実装しています。正本はJSONファイルです。共有資産と状態はCoreの保存先、Project資産は各プロジェクトの`.aacl`に保存します。
+The Core uses TypeScript, Node.js, and Express. The UI uses React and Vite. Canonical data is stored as JSON: shared assets and state in the Core's storage directory, and Project assets in each project's `.aacl` directory.
 
 ```sh
-npm run dev                      # 開発用サーバー
-npm run check                    # 型検査・ビルド・サーバーテスト
-npx playwright install chromium  # 初回のみ
-npm run test:ui                  # ブラウザテスト
+npm run dev                      # Development server
+npm run check                    # Type check, build, server tests
+npx playwright install chromium  # First-time setup
+npm run test:ui                  # Browser tests
 ```
 
-ブラウザテストはポート4781と一時データを使います。2026年9月9日の実装検証では、サーバー141件・ブラウザ23件のテストが通っています。
+Browser tests use port 4781 and temporary data. The September 9, 2026 implementation checks passed 141 server tests and 23 browser tests.
 
-現在はローカルの単一ユーザー向けです。VS Code拡張、デスクトップ専用シェル、複数ユーザー管理、リモート運用は未実装です。Coreは自身を経由する操作を検証します。実モデルの起動、外部ツールの実行、OS上の操作制限はRuntimeが担います。実行報告や推定Context量だけから開発品質の改善を認定しません。
+The current app supports local, single-user operation. A VS Code extension, dedicated desktop shell, multi-user management, and remote operation are not implemented. The Core validates operations that pass through it. The Runtime handles model invocation, external tools, and OS-level restrictions. Execution reports and estimated Context size alone do not establish an improvement in development quality.
 
-| 読みたい内容                        | 文書                                                                      |
-| ----------------------------------- | ------------------------------------------------------------------------- |
-| 導入・日常操作・復元・出力          | [導入・運用ガイド](docs/mcp-operations.md)                                |
-| 型ごとの契約・変更提案・改訂比較    | [Coreの契約](docs/core-contracts.md)                                      |
-| 現在の要件                          | [開発要件v15](agent-asset-control-layer-requirements.md)                  |
-| 実装箇所と検証範囲                  | [2026年9月9日の実装確認表](docs/improvement-implementation-2026-09-09.md) |
-| Skill・Workflow・モデル・出力の設計 | [設計方針](docs/skill-workflow-model-and-export-design.md)                |
+Further documentation is currently in Japanese:
 
-ライセンスは[Apache License 2.0](LICENSE)です。
+| Topic                                              | Document                                                                           |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Onboarding, daily operation, restore, and export   | [Operating guide](docs/mcp-operations.md)                                          |
+| Type contracts, proposals, and revision comparison | [Core contracts](docs/core-contracts.md)                                           |
+| Current requirements                               | [Requirements v15](agent-asset-control-layer-requirements.md)                      |
+| Implementation and verification scope              | [September 9 implementation report](docs/improvement-implementation-2026-09-09.md) |
+| Skill, Workflow, model, and export design          | [Design notes](docs/skill-workflow-model-and-export-design.md)                     |
+
+Licensed under the [Apache License 2.0](LICENSE).
